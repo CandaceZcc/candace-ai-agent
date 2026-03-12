@@ -21,6 +21,14 @@ def normalize_text(text: str) -> str:
 def extract_image_inputs(message_payload) -> dict:
     text_parts = []
     image_urls = []
+    seen_texts = set()
+
+    def add_text_part(value: str) -> None:
+        normalized = normalize_text(value)
+        if not normalized or normalized in seen_texts:
+            return
+        seen_texts.add(normalized)
+        text_parts.append(normalized)
 
     raw_message = message_payload.get("message")
     if isinstance(raw_message, str):
@@ -29,9 +37,7 @@ def extract_image_inputs(message_payload) -> dict:
         text_without_cq = re.sub(r"\[CQ:image,[^\]]+\]", " ", raw_message)
         text_without_cq = re.sub(r"\[CQ:[^\]]+\]", " ", text_without_cq)
         text_without_cq = re.sub(r"https?://\S+\.(?:jpg|jpeg|png|webp)(?:\?\S+)?", " ", text_without_cq, flags=re.IGNORECASE)
-        normalized = normalize_text(text_without_cq)
-        if normalized:
-            text_parts.append(normalized)
+        add_text_part(text_without_cq)
 
     if isinstance(raw_message, list):
         for seg in raw_message:
@@ -40,9 +46,7 @@ def extract_image_inputs(message_payload) -> dict:
             seg_type = seg.get("type")
             data = seg.get("data", {})
             if seg_type == "text":
-                normalized = normalize_text(data.get("text", ""))
-                if normalized:
-                    text_parts.append(normalized)
+                add_text_part(data.get("text", ""))
             elif seg_type == "image":
                 url = (
                     data.get("url")
@@ -62,9 +66,9 @@ def extract_image_inputs(message_payload) -> dict:
             text_elem = elem.get("textElement")
             if isinstance(text_elem, dict):
                 for key in ("content", "text"):
-                    normalized = normalize_text(text_elem.get(key, ""))
-                    if normalized:
-                        text_parts.append(normalized)
+                    before_count = len(text_parts)
+                    add_text_part(text_elem.get(key, ""))
+                    if len(text_parts) != before_count:
                         break
 
             image_elem = elem.get("picElement") or elem.get("imageElement")
@@ -100,9 +104,9 @@ def extract_image_inputs(message_payload) -> dict:
             text_elem = elem.get("textElement")
             if isinstance(text_elem, dict):
                 for key in ("content", "text"):
-                    normalized = normalize_text(text_elem.get(key, ""))
-                    if normalized:
-                        text_parts.append(normalized)
+                    before_count = len(text_parts)
+                    add_text_part(text_elem.get(key, ""))
+                    if len(text_parts) != before_count:
                         break
 
     cleaned_urls = []

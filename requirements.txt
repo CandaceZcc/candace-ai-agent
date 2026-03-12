@@ -1,0 +1,9 @@
+flask
+numpy
+requests
+python-dotenv
+pillow
+pyautogui
+opencv-python
+pytesseract
+mss

@@ -1,6 +1,7 @@
 """Prompt-building helpers for bridge tasks."""
 
 import os
+from typing import Any
 
 from apps.qq_ai_bridge.config.settings import (
     GROUP_UPLOAD_DIR,
@@ -11,43 +12,97 @@ from apps.qq_ai_bridge.config.settings import (
 from storage_utils import get_group_workspace, load_private_context, sample_style_lines
 from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
 
+SHORT_QUERY_LEN = 8
+SHORT_QUERY_HISTORY_LIMIT = 2
+NORMAL_QUERY_HISTORY_LIMIT = 6
+SHORT_QUERY_HISTORY_CHAR_BUDGET = 220
+NORMAL_QUERY_HISTORY_CHAR_BUDGET = 800
 
-def build_private_ai_prompt(user_id, user_text: str) -> str:
-    """Build the private-chat LLM prompt with memory/history/style context."""
+
+def prepare_private_ai_prompt(user_id, user_text: str) -> dict[str, Any]:
+    """Build the private-chat LLM prompt and return prompt statistics."""
     context = load_private_context(BASE_DATA_DIR, user_id)
-    history = context["history"][-20:]
+    query_len = len(user_text)
+    is_short_query = query_len <= SHORT_QUERY_LEN
+    history_limit = SHORT_QUERY_HISTORY_LIMIT if is_short_query else NORMAL_QUERY_HISTORY_LIMIT
+    history = context["history"][-history_limit:]
     memory = context["memory"]
-    style_lines = sample_style_lines(context["style_samples_path"], sample_size=10)
+    history_turn_limit = 1 if query_len <= 4 else 2 if is_short_query else 5
+    history_char_budget = SHORT_QUERY_HISTORY_CHAR_BUDGET if is_short_query else NORMAL_QUERY_HISTORY_CHAR_BUDGET
+    style_sample_size = 0 if is_short_query else 6
+    style_lines = sample_style_lines(context["style_samples_path"], sample_size=style_sample_size)
 
     history_lines = []
-    for item in history:
+    history_chars = 0
+    for item in reversed(history):
         user_part = str(item.get("user", "")).strip()
         bot_part = str(item.get("assistant", "")).strip()
         if user_part:
-            history_lines.append(f"User: {user_part}")
+            line = f"User: {user_part}"
+            line_len = len(line)
+            if history_lines and (len(history_lines) >= history_turn_limit * 2 or history_chars + line_len > history_char_budget):
+                break
+            history_lines.insert(0, line)
+            history_chars += line_len
         if bot_part:
-            history_lines.append(f"Assistant: {bot_part}")
+            line = f"Assistant: {bot_part}"
+            line_len = len(line)
+            if history_lines and (len(history_lines) >= history_turn_limit * 2 or history_chars + line_len > history_char_budget):
+                break
+            history_lines.insert(0, line)
+            history_chars += line_len
 
-    prompt_parts = [
-        "You are replying in a private QQ chat.",
-        "Respond naturally in Chinese unless the user clearly requests another language.",
-        "Keep the answer useful and direct.",
-    ]
+    if is_short_query:
+        prompt_mode = "compact"
+        prompt_parts = [
+            "Reply naturally in this private QQ chat.",
+            "Be brief, direct, and conversational.",
+            f"User message: {user_text}",
+        ]
+        if history_lines:
+            prompt_parts.insert(2, "Recent context:\n" + "\n".join(history_lines))
+        if memory:
+            prompt_parts.insert(2, "Memory:\n" + memory[:200])
+    else:
+        prompt_mode = "full"
+        prompt_parts = [
+            "You are replying in a private QQ chat.",
+            "Respond naturally in Chinese unless the user clearly requests another language.",
+            "Keep the answer useful and direct.",
+        ]
 
-    if memory:
-        prompt_parts.append("Persistent memory:")
-        prompt_parts.append(memory[:MAX_FILE_CONTENT_LEN])
+        if memory:
+            prompt_parts.append("Persistent memory:")
+            prompt_parts.append(memory[:MAX_FILE_CONTENT_LEN])
 
-    if history_lines:
-        prompt_parts.append("Recent conversation history:")
-        prompt_parts.append("\n".join(history_lines[-40:]))
+        if history_lines:
+            prompt_parts.append("Recent conversation history:")
+            prompt_parts.append("\n".join(history_lines))
 
-    if style_lines:
-        prompt_parts.append("Here are examples of how this user speaks:")
-        prompt_parts.append("\n".join(style_lines))
+        if style_lines:
+            prompt_parts.append("Here are examples of how this user speaks:")
+            prompt_parts.append("\n".join(style_lines))
 
-    prompt_parts.append(f"Current user message:\n{user_text}")
-    return "\n\n".join(prompt_parts)
+        prompt_parts.append(f"Current user message:\n{user_text}")
+
+    prompt = "\n\n".join(prompt_parts)
+    instruction_chars = sum(len(part) for part in prompt_parts[:-1]) if len(prompt_parts) > 1 else len(prompt)
+    return {
+        "prompt": prompt,
+        "prompt_mode": prompt_mode,
+        "query_len": query_len,
+        "history_chars": history_chars,
+        "history_items": len(history_lines),
+        "history_turn_limit": history_turn_limit,
+        "style_chars": sum(len(line) for line in style_lines),
+        "instruction_chars": instruction_chars,
+        "prompt_chars": len(prompt),
+    }
+
+
+def build_private_ai_prompt(user_id, user_text: str) -> str:
+    """Build the private-chat LLM prompt with memory/history/style context."""
+    return prepare_private_ai_prompt(user_id, user_text)["prompt"]
 
 
 def build_vision_user_text(text: str) -> str:
