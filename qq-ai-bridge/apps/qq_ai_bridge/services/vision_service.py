@@ -2,6 +2,7 @@
 
 import traceback
 from typing import Iterable
+from urllib.parse import urlparse
 
 from apps.qq_ai_bridge.config.settings import IMAGE_TMP_DIR
 from image_utils import download_image
@@ -13,14 +14,17 @@ VISION_USER_DOWNLOAD_FALLBACK = "这张图我暂时没拿到，麻烦稍后重�
 
 def log_vision_config_status(log=print) -> None:
     cfg = read_vision_config()
-    has_url = bool(cfg["api_url"])
-    has_key = bool(cfg["api_key"])
-    has_model = bool(cfg["model"])
-    log(f"[VISION][CONFIG] VISION_API_URL detected={has_url}")
-    log(f"[VISION][CONFIG] VISION_API_KEY detected={has_key}")
-    log(f"[VISION][CONFIG] VISION_MODEL detected={has_model}")
-    if not (has_url and has_key and has_model):
+    has_url = "set" if cfg["api_url"] else "missing"
+    has_key = "set" if cfg["api_key"] else "missing"
+    has_model = "set" if cfg["model"] else "missing"
+    log(f"[VISION][CONFIG] VISION_API_URL={has_url}")
+    log(f"[VISION][CONFIG] VISION_API_KEY={has_key}")
+    log(f"[VISION][CONFIG] VISION_MODEL={has_model}")
+    if "missing" in (has_url, has_key, has_model):
         log("[VISION][CONFIG] missing required vision config, image understanding will degrade gracefully")
+    placeholders = _detect_placeholder_values(cfg)
+    for item in placeholders:
+        log(f"[VISION][CONFIG][WARNING] {item} is using a placeholder value and must be replaced with a real value")
 
 
 def run_vision_pipeline(image_urls: str | Iterable[str], user_text: str, vision_log, save_dir=IMAGE_TMP_DIR) -> str:
@@ -47,6 +51,16 @@ def run_vision_pipeline(image_urls: str | Iterable[str], user_text: str, vision_
         vision_log(f"[VISION][traceback] {traceback.format_exc()}")
         return VISION_USER_DOWNLOAD_FALLBACK
 
+    cfg = read_vision_config()
+    request_url = _mask_request_url(cfg["api_url"])
+    model = cfg["model"]
+    vision_log(f"[VISION] request_url={request_url}")
+    vision_log(f"[VISION] model={model}")
+    vision_log(f"[VISION] input_image_count={len(urls)}")
+    if not cfg["api_url"] or not cfg["api_key"] or not cfg["model"]:
+        vision_log("[VISION][config_missing] skip remote vision call and downgrade gracefully")
+        return VISION_USER_FALLBACK
+
     result = analyze_image_with_details(local_path, user_text=user_text, input_image_urls=urls)
     vision_log(f"[VISION] request_url={result.request_url}")
     vision_log(f"[VISION] model={result.model}")
@@ -69,3 +83,40 @@ def run_vision_pipeline(image_urls: str | Iterable[str], user_text: str, vision_
 
     vision_log(f"[VISION][{result.status}] vision call failed and downgraded")
     return VISION_USER_FALLBACK
+
+
+def _mask_request_url(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return url
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
+
+def _detect_placeholder_values(cfg: dict) -> list[str]:
+    placeholder_map = {
+        "VISION_API_URL": {
+            "https://your-vision-endpoint.example.com/v1/chat/completions",
+            "your_vision_endpoint_here",
+        },
+        "VISION_API_KEY": {
+            "your_api_key_here",
+            "your_vision_api_key_here",
+        },
+        "VISION_MODEL": {
+            "your_vision_model_here",
+            "your_model_here",
+        },
+    }
+    hits = []
+    env_to_cfg_key = {
+        "VISION_API_URL": "api_url",
+        "VISION_API_KEY": "api_key",
+        "VISION_MODEL": "model",
+    }
+    for env_name, cfg_key in env_to_cfg_key.items():
+        value = str(cfg.get(cfg_key, "")).strip()
+        if value in placeholder_map[env_name]:
+            hits.append(env_name)
+    return hits

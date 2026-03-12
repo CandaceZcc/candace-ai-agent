@@ -3,19 +3,26 @@
 import requests
 
 from apps.qq_ai_bridge.config.settings import NAPCAT_HTTP, NAPCAT_TOKEN
+from apps.qq_ai_bridge.services.reply_sanitizer import sanitize_outbound_reply
+
+
+def _post_json(api_name: str, payload: dict, timeout: int = 15):
+    api_url = f"{NAPCAT_HTTP}/{api_name}?access_token={NAPCAT_TOKEN}"
+    return requests.post(api_url, json=payload, timeout=timeout)
 
 
 def send_private_msg(user_id, msg, quiet: bool = False):
     """Send a private message via NapCat."""
+    msg = sanitize_outbound_reply(msg)
+    if not msg:
+        if not quiet:
+            print(f"[SEND_PRIVATE] skip-empty-sanitized user_id={user_id}")
+        return
     if not quiet:
         print(f"[SEND_PRIVATE] 准备发消息给 {user_id}: {msg[:120]!r}")
 
     try:
-        resp = requests.post(
-            f"{NAPCAT_HTTP}/send_private_msg?access_token={NAPCAT_TOKEN}",
-            json={"user_id": user_id, "message": msg},
-            timeout=15,
-        )
+        resp = _post_json("send_private_msg", {"user_id": user_id, "message": msg}, timeout=15)
         if not quiet:
             print(f"[SEND_PRIVATE] NapCat 返回: {resp.status_code} {resp.text}")
     except Exception as e:
@@ -25,20 +32,34 @@ def send_private_msg(user_id, msg, quiet: bool = False):
 
 def send_group_msg(group_id, msg, quiet: bool = False):
     """Send a group message via NapCat."""
+    msg = sanitize_outbound_reply(msg)
+    if not msg:
+        if not quiet:
+            print(f"[SEND_GROUP] skip-empty-sanitized group_id={group_id}")
+        return
     if not quiet:
         print(f"[SEND_GROUP] 准备发群消息到 {group_id}: {msg[:120]!r}")
 
     try:
-        resp = requests.post(
-            f"{NAPCAT_HTTP}/send_group_msg?access_token={NAPCAT_TOKEN}",
-            json={"group_id": group_id, "message": msg},
-            timeout=15,
-        )
+        resp = _post_json("send_group_msg", {"group_id": group_id, "message": msg}, timeout=15)
         if not quiet:
             print(f"[SEND_GROUP] NapCat 返回: {resp.status_code} {resp.text}")
     except Exception as e:
         if not quiet:
             print(f"[SEND_GROUP] 异常: {e}")
+
+
+def get_forward_msg(forward_id: str):
+    """Resolve merged-forward message nodes through NapCat/OneBot."""
+    if not forward_id:
+        return None
+    try:
+        resp = _post_json("get_forward_msg", {"message_id": forward_id, "id": forward_id}, timeout=20)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        print(f"[FORWARD] get_forward_msg failed forward_id={forward_id} error={exc}")
+        return None
 
 
 def fetch_napcat_file_download_info(file_info):

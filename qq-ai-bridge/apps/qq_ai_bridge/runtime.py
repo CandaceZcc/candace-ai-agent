@@ -7,6 +7,36 @@ from pathlib import Path
 from flask import Flask
 from dotenv import load_dotenv
 
+
+def _load_runtime_env() -> None:
+    bridge_root = Path(__file__).resolve().parents[2]
+    repo_root = bridge_root.parent
+    env_candidates = (
+        ("bridge", bridge_root / ".env"),
+        ("repo", repo_root / ".env"),
+    )
+
+    print(
+        "[SYSTEM] env search order: "
+        + " -> ".join(f"{label}:{path}" for label, path in env_candidates)
+    )
+    loaded_any = False
+    for label, dotenv_path in env_candidates:
+        if not dotenv_path.exists():
+            print(f"[SYSTEM] env file missing: {label}:{dotenv_path}")
+            continue
+
+        loaded = load_dotenv(dotenv_path=dotenv_path, override=False)
+        status = "loaded" if loaded else "present but no new values applied"
+        print(f"[SYSTEM] env file {status}: {label}:{dotenv_path}")
+        loaded_any = loaded_any or loaded
+
+    if not loaded_any:
+        print("[SYSTEM] no .env values loaded, using process env only")
+
+
+_load_runtime_env()
+
 from apps.qq_ai_bridge.adapters.webhook import register_routes
 from apps.qq_ai_bridge.config.settings import (
     AGENT_SYSTEM_PROMPT,
@@ -74,16 +104,6 @@ from shared.ai.llm_client import call_ai
 app = Flask(__name__)
 
 
-def _load_runtime_env() -> None:
-    project_root = Path(__file__).resolve().parents[2]
-    dotenv_path = project_root / ".env"
-    loaded = load_dotenv(dotenv_path=dotenv_path, override=False)
-    if loaded:
-        print(f"[SYSTEM] loaded env from {dotenv_path}")
-    else:
-        print(f"[SYSTEM] .env not loaded from {dotenv_path}, using process env only")
-
-
 def trim_reply(text: str) -> str:
     """Trim a reply to the configured max length."""
     text = (text or "").strip()
@@ -127,7 +147,6 @@ def send_group_msg(group_id, msg, quiet: bool = False):
     _send_group_msg_raw(group_id, msg, quiet=quiet)
 
 
-_load_runtime_env()
 log_vision_config_status(print)
 
 for path in (PRIVATE_UPLOAD_DIR, GROUP_UPLOAD_DIR, PRIVATE_USERS_DIR, GROUP_DATA_DIR, CONFIG_DIR, IMAGE_TMP_DIR):

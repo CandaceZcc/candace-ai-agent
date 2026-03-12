@@ -4,11 +4,15 @@ from flask import jsonify, request
 
 from apps.qq_ai_bridge.adapters.message_parser import (
     extract_text_and_mention,
+    extract_forward_id,
+    format_forward_messages,
     normalize_query_text,
 )
+from apps.qq_ai_bridge.adapters.napcat_client import get_forward_msg
 from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
 from apps.qq_ai_bridge.services.file_service import extract_file_info
 from apps.qq_ai_bridge.services.group_chat_service import load_group_config, should_log_group
+from apps.qq_ai_bridge.services.style_service import capture_group_style
 from apps.qq_ai_bridge.skills.base import SkillContext
 from apps.qq_ai_bridge.skills.chat import ChatSkill
 from apps.qq_ai_bridge.skills.registry import build_skill_registry
@@ -16,7 +20,6 @@ from apps.qq_ai_bridge.skills.router import dispatch_skill
 from image_utils import extract_image_inputs
 from storage_utils import (
     append_group_chat_log,
-    append_style_sample as append_group_style_sample,
 )
 
 
@@ -58,13 +61,21 @@ def register_routes(app):
         self_id = data.get("self_id")
 
         msg, mentioned_self = extract_text_and_mention(data, self_id)
+        forward_text = _resolve_forward_text(data, webhook_log)
+        if forward_text:
+            msg = "\n".join(part for part in (msg, forward_text) if part).strip()
         normalized_msg = normalize_query_text(msg)
         image_inputs = extract_image_inputs(data)
+        image_text = normalize_query_text(image_inputs.get("text", ""))
+        effective_text = _select_effective_text(forward_text, normalized_msg, image_text)
         file_info = extract_file_info(data)
 
         webhook_log("[WEBHOOK] message_type:", message_type)
         webhook_log("[WEBHOOK] 原始提取文本:", repr(msg))
         webhook_log("[WEBHOOK] 规范化后文本:", repr(normalized_msg))
+        webhook_log("[FORWARD] final_text_selected:", repr(effective_text))
+        if forward_text:
+            webhook_log("[FORWARD] expanded_text:", repr(forward_text[:500]))
         webhook_log("[WEBHOOK] mentioned_self:", mentioned_self)
         webhook_log("[WEBHOOK] image_inputs:", image_inputs)
         if image_inputs.get("has_image"):
@@ -77,18 +88,16 @@ def register_routes(app):
                 group_config = load_group_config(group_id)
             webhook_log("[WEBHOOK] group_config:", group_config)
 
-            if normalized_msg:
+            if effective_text:
                 if group_config.get("capture_all_messages", False):
                     append_group_chat_log(
                         BASE_DATA_DIR,
                         group_id,
-                        {"timestamp": int(data.get("time") or 0), "user_id": user_id, "message": normalized_msg},
+                        {"timestamp": int(data.get("time") or 0), "user_id": user_id, "message": effective_text},
                         limit=500,
                     )
                 if group_config.get("learn_style", False):
-                    append_group_style_sample(
-                        BASE_DATA_DIR, group_id, user_id, normalized_msg, timestamp=int(data.get("time") or 0)
-                    )
+                    capture_group_style(BASE_DATA_DIR, group_id, user_id, effective_text, log=webhook_log)
 
         context = SkillContext(
             data=data,
@@ -101,6 +110,7 @@ def register_routes(app):
             should_log=should_log,
             msg=msg,
             normalized_msg=normalized_msg,
+            effective_text=effective_text,
             mentioned_self=mentioned_self,
             image_inputs=image_inputs,
             file_info=file_info,
@@ -121,7 +131,7 @@ def register_routes(app):
         # force it to chat skill to avoid silent no-reply behavior.
         if (
             message_type == "private"
-            and normalized_msg
+            and effective_text
             and not image_inputs.get("has_image")
             and not file_info
         ):
@@ -143,3 +153,32 @@ def register_routes(app):
         return "ignore"
 
     return webhook
+
+
+def _resolve_forward_text(data: dict, logger) -> str:
+    forward_id = extract_forward_id(data)
+    if not forward_id:
+        return ""
+    logger(f"[FORWARD] detected forward_id={forward_id}")
+    payload = get_forward_msg(forward_id)
+    if not payload:
+        logger(f"[FORWARD] failed to expand forward_id={forward_id}")
+        return ""
+    try:
+        text = format_forward_messages(payload)
+    except Exception as exc:
+        logger(f"[FORWARD] format failed forward_id={forward_id} error={exc}")
+        return ""
+    if not text:
+        logger(f"[FORWARD] empty content forward_id={forward_id}")
+        return ""
+    logger(f"[FORWARD] expanded forward_id={forward_id} chars={len(text)}")
+    return text
+
+
+def _select_effective_text(forward_text: str, normalized_text: str, image_text: str) -> str:
+    for candidate in (forward_text, normalized_text, image_text):
+        normalized = normalize_query_text(candidate)
+        if normalized:
+            return normalized
+    return ""

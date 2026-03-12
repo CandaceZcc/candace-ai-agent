@@ -20,6 +20,7 @@ class SkillContext:
     should_log: bool
     msg: str
     normalized_msg: str
+    effective_text: str
     mentioned_self: bool
     image_inputs: dict
     file_info: Optional[dict]

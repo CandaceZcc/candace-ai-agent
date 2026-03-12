@@ -1,7 +1,7 @@
 """Compatibility entrypoint for the QQ AI bridge."""
 
-from apps.qq_ai_bridge.app import app
 from apps.qq_ai_bridge import runtime
+from apps.qq_ai_bridge.app import app
 
 
 if __name__ == "__main__":

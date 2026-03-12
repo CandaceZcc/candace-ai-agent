@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from apps.qq_ai_bridge.adapters.message_parser import has_meaningful_text, normalize_query_text
+from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
 from apps.qq_ai_bridge.adapters.napcat_client import send_group_msg
 from apps.qq_ai_bridge.config.settings import ALLOWED_PRIVATE_USER
-from apps.qq_ai_bridge.services.prompt_service import build_group_safe_prompt
+from apps.qq_ai_bridge.services.prompt_service import prepare_group_ai_prompt
 from apps.qq_ai_bridge.services.private_chat_service import enqueue_private_text
 from apps.qq_ai_bridge.skills.base import SkillContext, SkillResult
 from shared.ai.llm_client import call_ai
@@ -32,15 +32,12 @@ class ChatSkill:
         """Handle private or group text chat flow."""
         if context.is_private:
             context.log("[ROUTE] 进入私聊分支")
-            if not has_meaningful_text(context.data, context.self_id):
-                context.log("[ROUTE] 私聊无有效文本内容，忽略")
-                return SkillResult(handled=True, source=self.name, status="ignore")
-
-            query = context.normalized_msg
-            context.log(f"[ROUTE] 私聊 query = {query!r}")
+            query = context.effective_text
+            context.log(f"[ROUTE] effective_query={query!r}")
             if query == "":
                 context.log("[ROUTE] 私聊无有效文本内容，忽略")
                 return SkillResult(handled=True, source=self.name, status="ignore")
+            context.log(f"[ROUTE] 私聊 query = {query!r}")
 
             if context.user_id == ALLOWED_PRIVATE_USER and query.startswith("agent "):
                 context.log("[ROUTE] 私聊命中 agent 命令，交给 desktop_agent")
@@ -75,17 +72,34 @@ class ChatSkill:
         if not context.mentioned_self and not reply_all_messages:
             context.log("[ROUTE] 群聊未 @ 机器人，忽略")
             return SkillResult(handled=True, source=self.name, status="ignore")
-        if not has_meaningful_text(context.data, context.self_id):
-            context.log("[ROUTE] 群聊无有效文本内容，忽略")
-            return SkillResult(handled=True, source=self.name, status="ignore")
-
-        query = context.normalized_msg
-        context.log(f"[ROUTE] 群聊 query = {query!r}")
+        query = context.effective_text
+        context.log(f"[ROUTE] effective_query={query!r}")
         if query == "":
             context.log("[ROUTE] 群聊无有效文本内容，忽略")
             return SkillResult(handled=True, source=self.name, status="ignore")
+        context.log(f"[ROUTE] 群聊 query = {query!r}")
 
-        safe_query = build_group_safe_prompt(context.group_id, query)
-        reply = call_ai(safe_query)
+        prompt_payload = prepare_group_ai_prompt(context.group_id, query, user_id=context.user_id, log=context.log)
+        context.log(
+            "[GROUP_PROMPT]"
+            f" mode={prompt_payload['prompt_mode']}"
+            f" persona_chars={prompt_payload['persona_chars']}"
+            f" history_chars={prompt_payload['history_chars']}"
+            f" style_chars={prompt_payload['style_chars']}"
+            f" current_message_chars={prompt_payload['current_message_chars']}"
+            f" total_prompt_chars={prompt_payload['prompt_chars']}"
+        )
+        reply = call_ai(
+            prompt_payload["prompt"],
+            metadata={
+                "user_id": f"group:{context.group_id}",
+                "prompt_mode": prompt_payload["prompt_mode"],
+                "query_len": prompt_payload["query_len"],
+                "history_chars": prompt_payload["history_chars"],
+                "history_items": prompt_payload["history_items"],
+                "instruction_chars": prompt_payload["instruction_chars"],
+                "prompt_chars": prompt_payload["prompt_chars"],
+            },
+        )
         send_group_msg(context.group_id, reply, quiet=not context.should_log)
         return SkillResult(handled=True, source=self.name, response_payload={"status": "ok", "source": self.name})

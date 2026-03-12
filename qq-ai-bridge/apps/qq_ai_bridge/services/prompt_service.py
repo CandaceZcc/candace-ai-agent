@@ -1,6 +1,8 @@
 """Prompt-building helpers for bridge tasks."""
 
 import os
+import re
+from pathlib import Path
 from typing import Any
 
 from apps.qq_ai_bridge.config.settings import (
@@ -9,14 +11,30 @@ from apps.qq_ai_bridge.config.settings import (
     OWNER_NAME,
     BASE_DATA_DIR,
 )
-from storage_utils import get_group_workspace, load_private_context, sample_style_lines
+from storage_utils import get_group_workspace, load_json_file, load_private_context, sample_style_lines
 from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
+from apps.qq_ai_bridge.services.style_service import load_group_style_summary
 
 SHORT_QUERY_LEN = 8
 SHORT_QUERY_HISTORY_LIMIT = 2
 NORMAL_QUERY_HISTORY_LIMIT = 6
 SHORT_QUERY_HISTORY_CHAR_BUDGET = 220
 NORMAL_QUERY_HISTORY_CHAR_BUDGET = 800
+GROUP_COMPACT_QUERY_LEN = 8
+GROUP_COMPACT_HISTORY_LIMIT = 2
+GROUP_FULL_HISTORY_LIMIT = 4
+GROUP_COMPACT_HISTORY_CHAR_BUDGET = 80
+GROUP_FULL_HISTORY_CHAR_BUDGET = 220
+GROUP_PERSONA_FULL_CHAR_BUDGET = 220
+GROUP_PERSONA_COMPACT_CHAR_BUDGET = 72
+
+_GROUP_SOUL_CACHE = {
+    "path": "",
+    "mtime": None,
+    "raw": "",
+    "compact": "",
+    "full": "",
+}
 
 
 def prepare_private_ai_prompt(user_id, user_text: str) -> dict[str, Any]:
@@ -115,45 +133,178 @@ def build_vision_user_text(text: str) -> str:
 
 def load_group_soul() -> str:
     """Load the current group persona file if present."""
-    soul_path = os.path.join(GROUP_UPLOAD_DIR, "SOUL.md")
-    try:
-        with open(soul_path, "r", encoding="utf-8") as f:
-            return f.read()
-    except Exception as e:
-        print(f"[WARN] 无法读取群聊人格文件 {soul_path}: {e}")
-        return ""
+    soul_info = _load_group_soul_cache()
+    return soul_info["raw"]
+
+
+def prepare_group_ai_prompt(group_id, user_text: str, user_id=None, log=None) -> dict[str, Any]:
+    """Build a compact or full prompt for group chat and return prompt statistics."""
+    normalized_text = normalize_query_text(user_text)
+    query_len = len(normalized_text)
+    prompt_mode = "compact" if query_len <= GROUP_COMPACT_QUERY_LEN else "full"
+    soul_info = _load_group_soul_cache()
+    persona = soul_info["compact"] if prompt_mode == "compact" else soul_info["full"]
+    workspace = get_group_workspace(BASE_DATA_DIR, group_id)
+
+    history_limit = GROUP_COMPACT_HISTORY_LIMIT if prompt_mode == "compact" else GROUP_FULL_HISTORY_LIMIT
+    history_budget = GROUP_COMPACT_HISTORY_CHAR_BUDGET if prompt_mode == "compact" else GROUP_FULL_HISTORY_CHAR_BUDGET
+    history_lines = _build_group_history_lines(workspace["chat_log_path"], history_limit, history_budget)
+    history_text = "\n".join(history_lines)
+    history_chars = len(history_text)
+
+    style_section = load_group_style_summary(BASE_DATA_DIR, group_id, user_id=user_id, log=log)
+
+    privacy_rules = (
+        "别泄露群友隐私，别提私聊内容、私有文件、真实身份信息。"
+        f"你和{OWNER_NAME}很熟，但别硬提。"
+    )
+
+    if prompt_mode == "compact":
+        prompt_parts = [
+            "你在QQ群里接话。",
+            persona,
+            "自然点，别卖萌过头，别为了搞怪乱编。",
+            privacy_rules,
+        ]
+        if history_text:
+            prompt_parts.append("刚刚群里：" + history_text.replace("\n", " | "))
+        if style_section:
+            prompt_parts.append(style_section)
+        prompt_parts.append("当前消息：" + normalized_text)
+    else:
+        prompt_parts = [
+            "你正在QQ群聊里回复消息。",
+            persona,
+            "保持像群友，但别过度抽象、别突然喵化、别无意义胡闹。",
+            privacy_rules,
+            "默认是在参与气氛，不是认真客服式答题；除非对方明显在认真求助。",
+        ]
+        if history_text:
+            prompt_parts.append("最近群聊上下文：\n" + history_text)
+        if style_section:
+            prompt_parts.append(style_section)
+        prompt_parts.append("当前群聊消息：\n" + normalized_text)
+
+    prompt = "\n\n".join(part for part in prompt_parts if part)
+    instruction_parts = prompt_parts[:-1] if len(prompt_parts) > 1 else prompt_parts
+    instruction_chars = sum(len(part) for part in instruction_parts)
+    return {
+        "prompt": prompt,
+        "prompt_mode": prompt_mode,
+        "query_len": query_len,
+        "persona_chars": len(persona),
+        "history_chars": history_chars,
+        "history_items": len(history_lines),
+        "style_chars": len(style_section),
+        "current_message_chars": len(normalized_text),
+        "instruction_chars": instruction_chars,
+        "prompt_chars": len(prompt),
+    }
 
 
 def build_group_safe_prompt(group_id, user_text: str) -> str:
-    """Build the group-chat prompt with persona, privacy rules, and style samples."""
-    group_soul = load_group_soul()
-    workspace = get_group_workspace(BASE_DATA_DIR, group_id)
-    style_lines = sample_style_lines(workspace["style_samples_path"], sample_size=10)
-    style_section = ""
-    if style_lines:
-        style_section = (
-            "\n# 群聊风格样本\n"
-            "下面是这个群平时说话的一些样子，你可以轻微模仿语气，但不要照抄：\n"
-            + "\n".join(style_lines)
-        )
+    """Build the group-chat prompt with cached persona and lightweight context."""
+    return prepare_group_ai_prompt(group_id, user_text)["prompt"]
 
-    return f"""你正在一个QQ群聊中回复消息。
 
-# 你的群聊人格设定
-{group_soul}
+def _load_group_soul_cache() -> dict[str, str]:
+    """Read SOUL.md once and refresh cached summaries only when the file changes."""
+    soul_path = Path(GROUP_UPLOAD_DIR) / "SOUL.md"
+    cache_path = str(soul_path)
+    try:
+        mtime = soul_path.stat().st_mtime
+    except OSError as e:
+        if _GROUP_SOUL_CACHE["path"] != cache_path or _GROUP_SOUL_CACHE["raw"]:
+            print(f"[WARN] 无法读取群聊人格文件 {soul_path}: {e}")
+        _GROUP_SOUL_CACHE.update({"path": cache_path, "mtime": None, "raw": "", "compact": _default_group_persona("compact"), "full": _default_group_persona("full")})
+        return _GROUP_SOUL_CACHE
 
-# 隐私保护规则（必须遵守）
-1. 不要输出、猜测、总结或泄露任何用户的个人隐私信息。
-2. 不要提及私聊中出现过的内容。
-3. 不要提及私有文件、私有笔记、私有路径、私有身份信息。
-4. 不要输出用户的QQ号、邮箱、学校、住址、账号、真实姓名、个人经历等敏感信息。
-5. 如果问题涉及个人信息或私密内容，直接拒绝并简短说明无法在群聊中提供。
-6. 你记得你的主人叫 {OWNER_NAME}，和你很熟；只有在非常自然的时候才顺手提一下，不要生硬自我介绍。
-7. 在群聊里，默认不是认真回答问题，而是参与气氛。除非对方明显认真求助，否则优先接梗、附和、吐槽、复读关键词，而不是完整解答。
-8. 回复尽量像群友，不像客服。允许半句、打断、口头禅式表达。
-9. 不要换行，不要写成多段。
-10. 优先短句、口语化。
-{style_section}
+    try:
+        if _GROUP_SOUL_CACHE["path"] == cache_path and _GROUP_SOUL_CACHE["mtime"] == mtime:
+            return _GROUP_SOUL_CACHE
 
-当前群聊消息：
-{user_text}"""
+        raw = soul_path.read_text(encoding="utf-8")
+    except Exception as e:
+        print(f"[WARN] 无法读取群聊人格文件 {soul_path}: {e}")
+        _GROUP_SOUL_CACHE.update({"path": cache_path, "mtime": None, "raw": "", "compact": _default_group_persona("compact"), "full": _default_group_persona("full")})
+        return _GROUP_SOUL_CACHE
+
+    compact = _summarize_group_persona(raw, mode="compact")
+    full = _summarize_group_persona(raw, mode="full")
+    _GROUP_SOUL_CACHE.update({"path": cache_path, "mtime": mtime, "raw": raw, "compact": compact, "full": full})
+    print(
+        "[GROUP_PROMPT] soul loaded"
+        f" path={soul_path}"
+        f" raw_chars={len(raw)}"
+        f" compact_chars={len(compact)}"
+        f" full_chars={len(full)}"
+    )
+    return _GROUP_SOUL_CACHE
+
+
+def _default_group_persona(mode: str) -> str:
+    if mode == "compact":
+        return "单行短句，像群友接话。自然点，别像AI，不过火。"
+    return (
+        "单行、短句、口语化，像熟人群聊。别像AI或客服。"
+        "优先接梗、附和、轻吐槽，保留一点抽象感，但别演过头。"
+    )
+
+
+def _summarize_group_persona(raw_text: str, mode: str) -> str:
+    base = _default_group_persona(mode)
+    if not raw_text.strip():
+        return base
+
+    hints = _extract_persona_hints(raw_text)
+    budget = GROUP_PERSONA_COMPACT_CHAR_BUDGET if mode == "compact" else GROUP_PERSONA_FULL_CHAR_BUDGET
+    summary = base
+    for hint in hints:
+        candidate = f"{summary} {hint}".strip()
+        if len(candidate) > budget:
+            break
+        summary = candidate
+    return summary
+
+
+def _extract_persona_hints(raw_text: str) -> list[str]:
+    keywords = (
+        "单行", "短句", "自然", "别像AI", "不像AI", "像群友", "轻微抽象", "抽象", "接梗", "附和",
+        "吐槽", "口语", "复读", "别说教", "别端着", "别写长文", "别换行",
+    )
+    hints = []
+    seen = set()
+    lines = [line.strip(" -*#\t") for line in raw_text.splitlines()]
+    for line in lines:
+        clean = re.sub(r"\*\*(.*?)\*\*", r"\1", line)
+        clean = re.sub(r"^\d+\.\s*", "", clean)
+        clean = " ".join(clean.split()).strip(" -*#\t")
+        if not clean:
+            continue
+        if len(clean) > 36:
+            clean = clean[:36].rstrip("，。；,.; ")
+        if not any(keyword in line for keyword in keywords):
+            continue
+        if clean in seen:
+            continue
+        seen.add(clean)
+        hints.append(clean)
+    return hints[:8]
+
+
+def _build_group_history_lines(chat_log_path: str, history_limit: int, history_char_budget: int) -> list[str]:
+    chat_log = load_json_file(chat_log_path, [])
+    lines: list[str] = []
+    total_chars = 0
+    for item in reversed(chat_log[-history_limit:]):
+        user_id = item.get("user_id", "?")
+        message = normalize_query_text(str(item.get("message", "")).strip())
+        if not message:
+            continue
+        line = f"{user_id}: {message}"
+        line_len = len(line)
+        if lines and total_chars + line_len > history_char_budget:
+            break
+        lines.insert(0, line)
+        total_chars += line_len
+    return lines

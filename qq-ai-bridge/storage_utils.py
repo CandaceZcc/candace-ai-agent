@@ -144,6 +144,9 @@ def get_group_workspace(base_dir: str, group_id) -> dict:
 
     chat_log_path = os.path.join(group_dir, "chat_log.json")
     style_path = os.path.join(group_dir, "style_samples.txt")
+    style_profiles_dir = os.path.join(group_dir, "style_profiles")
+    ensure_dir(style_profiles_dir)
+    style_group_profile_path = os.path.join(style_profiles_dir, "group_style.json")
 
     ensure_json_file(chat_log_path, [])
     ensure_text_file(style_path)
@@ -151,7 +154,10 @@ def get_group_workspace(base_dir: str, group_id) -> dict:
     return {
         "dir": group_dir,
         "chat_log_path": chat_log_path,
-        "style_samples_path": style_path
+        "style_samples_path": style_path,
+        "style_profiles_dir": style_profiles_dir,
+        "style_group_profile_path": style_group_profile_path,
+        "style_user_profile_path": lambda user_id: os.path.join(style_profiles_dir, f"user_{user_id}.json"),
     }
 
 
