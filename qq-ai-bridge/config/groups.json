@@ -1,0 +1,30 @@
+{
+  "1065429760": {
+    "name": "麦麦の小屋",
+    "capture_all_messages": true,
+    "bot_can_reply": true,
+    "learn_style": true,
+    "reply_all_messages": true,
+    "enable_vision": true,
+    "ignore": false,
+    "mute_log": false
+  },
+  "674070498": {
+    "name": "mute group",
+    "capture_all_messages": false,
+    "bot_can_reply": true,
+    "learn_style": false,
+    "reply_all_messages": false,
+    "enable_vision": false,
+    "ignore": false,
+    "mute_log": true
+  },
+  "default": {
+    "capture_all_messages": false,
+    "bot_can_reply": true,
+    "learn_style": false,
+    "reply_all_messages": false,
+    "ignore": false,
+    "mute_log": false
+  }
+}

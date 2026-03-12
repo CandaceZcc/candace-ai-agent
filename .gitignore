@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# virtual env
+.venv/
+venv/
+
+# runtime data
+data/
+tmp/
+logs/
+
+# browser profile
+profiles/
+browser/profiles/
+
+# misc
+.DS_Store
+*.log
+
