@@ -1,38 +1,71 @@
 """Vision pipeline service for QQ bridge."""
 
+import traceback
+from typing import Iterable
+
 from apps.qq_ai_bridge.config.settings import IMAGE_TMP_DIR
 from image_utils import download_image
-from vision.client import analyze_image
+from vision.client import analyze_image_with_details, read_vision_config
 
-VISION_CONFIG_FALLBACK = "识图服务暂不可用，请检查 VISION_API_URL / VISION_API_KEY / VISION_MODEL 配置。"
-VISION_RUNTIME_FALLBACK = "识图服务调用失败，请稍后重试。"
+VISION_USER_FALLBACK = "我这边暂时看不了图，稍后再试试。"
+VISION_USER_DOWNLOAD_FALLBACK = "这张图我暂时没拿到，麻烦稍后重发试试。"
 
 
-def run_vision_pipeline(image_url: str, user_text: str, vision_log, save_dir=IMAGE_TMP_DIR) -> str:
+def log_vision_config_status(log=print) -> None:
+    cfg = read_vision_config()
+    has_url = bool(cfg["api_url"])
+    has_key = bool(cfg["api_key"])
+    has_model = bool(cfg["model"])
+    log(f"[VISION][CONFIG] VISION_API_URL detected={has_url}")
+    log(f"[VISION][CONFIG] VISION_API_KEY detected={has_key}")
+    log(f"[VISION][CONFIG] VISION_MODEL detected={has_model}")
+    if not (has_url and has_key and has_model):
+        log("[VISION][CONFIG] missing required vision config, image understanding will degrade gracefully")
+
+
+def run_vision_pipeline(image_urls: str | Iterable[str], user_text: str, vision_log, save_dir=IMAGE_TMP_DIR) -> str:
     """Download an image, call the vision client, and return a short reply."""
-    if not image_url:
-        vision_log("[VISION] error: missing image_url")
-        return "没有拿到图片链接，请重试发送图片。"
+    if isinstance(image_urls, str):
+        urls = [image_urls] if image_urls else []
+    else:
+        urls = [u for u in list(image_urls or []) if u]
 
-    vision_log(f"[VISION] vision service called image_url={image_url}")
+    vision_log(f"[VISION] image input count={len(urls)}")
+    vision_log(f"[VISION] image URL list={urls}")
+    if not urls:
+        vision_log("[VISION][config_or_input] no usable absolute image URL")
+        return VISION_USER_DOWNLOAD_FALLBACK
+
+    first_url = urls[0]
+    vision_log(f"[VISION] vision service called first_image_url={first_url}")
 
     try:
-        local_path = download_image(image_url, save_dir=save_dir)
+        local_path = download_image(first_url, save_dir=save_dir)
         vision_log(f"[VISION] download success: {local_path}")
-    except Exception as e:
-        vision_log(f"[VISION] error: download failed: {e}")
-        return "图片下载失败了"
+    except Exception as exc:
+        vision_log(f"[VISION][image_url_unreachable] download failed url={first_url} error={exc}")
+        vision_log(f"[VISION][traceback] {traceback.format_exc()}")
+        return VISION_USER_DOWNLOAD_FALLBACK
 
-    reply = analyze_image(local_path, user_text=user_text)
-    if reply == "识图功能还没配置好":
-        vision_log("[VISION] error: vision api not configured")
-        return VISION_CONFIG_FALLBACK
-    if reply == "看图的时候出了点问题":
-        vision_log("[VISION] error: vision api call failed")
-        return VISION_RUNTIME_FALLBACK
-    if reply == "我看了图，但暂时没整理出结果":
-        vision_log("[VISION] api success but empty result")
+    result = analyze_image_with_details(local_path, user_text=user_text, input_image_urls=urls)
+    vision_log(f"[VISION] request_url={result.request_url}")
+    vision_log(f"[VISION] model={result.model}")
+    vision_log(f"[VISION] input_image_count={result.input_image_count}")
+    vision_log(f"[VISION] input_image_urls={result.input_image_urls}")
+    vision_log(f"[VISION] http_status={result.http_status}")
+    vision_log(f"[VISION] response_preview={result.response_preview!r}")
+    if result.error:
+        vision_log(f"[VISION] error={result.error}")
+    if result.traceback:
+        vision_log(f"[VISION][traceback] {result.traceback}")
+
+    if result.status == "ok":
+        vision_log("[VISION] api success")
+        return result.content
+
+    if result.status == "response_parse_failed":
+        vision_log("[VISION][response_parse_failed] unable to parse response payload")
         return "我看到了图片，但暂时没识别出明确内容。"
 
-    vision_log("[VISION] api success")
-    return reply
+    vision_log(f"[VISION][{result.status}] vision call failed and downgraded")
+    return VISION_USER_FALLBACK

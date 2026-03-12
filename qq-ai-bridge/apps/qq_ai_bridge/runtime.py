@@ -2,8 +2,10 @@
 
 import os
 import re
+from pathlib import Path
 
 from flask import Flask
+from dotenv import load_dotenv
 
 from apps.qq_ai_bridge.adapters.webhook import register_routes
 from apps.qq_ai_bridge.config.settings import (
@@ -59,7 +61,7 @@ from apps.qq_ai_bridge.services.file_service import (
 from apps.qq_ai_bridge.services.group_chat_service import load_group_config, should_log_group
 from apps.qq_ai_bridge.services.private_chat_service import build_private_ai_prompt, get_user_workspace
 from apps.qq_ai_bridge.services.prompt_service import build_group_safe_prompt, build_vision_user_text, load_group_soul
-from apps.qq_ai_bridge.services.vision_service import run_vision_pipeline
+from apps.qq_ai_bridge.services.vision_service import log_vision_config_status, run_vision_pipeline
 from apps.qq_ai_bridge.adapters.message_parser import extract_text_and_mention, has_meaningful_text, normalize_query_text
 from apps.qq_ai_bridge.adapters.napcat_client import (
     fetch_napcat_file_download_info,
@@ -70,6 +72,16 @@ from shared.ai.llm_client import call_ai
 
 
 app = Flask(__name__)
+
+
+def _load_runtime_env() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    dotenv_path = project_root / ".env"
+    loaded = load_dotenv(dotenv_path=dotenv_path, override=False)
+    if loaded:
+        print(f"[SYSTEM] loaded env from {dotenv_path}")
+    else:
+        print(f"[SYSTEM] .env not loaded from {dotenv_path}, using process env only")
 
 
 def trim_reply(text: str) -> str:
@@ -114,6 +126,9 @@ def send_group_msg(group_id, msg, quiet: bool = False):
     msg = normalize_reply(msg, max_len=MAX_REPLY_LEN)
     _send_group_msg_raw(group_id, msg, quiet=quiet)
 
+
+_load_runtime_env()
+log_vision_config_status(print)
 
 for path in (PRIVATE_UPLOAD_DIR, GROUP_UPLOAD_DIR, PRIVATE_USERS_DIR, GROUP_DATA_DIR, CONFIG_DIR, IMAGE_TMP_DIR):
     os.makedirs(path, exist_ok=True)

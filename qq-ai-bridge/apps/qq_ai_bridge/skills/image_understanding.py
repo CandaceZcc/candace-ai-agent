@@ -30,9 +30,13 @@ class ImageUnderstandingSkill:
         """Run the vision pipeline if current context allows it."""
         context.log("[VISION] image_understanding selected")
         context.log("[VISION] image URLs extracted: %s" % (context.image_inputs.get("image_urls", []),))
+        if context.image_inputs.get("resolved_relative_urls"):
+            context.log("[VISION] resolved relative image URLs: %s" % (context.image_inputs.get("resolved_relative_urls", []),))
+        if context.image_inputs.get("dropped_image_urls"):
+            context.log("[VISION] dropped non-absolute image URLs: %s" % (context.image_inputs.get("dropped_image_urls", []),))
 
         vision_text = build_vision_user_text(context.image_inputs.get("text", ""))
-        image_url = context.image_inputs.get("image_urls", [None])[0]
+        image_urls = context.image_inputs.get("image_urls", [])
 
         def vision_log(message: str) -> None:
             context.log(message)
@@ -43,7 +47,7 @@ class ImageUnderstandingSkill:
                 append_private_style_sample(BASE_DATA_DIR, context.user_id, vision_text, timestamp=context.timestamp)
 
             context.log("[VISION] vision service called (private)")
-            reply = run_vision_pipeline(image_url, vision_text, vision_log)
+            reply = run_vision_pipeline(image_urls, vision_text, vision_log)
             append_private_history(BASE_DATA_DIR, context.user_id, f"[image] {vision_text}".strip(), reply, limit=20)
 
             payload = {"status": "ok", "source": "vision"}
@@ -66,7 +70,7 @@ class ImageUnderstandingSkill:
             return SkillResult(handled=False, source=self.name, status="ignore")
 
         context.log("[VISION] vision service called (group)")
-        reply = run_vision_pipeline(image_url, vision_text, vision_log)
+        reply = run_vision_pipeline(image_urls, vision_text, vision_log)
         payload = {"status": "ok", "source": "vision"}
         context.log(f"[VISION] response payload built: {payload}")
         send_group_msg(context.group_id, reply, quiet=not context.should_log)

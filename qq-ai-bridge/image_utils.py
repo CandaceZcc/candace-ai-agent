@@ -2,7 +2,7 @@ import os
 import re
 import time
 import uuid
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
 
@@ -114,14 +114,34 @@ def extract_image_inputs(message_payload) -> dict:
     for url in image_urls:
         if not url:
             continue
-        if url in seen:
+        normalized_url = _normalize_image_url(url)
+        if not normalized_url:
             continue
-        seen.add(url)
-        cleaned_urls.append(url)
+        if normalized_url in seen:
+            continue
+        seen.add(normalized_url)
+        cleaned_urls.append(normalized_url)
+
+    final_urls = []
+    dropped_urls = []
+    resolved_relative_urls = []
+    for url in cleaned_urls:
+        if _is_absolute_http_url(url):
+            final_urls.append(url)
+            continue
+        resolved = _resolve_relative_url(url, message_payload)
+        if resolved and _is_absolute_http_url(resolved):
+            final_urls.append(resolved)
+            resolved_relative_urls.append({"raw": url, "resolved": resolved})
+            continue
+        dropped_urls.append(url)
 
     return {
-        "has_image": bool(cleaned_urls),
-        "image_urls": cleaned_urls,
+        "has_image": bool(final_urls),
+        "image_urls": final_urls,
+        "raw_image_urls": cleaned_urls,
+        "resolved_relative_urls": resolved_relative_urls,
+        "dropped_image_urls": dropped_urls,
         "text": normalize_text(" ".join(text_parts))
     }
 
@@ -167,3 +187,47 @@ def download_image(url, save_dir="tmp/images") -> str:
     with open(local_path, "wb") as f:
         f.write(resp.content)
     return local_path
+
+
+def _normalize_image_url(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    value = value.replace("&amp;", "&")
+    if value.startswith("//"):
+        return f"https:{value}"
+    return value
+
+
+def _is_absolute_http_url(url: str) -> bool:
+    parsed = urlparse(str(url or ""))
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def _resolve_relative_url(relative_url: str, message_payload: dict) -> str:
+    if not relative_url:
+        return ""
+    candidates = []
+    raw_obj = message_payload.get("raw", {}) if isinstance(message_payload, dict) else {}
+    for candidate in (
+        message_payload.get("base_url"),
+        message_payload.get("baseUrl"),
+        raw_obj.get("base_url"),
+        raw_obj.get("baseUrl"),
+        raw_obj.get("host"),
+        os.environ.get("NAPCAT_HTTP"),
+        "http://127.0.0.1:3001",
+    ):
+        if candidate:
+            candidates.append(str(candidate).strip())
+    for base in candidates:
+        parsed = urlparse(base)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            continue
+        try:
+            resolved = urljoin(base.rstrip("/") + "/", relative_url.lstrip("/"))
+        except Exception:
+            continue
+        if _is_absolute_http_url(resolved):
+            return resolved
+    return ""
