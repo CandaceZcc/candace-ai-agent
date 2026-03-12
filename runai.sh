@@ -59,6 +59,21 @@ agent_activate_cmd() {
   return 1
 }
 
+python_cmd_in_env() {
+  local py=""
+  py="$(command -v python 2>/dev/null || true)"
+  if [[ -n "$py" ]]; then
+    echo "$py"
+    return 0
+  fi
+  py="$(command -v python3 2>/dev/null || true)"
+  if [[ -n "$py" ]]; then
+    echo "$py"
+    return 0
+  fi
+  return 1
+}
+
 open_terminal_window() {
   local title="$1"
   local cmd="$2"
@@ -90,8 +105,8 @@ open_gui_windows() {
     return 1
   }
 
-  local bridge_cmd="cd '$BRIDGE_DIR' && $bridge_activate && export PYTHONUNBUFFERED=1 && exec python -u bridge.py"
-  local agent_cmd="cd '$AGENT_DIR' && $agent_activate && export PYTHONUNBUFFERED=1 && exec env PC_AGENT_PORT=$PC_AGENT_PORT python -u agent.py"
+  local bridge_cmd="cd '$BRIDGE_DIR' && $bridge_activate && export PYTHONUNBUFFERED=1 && PY_CMD=\"\$(command -v python || command -v python3 || true)\" && [[ -n \"\$PY_CMD\" ]] && exec \"\$PY_CMD\" -u bridge.py || echo 'bridge venv 内未找到 python/python3'"
+  local agent_cmd="cd '$AGENT_DIR' && $agent_activate && export PYTHONUNBUFFERED=1 && PY_CMD=\"\$(command -v python || command -v python3 || true)\" && [[ -n \"\$PY_CMD\" ]] && exec env PC_AGENT_PORT=$PC_AGENT_PORT \"\$PY_CMD\" -u agent.py || echo 'agent venv 内未找到 python/python3'"
 
   echo "GUI 模式：打开两个前台终端窗口..."
   open_terminal_window "runai-bridge" "$bridge_cmd" || return 1
@@ -109,7 +124,6 @@ cleanup_dev() {
     fi
   done
 
-  # Give processes a short grace period, then hard-stop if needed.
   sleep 0.5
   for pid in "${DEV_PIDS[@]:-}"; do
     if is_running "$pid"; then
@@ -130,7 +144,12 @@ start_dev_bridge() {
     cd "$BRIDGE_DIR" || exit 1
     source venv/bin/activate
     export PYTHONUNBUFFERED=1
-    exec python -u bridge.py
+    PY_CMD="$(python_cmd_in_env || true)"
+    if [[ -z "$PY_CMD" ]]; then
+      echo "bridge venv 内未找到 python/python3"
+      exit 127
+    fi
+    exec "$PY_CMD" -u bridge.py
   ) 2>&1 | sed -u 's/^/[bridge] /' &
 
   DEV_PIDS+=("$!")
@@ -147,7 +166,12 @@ start_dev_agent() {
     cd "$AGENT_DIR" || exit 1
     eval "$activate"
     export PYTHONUNBUFFERED=1
-    exec env PC_AGENT_PORT="$PC_AGENT_PORT" python -u agent.py
+    PY_CMD="$(python_cmd_in_env || true)"
+    if [[ -z "$PY_CMD" ]]; then
+      echo "agent venv 内未找到 python/python3"
+      exit 127
+    fi
+    exec env PC_AGENT_PORT="$PC_AGENT_PORT" "$PY_CMD" -u agent.py
   ) 2>&1 | sed -u 's/^/[agent] /' &
 
   DEV_PIDS+=("$!")
