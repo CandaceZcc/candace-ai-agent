@@ -17,12 +17,20 @@ class ChatSkill:
 
     name = "chat"
 
+    def match_reason(self, context: SkillContext) -> str:
+        """Return human-readable match reason for debug logs."""
+        if context.is_private:
+            return "private_text_fallback"
+        if context.is_group:
+            return "group_text_fallback"
+        return "unsupported_message_type"
+
     def can_handle(self, context: SkillContext) -> bool:
         """Chat remains the fallback skill for text messages."""
         return context.is_private or context.is_group
 
     def handle(self, context: SkillContext) -> SkillResult:
-        """Handle private `ai ...` chat or normal group chat flow."""
+        """Handle private or group text chat flow."""
         if context.is_private:
             context.log("[ROUTE] 进入私聊分支")
             if not has_meaningful_text(context.data, context.self_id):
@@ -36,15 +44,16 @@ class ChatSkill:
                 return SkillResult(handled=True, source=self.name, status="ignore")
 
             if context.user_id == ALLOWED_PRIVATE_USER and query.startswith("agent "):
+                context.log("[ROUTE] 私聊命中 agent 命令，交给 desktop_agent")
                 return SkillResult(handled=False, source=self.name, status="ignore")
 
-            if not query.startswith("ai "):
-                context.log("[ROUTE] 私聊未命中 ai 前缀，忽略")
-                return SkillResult(handled=True, source=self.name, status="ignore")
+            if query.startswith("ai "):
+                ai_query = normalize_query_text(query[3:])
+            else:
+                ai_query = query
 
-            ai_query = normalize_query_text(query[3:])
             if ai_query == "":
-                context.log("[ROUTE] ai 前缀后无有效文本，忽略")
+                context.log("[ROUTE] 私聊文本清洗后为空，忽略")
                 return SkillResult(handled=True, source=self.name, status="ignore")
 
             get_user_workspace(context.user_id)
@@ -53,7 +62,7 @@ class ChatSkill:
             reply = call_ai(ai_input)
             append_private_history(BASE_DATA_DIR, context.user_id, ai_query, reply, limit=20)
             send_private_msg(context.user_id, reply)
-            return SkillResult(handled=True, source=self.name, response_payload={"status": "ok"})
+            return SkillResult(handled=True, source=self.name, response_payload={"status": "ok", "source": self.name})
 
         context.log("[ROUTE] 进入群聊分支")
         if not context.group_config.get("bot_can_reply", True):
@@ -77,4 +86,4 @@ class ChatSkill:
         safe_query = build_group_safe_prompt(context.group_id, query)
         reply = call_ai(safe_query)
         send_group_msg(context.group_id, reply, quiet=not context.should_log)
-        return SkillResult(handled=True, source=self.name, response_payload={"status": "ok"})
+        return SkillResult(handled=True, source=self.name, response_payload={"status": "ok", "source": self.name})

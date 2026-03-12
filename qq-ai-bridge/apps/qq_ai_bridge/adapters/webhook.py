@@ -10,6 +10,7 @@ from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
 from apps.qq_ai_bridge.services.file_service import extract_file_info
 from apps.qq_ai_bridge.services.group_chat_service import load_group_config, should_log_group
 from apps.qq_ai_bridge.skills.base import SkillContext
+from apps.qq_ai_bridge.skills.chat import ChatSkill
 from apps.qq_ai_bridge.skills.registry import build_skill_registry
 from apps.qq_ai_bridge.skills.router import dispatch_skill
 from image_utils import extract_image_inputs
@@ -66,6 +67,9 @@ def register_routes(app):
         webhook_log("[WEBHOOK] 规范化后文本:", repr(normalized_msg))
         webhook_log("[WEBHOOK] mentioned_self:", mentioned_self)
         webhook_log("[WEBHOOK] image_inputs:", image_inputs)
+        if image_inputs.get("has_image"):
+            webhook_log("[VISION] image detected in webhook")
+            webhook_log("[VISION] image URLs extracted:", image_inputs.get("image_urls", []))
         webhook_log("[WEBHOOK] 文件信息:", file_info)
 
         if message_type == "group":
@@ -112,6 +116,28 @@ def register_routes(app):
             if result.source and "source" not in payload:
                 payload["source"] = result.source
             return jsonify(payload)
+
+        # Temporary safety net: if a normal private text falls through,
+        # force it to chat skill to avoid silent no-reply behavior.
+        if (
+            message_type == "private"
+            and normalized_msg
+            and not image_inputs.get("has_image")
+            and not file_info
+        ):
+            webhook_log("[SKILL] fallback -> chat (private normal text)")
+            fallback = ChatSkill().handle(context)
+            response_produced = bool(fallback.response_payload or fallback.response_text)
+            webhook_log(
+                f"[SKILL] fallback result chat handled={fallback.handled} status={fallback.status} response_produced={response_produced}"
+            )
+            if fallback.handled:
+                if fallback.status == "ignore":
+                    return "ignore"
+                payload = fallback.response_payload or {"status": fallback.status or "ok"}
+                if fallback.source and "source" not in payload:
+                    payload["source"] = fallback.source
+                return jsonify(payload)
 
         webhook_log(f"[ROUTE] 未处理的 message_type: {message_type}")
         return "ignore"

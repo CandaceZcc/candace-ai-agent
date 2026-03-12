@@ -13,9 +13,19 @@ class DesktopAgentSkill:
 
     name = "desktop_agent"
 
+    def match_reason(self, context: SkillContext) -> str:
+        """Return human-readable match reason for debug logs."""
+        if not context.is_private:
+            return "not_private"
+        if context.user_id != ALLOWED_PRIVATE_USER:
+            return "not_owner"
+        if not context.normalized_msg.startswith("agent "):
+            return "missing_agent_prefix"
+        return "owner_private_agent_command"
+
     def can_handle(self, context: SkillContext) -> bool:
-        """Only handle owner private messages."""
-        return context.is_private and context.user_id == ALLOWED_PRIVATE_USER
+        """Only handle explicit owner desktop commands."""
+        return self.match_reason(context) == "owner_private_agent_command"
 
     def handle(self, context: SkillContext) -> SkillResult:
         """Execute the existing desktop-agent command path if matched."""
