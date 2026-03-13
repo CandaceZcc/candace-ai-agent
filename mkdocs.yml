@@ -1,7 +1,8 @@
 site_name: Candace AI Agent Docs
 site_description: Ubuntu 上的 QQ 个人助手项目文档
-site_url: https://example.com/docs
+site_url: https://candacezcc.github.io/candace-ai-agent/
 repo_name: candace-ai-agent
+repo_url: https://github.com/CandaceZcc/candace-ai-agent
 
 theme:
   name: material

@@ -105,5 +105,4 @@ python3 bridge.py
 ## 完整安装文档链接
 
 📖 完整安装指南：  
-https://example.com/docs
-
+https://candacezcc.github.io/candace-ai-agent/
