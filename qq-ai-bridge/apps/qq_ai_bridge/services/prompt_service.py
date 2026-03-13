@@ -27,6 +27,8 @@ GROUP_COMPACT_HISTORY_CHAR_BUDGET = 80
 GROUP_FULL_HISTORY_CHAR_BUDGET = 220
 GROUP_PERSONA_FULL_CHAR_BUDGET = 220
 GROUP_PERSONA_COMPACT_CHAR_BUDGET = 72
+GROUP_MARKDOWN_CHAR_BUDGET = 240
+GROUP_BATCH_CHAR_BUDGET = 260
 
 _GROUP_SOUL_CACHE = {
     "path": "",
@@ -35,6 +37,7 @@ _GROUP_SOUL_CACHE = {
     "compact": "",
     "full": "",
 }
+_GROUP_MARKDOWN_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def prepare_private_ai_prompt(user_id, user_text: str) -> dict[str, Any]:
@@ -126,6 +129,8 @@ def build_private_ai_prompt(user_id, user_text: str) -> str:
 def build_vision_user_text(text: str) -> str:
     """Normalize optional user text that accompanies an image request."""
     text = normalize_query_text(text)
+    text = re.sub(r"@\S+", " ", text)
+    text = normalize_query_text(text)
     if text.startswith("ai "):
         text = normalize_query_text(text[3:])
     return text
@@ -137,7 +142,7 @@ def load_group_soul() -> str:
     return soul_info["raw"]
 
 
-def prepare_group_ai_prompt(group_id, user_text: str, user_id=None, log=None) -> dict[str, Any]:
+def prepare_group_ai_prompt(group_id, user_text: str, user_id=None, log=None, batch_context: dict | None = None) -> dict[str, Any]:
     """Build a compact or full prompt for group chat and return prompt statistics."""
     normalized_text = normalize_query_text(user_text)
     query_len = len(normalized_text)
@@ -153,6 +158,8 @@ def prepare_group_ai_prompt(group_id, user_text: str, user_id=None, log=None) ->
     history_chars = len(history_text)
 
     style_section = load_group_style_summary(BASE_DATA_DIR, group_id, user_id=user_id, log=log)
+    markdown_section = _load_group_markdown_context(group_id, log=log)
+    batch_section = _build_group_batch_section(batch_context)
 
     privacy_rules = (
         "别泄露群友隐私，别提私聊内容、私有文件、真实身份信息。"
@@ -168,8 +175,12 @@ def prepare_group_ai_prompt(group_id, user_text: str, user_id=None, log=None) ->
         ]
         if history_text:
             prompt_parts.append("刚刚群里：" + history_text.replace("\n", " | "))
+        if batch_section:
+            prompt_parts.append(batch_section.replace("\n", " | "))
         if style_section:
             prompt_parts.append(style_section)
+        if markdown_section:
+            prompt_parts.append(markdown_section)
         prompt_parts.append("当前消息：" + normalized_text)
     else:
         prompt_parts = [
@@ -181,8 +192,12 @@ def prepare_group_ai_prompt(group_id, user_text: str, user_id=None, log=None) ->
         ]
         if history_text:
             prompt_parts.append("最近群聊上下文：\n" + history_text)
+        if batch_section:
+            prompt_parts.append(batch_section)
         if style_section:
             prompt_parts.append(style_section)
+        if markdown_section:
+            prompt_parts.append(markdown_section)
         prompt_parts.append("当前群聊消息：\n" + normalized_text)
 
     prompt = "\n\n".join(part for part in prompt_parts if part)
@@ -196,6 +211,8 @@ def prepare_group_ai_prompt(group_id, user_text: str, user_id=None, log=None) ->
         "history_chars": history_chars,
         "history_items": len(history_lines),
         "style_chars": len(style_section),
+        "markdown_chars": len(markdown_section),
+        "batch_chars": len(batch_section),
         "current_message_chars": len(normalized_text),
         "instruction_chars": instruction_chars,
         "prompt_chars": len(prompt),
@@ -297,7 +314,7 @@ def _build_group_history_lines(chat_log_path: str, history_limit: int, history_c
     lines: list[str] = []
     total_chars = 0
     for item in reversed(chat_log[-history_limit:]):
-        user_id = item.get("user_id", "?")
+        user_id = item.get("sender_name") or item.get("user_id", "?")
         message = normalize_query_text(str(item.get("message", "")).strip())
         if not message:
             continue
@@ -308,3 +325,110 @@ def _build_group_history_lines(chat_log_path: str, history_limit: int, history_c
         lines.insert(0, line)
         total_chars += line_len
     return lines
+
+
+def _build_group_batch_section(batch_context: dict | None) -> str:
+    if not batch_context:
+        return ""
+    merged_blocks = batch_context.get("merged_blocks", [])
+    if not isinstance(merged_blocks, list) or len(merged_blocks) <= 1:
+        return ""
+
+    lines = []
+    total_chars = 0
+    for block in merged_blocks:
+        sender_name = normalize_query_text(str(block.get("sender_name", "")).strip()) or "群友"
+        texts = [normalize_query_text(str(text).strip()) for text in block.get("texts", [])]
+        merged_line = " | ".join(text for text in texts if text)
+        if not merged_line:
+            continue
+        line = f"{sender_name}：{merged_line}"
+        if lines and total_chars + len(line) > GROUP_BATCH_CHAR_BUDGET:
+            break
+        lines.append(line)
+        total_chars += len(line)
+    if not lines:
+        return ""
+    return "本轮合并消息：\n" + "\n".join(lines)
+
+
+def _load_group_markdown_context(group_id, log=None) -> str:
+    workspace = get_group_workspace(BASE_DATA_DIR, group_id)
+    candidate_dirs = [
+        Path(workspace["dir"]),
+        Path(GROUP_UPLOAD_DIR) / str(group_id),
+    ]
+
+    files: list[Path] = []
+    for directory in candidate_dirs:
+        if not directory.exists() or not directory.is_dir():
+            continue
+        files.extend(sorted(directory.glob("*.md")))
+
+    unique_files: list[Path] = []
+    seen = set()
+    for path in files:
+        resolved = str(path.resolve())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_files.append(path)
+
+    signatures = []
+    for path in unique_files:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        signatures.append((str(path), stat.st_mtime, stat.st_size))
+
+    cache_key = str(group_id)
+    cached = _GROUP_MARKDOWN_CACHE.get(cache_key)
+    if cached and cached.get("signatures") == signatures:
+        return cached.get("summary", "")
+
+    summary = _summarize_group_markdown_files(unique_files)
+    _GROUP_MARKDOWN_CACHE[cache_key] = {"signatures": signatures, "summary": summary}
+    if summary and log:
+        log(
+            "[GROUP_PROMPT] markdown loaded"
+            f" group_id={group_id}"
+            f" file_count={len(unique_files)}"
+            f" summary_chars={len(summary)}"
+        )
+    return summary
+
+
+def _summarize_group_markdown_files(paths: list[Path]) -> str:
+    if not paths:
+        return ""
+
+    snippets = []
+    total_chars = 0
+    sorted_paths = sorted(paths, key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
+    for path in sorted_paths[:3]:
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        cleaned_lines = []
+        for line in raw.splitlines():
+            clean = re.sub(r"\s+", " ", line.strip(" -*#\t"))
+            if not clean:
+                continue
+            if len(clean) > 36:
+                clean = clean[:36].rstrip("，。；,.; ")
+            cleaned_lines.append(clean)
+            if len(cleaned_lines) >= 4:
+                break
+        if not cleaned_lines:
+            continue
+        snippet = f"{path.stem}：" + " / ".join(cleaned_lines)
+        if snippets and total_chars + len(snippet) > GROUP_MARKDOWN_CHAR_BUDGET:
+            break
+        snippets.append(snippet)
+        total_chars += len(snippet)
+
+    if not snippets:
+        return ""
+    return "群文件补充话术： " + "；".join(snippets)

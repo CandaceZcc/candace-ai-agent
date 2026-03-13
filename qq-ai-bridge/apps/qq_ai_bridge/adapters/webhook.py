@@ -87,13 +87,19 @@ def register_routes(app):
             if not group_config:
                 group_config = load_group_config(group_id)
             webhook_log("[WEBHOOK] group_config:", group_config)
+            sender_name = _extract_sender_name(data, user_id)
 
             if effective_text:
                 if group_config.get("capture_all_messages", False):
                     append_group_chat_log(
                         BASE_DATA_DIR,
                         group_id,
-                        {"timestamp": int(data.get("time") or 0), "user_id": user_id, "message": effective_text},
+                        {
+                            "timestamp": int(data.get("time") or 0),
+                            "user_id": user_id,
+                            "sender_name": sender_name,
+                            "message": effective_text,
+                        },
                         limit=500,
                     )
                 if group_config.get("learn_style", False):
@@ -182,3 +188,13 @@ def _select_effective_text(forward_text: str, normalized_text: str, image_text: 
         if normalized:
             return normalized
     return ""
+
+
+def _extract_sender_name(data: dict, user_id) -> str:
+    sender = data.get("sender", {}) if isinstance(data, dict) else {}
+    if isinstance(sender, dict):
+        for key in ("card", "nickname", "nick", "remark"):
+            value = sender.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return str(user_id or "?")

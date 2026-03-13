@@ -54,10 +54,14 @@ from apps.qq_ai_bridge.config.settings import (
     NAPCAT_HTTP,
     NAPCAT_TOKEN,
     OFFICE_XML_EXTS,
+    OWNER_QQ,
     OWNER_NAME,
     PC_AGENT_URL,
     PRIVATE_UPLOAD_DIR,
     PRIVATE_USERS_DIR,
+    REMINDERS_PATH,
+    SCHEDULE_PATH,
+    SCHEDULER_STATE_PATH,
     TEXT_LIKE_EXTS,
 )
 from apps.qq_ai_bridge.services.agent_service import (
@@ -91,6 +95,7 @@ from apps.qq_ai_bridge.services.file_service import (
 from apps.qq_ai_bridge.services.group_chat_service import load_group_config, should_log_group
 from apps.qq_ai_bridge.services.private_chat_service import build_private_ai_prompt, get_user_workspace
 from apps.qq_ai_bridge.services.prompt_service import build_group_safe_prompt, build_vision_user_text, load_group_soul
+from apps.qq_ai_bridge.services.scheduler import start_scheduler
 from apps.qq_ai_bridge.services.vision_service import log_vision_config_status, run_vision_pipeline
 from apps.qq_ai_bridge.adapters.message_parser import extract_text_and_mention, has_meaningful_text, normalize_query_text
 from apps.qq_ai_bridge.adapters.napcat_client import (
@@ -149,11 +154,20 @@ def send_group_msg(group_id, msg, quiet: bool = False):
 
 log_vision_config_status(print)
 
-for path in (PRIVATE_UPLOAD_DIR, GROUP_UPLOAD_DIR, PRIVATE_USERS_DIR, GROUP_DATA_DIR, CONFIG_DIR, IMAGE_TMP_DIR):
+for path in (
+    PRIVATE_UPLOAD_DIR,
+    GROUP_UPLOAD_DIR,
+    PRIVATE_USERS_DIR,
+    GROUP_DATA_DIR,
+    CONFIG_DIR,
+    IMAGE_TMP_DIR,
+    BASE_DATA_DIR,
+):
     os.makedirs(path, exist_ok=True)
 
 
 register_routes(app)
+start_scheduler()
 
 
 __all__ = [
@@ -162,6 +176,7 @@ __all__ = [
     "NAPCAT_TOKEN",
     "ALLOWED_PRIVATE_USER",
     "OWNER_NAME",
+    "OWNER_QQ",
     "AI_CMD",
     "MAX_REPLY_LEN",
     "MAX_FILE_CONTENT_LEN",
@@ -172,6 +187,9 @@ __all__ = [
     "GROUP_DATA_DIR",
     "GROUP_CONFIG_PATH",
     "IMAGE_TMP_DIR",
+    "REMINDERS_PATH",
+    "SCHEDULER_STATE_PATH",
+    "SCHEDULE_PATH",
     "TEXT_LIKE_EXTS",
     "OFFICE_XML_EXTS",
     "PC_AGENT_URL",

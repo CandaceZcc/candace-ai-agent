@@ -7,6 +7,7 @@ from apps.qq_ai_bridge.skills.chat import ChatSkill
 from apps.qq_ai_bridge.skills.desktop_agent import DesktopAgentSkill
 from apps.qq_ai_bridge.skills.file_understanding import FileUnderstandingSkill
 from apps.qq_ai_bridge.skills.image_understanding import ImageUnderstandingSkill
+from apps.qq_ai_bridge.skills.reminder import ReminderSkill
 
 
 def build_skill_registry():
@@ -16,5 +17,6 @@ def build_skill_registry():
         FileUnderstandingSkill(),
         DesktopAgentSkill(),
         BrowserAgentSkill(),
+        ReminderSkill(),
         ChatSkill(),
     ]

@@ -22,18 +22,18 @@ BLOCKED_PHRASES = (
 
 def sanitize_outbound_reply(text: str) -> str:
     """Remove empty or status-only replies and normalize spacing."""
-    normalized = str(text or "").replace("\r", " ").replace("\n", " ")
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    if not normalized:
+    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    flat = re.sub(r"\s+", " ", normalized.replace("\n", " ")).strip()
+    if not flat:
         return ""
 
-    lowered = normalized.lower()
+    lowered = flat.lower()
     if lowered in BLOCKED_EXACT:
         return ""
     if _is_status_only(lowered):
         return ""
 
-    cleaned = normalized
+    cleaned = flat
     for phrase in BLOCKED_PHRASES:
         cleaned = re.sub(re.escape(phrase), " ", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t\r\n,.;:!?，。！？、~`'\"()[]{}")
@@ -41,7 +41,13 @@ def sanitize_outbound_reply(text: str) -> str:
         return ""
     if _is_only_punctuation(cleaned):
         return ""
-    return cleaned
+
+    lines = []
+    for line in normalized.split("\n"):
+        line = re.sub(r"[ \t]+", " ", line).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
 
 
 def _is_status_only(text: str) -> bool:

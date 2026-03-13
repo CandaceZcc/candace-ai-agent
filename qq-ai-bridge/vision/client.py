@@ -12,11 +12,11 @@ import requests
 def build_vision_prompt(user_text: str) -> str:
     text = str(user_text or "").strip()
     if not text:
-        return "请简洁描述图片里有什么，语气自然，像聊天回复。"
+        return "用群聊网感点评这张图，10到15字，自然一点。"
     return (
-        "请结合图片回答用户问题，回复简洁自然。"
-        "如果用户是在问图片内容，就直接回答。"
-        "如果用户要提取图中文字，就优先提取文字。"
+        "先按用户要求答。"
+        "如果只是评价图片，就用群聊网感短评，10到15字。"
+        "如果用户要识别文字，就直接提取文字。"
         f"\n用户补充：{text}"
     )
 
@@ -195,7 +195,7 @@ def _build_request_payload(image_path: str, user_text: str, model: str) -> dict:
         "messages": [
             {
                 "role": "system",
-                "content": "你是一个看图助手，回答要简短、自然、像聊天。"
+                "content": "你是群聊看图助手，回答短、自然、像群友。"
             },
             {
                 "role": "user",

@@ -28,12 +28,15 @@ def extract_file_info(event_data):
     raw_message = event_data.get("message")
     raw_obj = event_data.get("raw", {})
     elements = raw_obj.get("elements", [])
+    file_signal_detected = False
     if isinstance(elements, list):
         for elem in elements:
             if not isinstance(elem, dict):
                 continue
 
             file_elem = elem.get("fileElement")
+            if file_elem is not None:
+                file_signal_detected = True
             if isinstance(file_elem, dict):
                 file_info = {
                     "name": file_elem.get("fileName") or file_elem.get("name"),
@@ -52,6 +55,7 @@ def extract_file_info(event_data):
             if not isinstance(seg, dict):
                 continue
             if seg.get("type") == "file":
+                file_signal_detected = True
                 data = seg.get("data", {})
                 file_info = {
                     "name": data.get("name") or data.get("file_name") or data.get("file"),
@@ -65,7 +69,8 @@ def extract_file_info(event_data):
                 print(f"[FILE] extract_file_info 命中 message.file: {file_info}")
                 return file_info
 
-    print("[FILE] extract_file_info 未找到文件信息")
+    if file_signal_detected:
+        print("[FILE] extract_file_info 检测到文件消息但未解析出完整文件信息")
     return None
 
 

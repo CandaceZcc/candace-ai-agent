@@ -3,23 +3,45 @@
 import os
 
 
-NAPCAT_HTTP = "http://127.0.0.1:3001"
-NAPCAT_TOKEN = "hajimi"
-ALLOWED_PRIVATE_USER = 273007866
-OWNER_NAME = "Candace"
-AI_CMD = "/home/cancade/.local/bin/ocai"
+def _get_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"[CONFIG] invalid int env {name}={raw!r}, fallback={default}")
+        return default
+
+
+NAPCAT_HTTP = os.getenv("NAPCAT_HTTP", "http://127.0.0.1:3001").strip() or "http://127.0.0.1:3001"
+NAPCAT_TOKEN = os.getenv("NAPCAT_TOKEN", "hajimi").strip() or "hajimi"
+ALLOWED_PRIVATE_USER = _get_int_env("ALLOWED_PRIVATE_USER", 273007866)
+OWNER_QQ = _get_int_env("OWNER_QQ", ALLOWED_PRIVATE_USER)
+OWNER_NAME = os.getenv("OWNER_NAME", "Candace").strip() or "Candace"
+AI_CMD = os.getenv("AI_CMD", "/home/cancade/.local/bin/ocai").strip() or "/home/cancade/.local/bin/ocai"
 
 MAX_REPLY_LEN = 1500
 MAX_FILE_CONTENT_LEN = 8000
 
-BASE_DATA_DIR = "./data"
+BASE_DATA_DIR = os.getenv("BASE_DATA_DIR", "./data").strip() or "./data"
 PRIVATE_UPLOAD_DIR = os.path.join(BASE_DATA_DIR, "private_uploads")
 GROUP_UPLOAD_DIR = os.path.join(BASE_DATA_DIR, "group_uploads")
 PRIVATE_USERS_DIR = os.path.join(BASE_DATA_DIR, "private_users")
 GROUP_DATA_DIR = os.path.join(BASE_DATA_DIR, "groups")
-CONFIG_DIR = "./config"
+CONFIG_DIR = os.getenv("CONFIG_DIR", "./config").strip() or "./config"
 GROUP_CONFIG_PATH = os.path.join(CONFIG_DIR, "groups.json")
 IMAGE_TMP_DIR = "./tmp/images"
+REMINDERS_PATH = os.path.join(BASE_DATA_DIR, "reminders.json")
+SCHEDULER_STATE_PATH = os.path.join(BASE_DATA_DIR, "scheduler_state.json")
+SCHEDULE_PATH = os.path.join(BASE_DATA_DIR, "schedule.json")
+
+SCHEDULER_TICK_SECONDS = max(1, _get_int_env("SCHEDULER_TICK_SECONDS", 15))
+SLEEP_REMINDER_TIME = os.getenv("SLEEP_REMINDER_TIME", "01:30").strip() or "01:30"
+TOMORROW_SCHEDULE_TIME = os.getenv("TOMORROW_SCHEDULE_TIME", "23:30").strip() or "23:30"
+SLEEP_REMINDER_TEXT = os.getenv("SLEEP_REMINDER_TEXT", "该睡觉了，别熬太晚。").strip() or "该睡觉了，别熬太晚。"
+SLEEP_REMINDER_TEST_DELAY_MINUTES = max(0, _get_int_env("SLEEP_REMINDER_TEST_DELAY_MINUTES", 0))
+TOMORROW_SCHEDULE_TEST_DELAY_MINUTES = max(0, _get_int_env("TOMORROW_SCHEDULE_TEST_DELAY_MINUTES", 0))
 
 TEXT_LIKE_EXTS = (
     ".md", ".txt", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg",

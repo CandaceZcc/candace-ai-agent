@@ -1,5 +1,7 @@
 """NapCat HTTP client helpers."""
 
+import traceback
+
 import requests
 
 from apps.qq_ai_bridge.config.settings import NAPCAT_HTTP, NAPCAT_TOKEN
@@ -17,7 +19,7 @@ def send_private_msg(user_id, msg, quiet: bool = False):
     if not msg:
         if not quiet:
             print(f"[SEND_PRIVATE] skip-empty-sanitized user_id={user_id}")
-        return
+        return {"ok": False, "reason": "empty_message"}
     if not quiet:
         print(f"[SEND_PRIVATE] 准备发消息给 {user_id}: {msg[:120]!r}")
 
@@ -25,9 +27,12 @@ def send_private_msg(user_id, msg, quiet: bool = False):
         resp = _post_json("send_private_msg", {"user_id": user_id, "message": msg}, timeout=15)
         if not quiet:
             print(f"[SEND_PRIVATE] NapCat 返回: {resp.status_code} {resp.text}")
+        return {"ok": resp.ok, "status_code": resp.status_code, "text": resp.text}
     except Exception as e:
         if not quiet:
             print(f"[SEND_PRIVATE] 异常: {e}")
+            traceback.print_exc()
+        return {"ok": False, "error": str(e)}
 
 
 def send_group_msg(group_id, msg, quiet: bool = False):
@@ -44,9 +49,12 @@ def send_group_msg(group_id, msg, quiet: bool = False):
         resp = _post_json("send_group_msg", {"group_id": group_id, "message": msg}, timeout=15)
         if not quiet:
             print(f"[SEND_GROUP] NapCat 返回: {resp.status_code} {resp.text}")
+        return {"ok": resp.ok, "status_code": resp.status_code, "text": resp.text}
     except Exception as e:
         if not quiet:
             print(f"[SEND_GROUP] 异常: {e}")
+            traceback.print_exc()
+        return {"ok": False, "error": str(e)}
 
 
 def get_forward_msg(forward_id: str):

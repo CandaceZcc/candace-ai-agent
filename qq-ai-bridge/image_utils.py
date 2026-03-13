@@ -65,6 +65,8 @@ def extract_image_inputs(message_payload) -> dict:
 
             text_elem = elem.get("textElement")
             if isinstance(text_elem, dict):
+                if int(text_elem.get("atType") or 0) != 0:
+                    continue
                 for key in ("content", "text"):
                     before_count = len(text_parts)
                     add_text_part(text_elem.get(key, ""))
@@ -103,6 +105,8 @@ def extract_image_inputs(message_payload) -> dict:
 
             text_elem = elem.get("textElement")
             if isinstance(text_elem, dict):
+                if int(text_elem.get("atType") or 0) != 0:
+                    continue
                 for key in ("content", "text"):
                     before_count = len(text_parts)
                     add_text_part(text_elem.get(key, ""))

@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
-from apps.qq_ai_bridge.adapters.napcat_client import send_group_msg
 from apps.qq_ai_bridge.config.settings import ALLOWED_PRIVATE_USER
-from apps.qq_ai_bridge.services.prompt_service import prepare_group_ai_prompt
+from apps.qq_ai_bridge.services.group_chat_service import enqueue_group_text
 from apps.qq_ai_bridge.services.private_chat_service import enqueue_private_text
 from apps.qq_ai_bridge.skills.base import SkillContext, SkillResult
-from shared.ai.llm_client import call_ai
 
 
 class ChatSkill:
@@ -69,37 +67,45 @@ class ChatSkill:
             return SkillResult(handled=True, source=self.name, status="ignore")
 
         reply_all_messages = context.group_config.get("reply_all_messages", False)
-        if not context.mentioned_self and not reply_all_messages:
-            context.log("[ROUTE] 群聊未 @ 机器人，忽略")
-            return SkillResult(handled=True, source=self.name, status="ignore")
         query = context.effective_text
         context.log(f"[ROUTE] effective_query={query!r}")
         if query == "":
             context.log("[ROUTE] 群聊无有效文本内容，忽略")
             return SkillResult(handled=True, source=self.name, status="ignore")
+        ai_prefix_triggered = query.startswith("ai ")
+        if ai_prefix_triggered:
+            query = normalize_query_text(query[3:])
+        if query == "":
+            context.log("[ROUTE] 群聊文本去掉 ai 前缀后为空，忽略")
+            return SkillResult(handled=True, source=self.name, status="ignore")
         context.log(f"[ROUTE] 群聊 query = {query!r}")
 
-        prompt_payload = prepare_group_ai_prompt(context.group_id, query, user_id=context.user_id, log=context.log)
-        context.log(
-            "[GROUP_PROMPT]"
-            f" mode={prompt_payload['prompt_mode']}"
-            f" persona_chars={prompt_payload['persona_chars']}"
-            f" history_chars={prompt_payload['history_chars']}"
-            f" style_chars={prompt_payload['style_chars']}"
-            f" current_message_chars={prompt_payload['current_message_chars']}"
-            f" total_prompt_chars={prompt_payload['prompt_chars']}"
+        queue_info = enqueue_group_text(
+            context.group_id,
+            context.user_id,
+            _extract_sender_name(context),
+            query,
+            group_config=context.group_config,
+            explicit_trigger=bool(context.mentioned_self or reply_all_messages or ai_prefix_triggered),
+            timestamp=context.timestamp,
+            log=context.log,
         )
-        reply = call_ai(
-            prompt_payload["prompt"],
-            metadata={
-                "user_id": f"group:{context.group_id}",
-                "prompt_mode": prompt_payload["prompt_mode"],
-                "query_len": prompt_payload["query_len"],
-                "history_chars": prompt_payload["history_chars"],
-                "history_items": prompt_payload["history_items"],
-                "instruction_chars": prompt_payload["instruction_chars"],
-                "prompt_chars": prompt_payload["prompt_chars"],
-            },
+        if not queue_info.get("queued"):
+            context.log(f"[ROUTE] 群聊未入队 reason={queue_info.get('reason')}")
+            return SkillResult(handled=True, source=self.name, status="ignore")
+
+        return SkillResult(
+            handled=True,
+            source=self.name,
+            response_payload={"status": "ok", "source": self.name, **queue_info},
         )
-        send_group_msg(context.group_id, reply, quiet=not context.should_log)
-        return SkillResult(handled=True, source=self.name, response_payload={"status": "ok", "source": self.name})
+
+
+def _extract_sender_name(context: SkillContext) -> str:
+    sender = context.data.get("sender", {}) if isinstance(context.data, dict) else {}
+    if isinstance(sender, dict):
+        for key in ("card", "nickname", "nick", "remark"):
+            value = sender.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return str(context.user_id or "?")
