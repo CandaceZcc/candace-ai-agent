@@ -1,0 +1,37 @@
+site_name: Candace AI Agent Docs
+site_description: Ubuntu 上的 QQ 个人助手项目文档
+site_url: https://example.com/docs
+repo_name: candace-ai-agent
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+
+nav:
+  - 首页: index.md
+  - Installation:
+      - Overview: install/overview.md
+      - Ubuntu Setup: install/ubuntu.md
+      - NapCat Setup: install/napcat.md
+      - OpenClaw Setup: install/openclaw.md
+      - Run the Bot: install/run.md
+  - Troubleshooting:
+      - Common Errors: troubleshooting/common-errors.md
+      - Debug Logs: troubleshooting/logs.md
+  - Architecture:
+      - System Design: architecture/system-design.md
