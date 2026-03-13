@@ -17,12 +17,6 @@ theme:
       toggle:
         icon: material/weather-sunny
         name: 切换到浅色模式
-    - scheme: default
-      primary: blue grey
-      accent: cyan
-      toggle:
-        icon: material/weather-night
-        name: 切换到深色模式
   features:
     - navigation.sections
     - navigation.expand
