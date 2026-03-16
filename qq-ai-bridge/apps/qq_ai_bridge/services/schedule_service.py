@@ -57,17 +57,22 @@ def detect_schedule_intent(text: str) -> str | None:
         return "tomorrow_overview"
     if any(token in normalized for token in ("明天有什么课", "明天有课吗", "明天课程", "明天有什么课呢")):
         return "tomorrow_schedule"
-    if any(token in normalized for token in ("今天有什么课", "今天有课吗", "今天课程")):
+    if any(token in normalized for token in ("今天有什么课", "今天有课吗", "今天课程", "课程", "课表", "有什么课")):
         return "today_schedule"
     return None
 
 
 def query_schedule_for_date(schedule_path: str, target_date: date) -> dict:
-    print(f"[SCHEDULE] query target_date={target_date.isoformat()}")
+    print(f"[SCHEDULE] query target_date={target_date.isoformat()} path={schedule_path}")
     weekday = target_date.weekday()
     weekday_cn = get_weekday_cn(target_date)
     schedule = load_schedule(schedule_path)
     courses = schedule.get(WEEKDAY_NAMES[weekday], []) if weekday < 5 else []
+    print(
+        f"[SCHEDULE] loaded weekday={WEEKDAY_NAMES[weekday]}"
+        f" weekday_cn={weekday_cn}"
+        f" course_count={len(courses)}"
+    )
     return {
         "date": target_date.isoformat(),
         "weekday_cn": weekday_cn,
@@ -94,7 +99,7 @@ def format_schedule_reply(schedule_info: dict, prefix: str) -> str:
     lines = [f"{prefix}是{weekday_cn}。"]
     courses = schedule_info.get("courses", [])
     if not courses:
-        lines.append(f"{prefix}暂无课程安排。")
+        lines.append(f"按本地课表，{prefix}暂无课程安排。")
         return "\n".join(lines)
 
     lines.append(f"{prefix}课程：")
@@ -103,10 +108,29 @@ def format_schedule_reply(schedule_info: dict, prefix: str) -> str:
             start = str(course.get("start", "")).strip()
             end = str(course.get("end", "")).strip()
             name = str(course.get("name", "")).strip()
+            course_code = str(course.get("course_code", "")).strip()
+            category = str(course.get("category", "")).strip()
             location = str(course.get("location", "")).strip()
-            line = f"{idx}. {start}-{end} {name}".strip()
+            teacher = str(course.get("teacher", "")).strip()
+            units = str(course.get("units", "")).strip()
+            weeks = str(course.get("weeks", "")).strip()
+            note = str(course.get("note", "") or course.get("remark", "")).strip()
+            parts = [f"{idx}. {start}-{end} {name}".strip()]
+            if course_code:
+                parts.append(f"课程代码：{course_code}")
+            if category:
+                parts.append(f"类别：{category}")
             if location:
-                line = f"{line} @ {location}"
+                parts.append(f"地点：{location}")
+            if teacher:
+                parts.append(f"老师：{teacher}")
+            if units:
+                parts.append(f"学分：{units}")
+            if weeks:
+                parts.append(f"周次：{weeks}")
+            if note:
+                parts.append(f"备注：{note}")
+            line = "\n".join(parts)
         else:
             line = f"{idx}. {course}"
         lines.append(line)
