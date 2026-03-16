@@ -92,11 +92,24 @@ def get_user_workspace(base_dir: str, user_id) -> dict:
     }
 
 
-def append_private_history(base_dir: str, user_id, user_text: str, bot_reply: str, limit: int = 20):
+def append_private_history(
+    base_dir: str,
+    user_id,
+    user_text: str,
+    bot_reply: str,
+    limit: int = 20,
+    user_timestamp: int | None = None,
+    assistant_timestamp: int | None = None,
+):
     workspace = get_user_workspace(base_dir, user_id)
     history = load_json_file(workspace["history_path"], [])
+    user_ts = int(user_timestamp or time.time())
+    assistant_ts = int(assistant_timestamp or time.time())
     history.append({
-        "timestamp": int(time.time()),
+        "timestamp": assistant_ts,
+        "user_timestamp": user_ts,
+        "assistant_timestamp": assistant_ts,
+        "last_activity_timestamp": max(user_ts, assistant_ts),
         "user": user_text,
         "assistant": bot_reply
     })

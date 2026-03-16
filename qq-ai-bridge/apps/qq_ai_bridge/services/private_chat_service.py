@@ -125,8 +125,27 @@ def _run_private_chat_worker(user_id) -> None:
         )
 
         get_user_workspace(user_id)
-        append_private_style_sample(BASE_DATA_DIR, user_id, merged_text, timestamp=batch[-1].timestamp or None)
-        prompt_payload = prepare_private_ai_prompt(user_id, merged_text)
+        current_message_ts = int(batch[-1].timestamp or 0)
+        append_private_style_sample(BASE_DATA_DIR, user_id, merged_text, timestamp=current_message_ts or None)
+        prompt_payload = prepare_private_ai_prompt(user_id, merged_text, current_timestamp=current_message_ts)
+        print(
+            f"[PRIVATE_CHAT] context_gap_seconds={prompt_payload['context_gap_seconds']}"
+            f" user_id={user_id}"
+        )
+        print(
+            f"[PRIVATE_CHAT] context_policy={prompt_payload['context_policy']}"
+            f" reason={prompt_payload['context_reason']}"
+            f" user_id={user_id}"
+        )
+        if prompt_payload["context_policy"] == "compact":
+            print(
+                f"[PRIVATE_CHAT] compact_trim"
+                f" original_items={prompt_payload['original_history_items']}"
+                f" original_chars={prompt_payload['original_history_chars']}"
+                f" trimmed_items={prompt_payload['history_items']}"
+                f" trimmed_chars={prompt_payload['history_chars']}"
+                f" user_id={user_id}"
+            )
         reply = call_ai(
             prompt_payload["prompt"],
             metadata={
@@ -140,7 +159,14 @@ def _run_private_chat_worker(user_id) -> None:
                 "prompt_chars": prompt_payload["prompt_chars"],
             },
         )
-        append_private_history(BASE_DATA_DIR, user_id, merged_text, reply, limit=20)
+        append_private_history(
+            BASE_DATA_DIR,
+            user_id,
+            merged_text,
+            reply,
+            limit=20,
+            user_timestamp=current_message_ts or None,
+        )
         send_private_msg(user_id, reply)
         print(
             f"[PRIVATE_CHAT] replied user_id={user_id}"

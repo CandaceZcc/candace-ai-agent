@@ -1,4 +1,4 @@
-"""Schedule file helpers for tomorrow-course reminders."""
+"""Schedule query helpers."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 import traceback
 from datetime import date, datetime, timedelta
 
-from apps.qq_ai_bridge.services.time_utils import get_now_local, get_tomorrow_local, get_weekday_cn
+from apps.qq_ai_bridge.services.time_utils import get_now_local, get_today_local, get_tomorrow_local, get_weekday_cn
 
 
 WEEKDAY_NAMES = {
@@ -51,33 +51,53 @@ def load_schedule(path: str) -> dict:
         return dict(DEFAULT_SCHEDULE)
 
 
-def query_tomorrow_schedule(schedule_path: str, now: datetime | None = None) -> dict:
-    now_local = now.astimezone(get_now_local().tzinfo) if now else get_now_local()
-    tomorrow_date = (now_local + timedelta(days=1)).date()
-    weekday = tomorrow_date.weekday()
-    weekday_cn = get_weekday_cn(tomorrow_date)
+def detect_schedule_intent(text: str) -> str | None:
+    normalized = str(text or "").strip()
+    if any(token in normalized for token in ("明天有什么课或者提醒", "明天有什么课和提醒", "明天有课和提醒吗", "明天有提醒和课吗")):
+        return "tomorrow_overview"
+    if any(token in normalized for token in ("明天有什么课", "明天有课吗", "明天课程", "明天有什么课呢")):
+        return "tomorrow_schedule"
+    if any(token in normalized for token in ("今天有什么课", "今天有课吗", "今天课程")):
+        return "today_schedule"
+    return None
+
+
+def query_schedule_for_date(schedule_path: str, target_date: date) -> dict:
+    print(f"[SCHEDULE] query target_date={target_date.isoformat()}")
+    weekday = target_date.weekday()
+    weekday_cn = get_weekday_cn(target_date)
     schedule = load_schedule(schedule_path)
     courses = schedule.get(WEEKDAY_NAMES[weekday], []) if weekday < 5 else []
     return {
-        "date": tomorrow_date.isoformat(),
+        "date": target_date.isoformat(),
         "weekday_cn": weekday_cn,
         "is_weekend": weekday >= 5,
         "courses": courses,
     }
 
 
-def format_tomorrow_schedule_reply(schedule_info: dict) -> str:
+def query_today_schedule(schedule_path: str, now: datetime | None = None) -> dict:
+    now_local = now.astimezone(get_now_local().tzinfo) if now else get_now_local()
+    return query_schedule_for_date(schedule_path, now_local.date())
+
+
+def query_tomorrow_schedule(schedule_path: str, now: datetime | None = None) -> dict:
+    now_local = now.astimezone(get_now_local().tzinfo) if now else get_now_local()
+    return query_schedule_for_date(schedule_path, (now_local + timedelta(days=1)).date())
+
+
+def format_schedule_reply(schedule_info: dict, prefix: str) -> str:
     weekday_cn = schedule_info["weekday_cn"]
     if schedule_info["is_weekend"]:
-        return f"明天是{weekday_cn}，好好休息。"
+        return f"{prefix}是{weekday_cn}，好好休息。"
 
-    lines = [f"明天是{weekday_cn}。"]
+    lines = [f"{prefix}是{weekday_cn}。"]
     courses = schedule_info.get("courses", [])
     if not courses:
-        lines.append("明天暂无课程安排。")
+        lines.append(f"{prefix}暂无课程安排。")
         return "\n".join(lines)
 
-    lines.append("明天课程：")
+    lines.append(f"{prefix}课程：")
     for idx, course in enumerate(courses, start=1):
         if isinstance(course, dict):
             start = str(course.get("start", "")).strip()
@@ -91,6 +111,14 @@ def format_tomorrow_schedule_reply(schedule_info: dict) -> str:
             line = f"{idx}. {course}"
         lines.append(line)
     return "\n".join(lines)
+
+
+def format_today_schedule_reply(schedule_info: dict) -> str:
+    return format_schedule_reply(schedule_info, "今天")
+
+
+def format_tomorrow_schedule_reply(schedule_info: dict) -> str:
+    return format_schedule_reply(schedule_info, "明天")
 
 
 def build_tomorrow_schedule_message(schedule_path: str, now: datetime | None = None) -> str:

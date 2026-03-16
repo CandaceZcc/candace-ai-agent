@@ -10,6 +10,10 @@ from apps.qq_ai_bridge.config.settings import (
     MAX_FILE_CONTENT_LEN,
     OWNER_NAME,
     BASE_DATA_DIR,
+    PRIVATE_COMPACT_MAX_CHARS,
+    PRIVATE_COMPACT_MAX_TURNS,
+    PRIVATE_CONTEXT_SOFT_LIMIT_SECONDS,
+    PRIVATE_CONTEXT_WINDOW_SECONDS,
 )
 from storage_utils import get_group_workspace, load_json_file, load_private_context, sample_style_lines
 from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
@@ -40,50 +44,63 @@ _GROUP_SOUL_CACHE = {
 _GROUP_MARKDOWN_CACHE: dict[str, dict[str, Any]] = {}
 
 
-def prepare_private_ai_prompt(user_id, user_text: str) -> dict[str, Any]:
+def prepare_private_ai_prompt(user_id, user_text: str, current_timestamp: int | None = None) -> dict[str, Any]:
     """Build the private-chat LLM prompt and return prompt statistics."""
     context = load_private_context(BASE_DATA_DIR, user_id)
     query_len = len(user_text)
-    is_short_query = query_len <= SHORT_QUERY_LEN
-    history_limit = SHORT_QUERY_HISTORY_LIMIT if is_short_query else NORMAL_QUERY_HISTORY_LIMIT
-    history = context["history"][-history_limit:]
+    current_ts = int(current_timestamp or 0)
+    last_activity_ts = _get_last_private_activity_ts(context["history"])
+    context_gap_seconds = max(0, current_ts - last_activity_ts) if current_ts and last_activity_ts else 0
+    context_policy, context_reason = _decide_private_context_policy(user_text, context_gap_seconds, last_activity_ts)
+    history_limit = 0
+    history_turn_limit = 0
+    history_char_budget = 0
+    history = []
+    if context_policy == "full":
+        history_limit = NORMAL_QUERY_HISTORY_LIMIT
+        history = context["history"][-history_limit:]
+        history_turn_limit = 5
+        history_char_budget = NORMAL_QUERY_HISTORY_CHAR_BUDGET
+    elif context_policy == "compact":
+        history_limit = PRIVATE_COMPACT_MAX_TURNS
+        history = context["history"][-history_limit:]
+        history_turn_limit = PRIVATE_COMPACT_MAX_TURNS
+        history_char_budget = PRIVATE_COMPACT_MAX_CHARS
+
     memory = context["memory"]
-    history_turn_limit = 1 if query_len <= 4 else 2 if is_short_query else 5
-    history_char_budget = SHORT_QUERY_HISTORY_CHAR_BUDGET if is_short_query else NORMAL_QUERY_HISTORY_CHAR_BUDGET
-    style_sample_size = 0 if is_short_query else 6
+    style_sample_size = 0 if context_policy != "full" else 6
     style_lines = sample_style_lines(context["style_samples_path"], sample_size=style_sample_size)
 
-    history_lines = []
-    history_chars = 0
-    for item in reversed(history):
-        user_part = str(item.get("user", "")).strip()
-        bot_part = str(item.get("assistant", "")).strip()
-        if user_part:
-            line = f"User: {user_part}"
-            line_len = len(line)
-            if history_lines and (len(history_lines) >= history_turn_limit * 2 or history_chars + line_len > history_char_budget):
-                break
-            history_lines.insert(0, line)
-            history_chars += line_len
-        if bot_part:
-            line = f"Assistant: {bot_part}"
-            line_len = len(line)
-            if history_lines and (len(history_lines) >= history_turn_limit * 2 or history_chars + line_len > history_char_budget):
-                break
-            history_lines.insert(0, line)
-            history_chars += line_len
+    original_history_lines, original_history_chars = _build_private_history_lines(
+        history,
+        history_turn_limit=history_turn_limit,
+        history_char_budget=NORMAL_QUERY_HISTORY_CHAR_BUDGET if context_policy == "compact" else history_char_budget,
+    )
+    if context_policy == "compact":
+        history_lines, history_chars = _trim_history_for_compact(original_history_lines)
+    else:
+        history_lines, history_chars = original_history_lines, original_history_chars
 
-    if is_short_query:
+    if context_policy == "no_history":
+        prompt_mode = "no_history"
+        prompt_parts = [
+            "You are replying in a private QQ chat.",
+            "Respond naturally in Chinese unless the user clearly requests another language.",
+            "Treat this as a fresh turn and do not assume earlier context.",
+            f"Current user message:\n{user_text}",
+        ]
+    elif context_policy == "compact":
         prompt_mode = "compact"
         prompt_parts = [
-            "Reply naturally in this private QQ chat.",
-            "Be brief, direct, and conversational.",
-            f"User message: {user_text}",
+            "You are replying in a private QQ chat.",
+            "Respond naturally in Chinese unless the user clearly requests another language.",
+            "Use only the minimum recent context needed for continuity.",
+            f"Current user message:\n{user_text}",
         ]
-        if history_lines:
-            prompt_parts.insert(2, "Recent context:\n" + "\n".join(history_lines))
         if memory:
-            prompt_parts.insert(2, "Memory:\n" + memory[:200])
+            prompt_parts.insert(3, "Memory:\n" + memory[:200])
+        if history_lines:
+            prompt_parts.insert(3, "Recent compact context:\n" + "\n".join(history_lines))
     else:
         prompt_mode = "full"
         prompt_parts = [
@@ -111,6 +128,12 @@ def prepare_private_ai_prompt(user_id, user_text: str) -> dict[str, Any]:
     return {
         "prompt": prompt,
         "prompt_mode": prompt_mode,
+        "context_policy": context_policy,
+        "context_reason": context_reason,
+        "context_gap_seconds": context_gap_seconds,
+        "last_activity_ts": last_activity_ts,
+        "original_history_items": len(original_history_lines),
+        "original_history_chars": original_history_chars,
         "query_len": query_len,
         "history_chars": history_chars,
         "history_items": len(history_lines),
@@ -124,6 +147,86 @@ def prepare_private_ai_prompt(user_id, user_text: str) -> dict[str, Any]:
 def build_private_ai_prompt(user_id, user_text: str) -> str:
     """Build the private-chat LLM prompt with memory/history/style context."""
     return prepare_private_ai_prompt(user_id, user_text)["prompt"]
+
+
+def is_context_free_query(text: str) -> bool:
+    normalized = normalize_query_text(text)
+    patterns = (
+        r"今天天气",
+        r"现在几点",
+        r"几点了",
+        r"帮我查一下",
+        r"明天有什么课",
+        r"明天有什么提醒",
+        r"明天有什么课或者提醒",
+        r"提醒列表",
+        r"下一个提醒是什么",
+    )
+    return any(re.search(pattern, normalized) for pattern in patterns)
+
+
+def _get_last_private_activity_ts(history: list[dict[str, Any]]) -> int:
+    for item in reversed(history):
+        if not isinstance(item, dict):
+            continue
+        for key in ("last_activity_timestamp", "assistant_timestamp", "user_timestamp", "timestamp"):
+            value = item.get(key)
+            if value:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    continue
+    return 0
+
+
+def _decide_private_context_policy(user_text: str, gap_seconds: int, last_activity_ts: int) -> tuple[str, str]:
+    if is_context_free_query(user_text):
+        return "no_history", "context_free_query"
+    if not last_activity_ts:
+        return "no_history", "no_prior_activity"
+    if gap_seconds > PRIVATE_CONTEXT_SOFT_LIMIT_SECONDS:
+        return "no_history", "gap_exceeded"
+    if gap_seconds > PRIVATE_CONTEXT_WINDOW_SECONDS:
+        return "compact", "soft_gap"
+    return "full", "recent_context"
+
+
+def _build_private_history_lines(
+    history: list[dict[str, Any]],
+    history_turn_limit: int,
+    history_char_budget: int,
+) -> tuple[list[str], int]:
+    history_lines: list[str] = []
+    history_chars = 0
+    for item in reversed(history):
+        user_part = str(item.get("user", "")).strip()
+        bot_part = str(item.get("assistant", "")).strip()
+        candidate_lines = []
+        if user_part:
+            candidate_lines.append(f"User: {user_part}")
+        if bot_part:
+            candidate_lines.append(f"Assistant: {bot_part}")
+        candidate_chars = sum(len(line) for line in candidate_lines)
+        if history_lines and (
+            len(history_lines) + len(candidate_lines) > history_turn_limit * 2
+            or history_chars + candidate_chars > history_char_budget
+        ):
+            break
+        for line in reversed(candidate_lines):
+            history_lines.insert(0, line)
+        history_chars += candidate_chars
+    return history_lines, history_chars
+
+
+def _trim_history_for_compact(history_lines: list[str]) -> tuple[list[str], int]:
+    if not history_lines:
+        return [], 0
+
+    max_items = max(1, PRIVATE_COMPACT_MAX_TURNS * 2)
+    trimmed = history_lines[-max_items:]
+    while trimmed and sum(len(line) for line in trimmed) > PRIVATE_COMPACT_MAX_CHARS:
+        trimmed = trimmed[2:] if len(trimmed) > 2 else trimmed[1:]
+    return trimmed, sum(len(line) for line in trimmed)
 
 
 def build_vision_user_text(text: str) -> str:

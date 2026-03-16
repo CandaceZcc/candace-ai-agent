@@ -56,23 +56,21 @@ def detect_reminder_intent(text: str) -> ReminderIntent | None:
     if normalized in HELP_COMMANDS:
         return ReminderIntent(kind="help", reason="help_command")
     if normalized in LIST_COMMANDS:
-        return ReminderIntent(kind="list_pending", reason="query_list")
+        return ReminderIntent(kind="list_pending", reason="list_query")
     if normalized in DONE_QUERY_COMMANDS:
-        return ReminderIntent(kind="recent_done", reason="query_done_history")
+        return ReminderIntent(kind="recent_done", reason="done_history_query")
     if normalized in NEXT_QUERY_COMMANDS:
-        return ReminderIntent(kind="next_pending", reason="query_next_reminder")
+        return ReminderIntent(kind="next_pending", reason="next_query")
     if parse_delete_command(raw) is not None:
         return ReminderIntent(kind="delete", reason="delete_command")
     if normalized in CLEAR_COMMANDS:
         return ReminderIntent(kind="clear", reason="clear_command")
-    if _is_tomorrow_overview_query(normalized):
-        return ReminderIntent(kind="tomorrow_overview", reason="query_tomorrow_schedule")
-    if _is_tomorrow_schedule_query(normalized):
-        return ReminderIntent(kind="tomorrow_schedule", reason="query_tomorrow_schedule")
     if _is_tomorrow_reminder_query(normalized):
-        return ReminderIntent(kind="tomorrow_reminders", reason="query_tomorrow_reminders")
+        return ReminderIntent(kind="tomorrow_reminders", reason="tomorrow_reminder_query")
     if _is_add_command(raw):
         return ReminderIntent(kind="add", reason="add_reminder")
+    if normalized in LIST_COMMANDS:
+        return ReminderIntent(kind="list_pending", reason="list_query")
     return None
 
 
@@ -201,28 +199,6 @@ def _is_add_command(text: str) -> bool:
             r"^提醒我(今天|明天|后天|今晚).+$",
             r"^(明天提醒我|明天提醒|明天记得|明天要做).+$",
         )
-    )
-
-
-def _is_tomorrow_overview_query(text: str) -> bool:
-    return any(
-        token in text
-        for token in (
-            "明天有什么课或者提醒",
-            "明天有什么课和提醒",
-            "明天有课和提醒吗",
-            "明天有提醒和课吗",
-            "明天课和提醒",
-            "明天课程和提醒",
-        )
-    )
-
-
-def _is_tomorrow_schedule_query(text: str) -> bool:
-    return (
-        "明天" in text
-        and any(token in text for token in ("课", "课程"))
-        and "提醒" not in text
     )
 
 

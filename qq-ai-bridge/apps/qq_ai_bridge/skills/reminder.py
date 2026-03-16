@@ -5,7 +5,7 @@ from __future__ import annotations
 import traceback
 
 from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
-from apps.qq_ai_bridge.config.settings import REMINDERS_PATH, SCHEDULE_PATH
+from apps.qq_ai_bridge.config.settings import REMINDERS_PATH
 from apps.qq_ai_bridge.services.reminder_service import (
     CLEAR_COMMANDS,
     HELP_COMMANDS,
@@ -24,10 +24,6 @@ from apps.qq_ai_bridge.services.reminder_service import (
     query_tomorrow_reminders,
 )
 from apps.qq_ai_bridge.services.reminder_store import ReminderStore
-from apps.qq_ai_bridge.services.schedule_service import (
-    format_tomorrow_schedule_reply,
-    query_tomorrow_schedule,
-)
 from apps.qq_ai_bridge.services.time_utils import get_now_local
 from apps.qq_ai_bridge.skills.base import SkillContext, SkillResult
 
@@ -83,19 +79,6 @@ class ReminderSkill:
                 context.log("[REMINDER_QUERY] answered_without_ocai=True")
                 return SkillResult(handled=True, source=self.name)
 
-            if intent.kind == "tomorrow_schedule":
-                context.log("[REMINDER_QUERY] intent=tomorrow_schedule")
-                schedule_info = query_tomorrow_schedule(SCHEDULE_PATH, now=get_now_local())
-                context.log(
-                    f"[REMINDER_QUERY] tomorrow date={schedule_info['date']}"
-                    f" weekday={schedule_info['weekday_cn']}"
-                    f" pending_count=0"
-                    f" schedule_count={len(schedule_info.get('courses', []))}"
-                )
-                send_private_msg(context.user_id, format_tomorrow_schedule_reply(schedule_info))
-                context.log("[REMINDER_QUERY] answered_without_ocai=True")
-                return SkillResult(handled=True, source=self.name)
-
             if intent.kind == "tomorrow_reminders":
                 context.log("[REMINDER_QUERY] intent=tomorrow_reminders")
                 pending_items = REMINDER_STORE.list_pending(context.user_id)
@@ -108,25 +91,6 @@ class ReminderSkill:
                 )
                 reply = build_tomorrow_reminders_reply(pending_items, now=get_now_local())
                 send_private_msg(context.user_id, reply)
-                context.log("[REMINDER_QUERY] answered_without_ocai=True")
-                return SkillResult(handled=True, source=self.name)
-
-            if intent.kind == "tomorrow_overview":
-                context.log("[REMINDER_QUERY] intent=tomorrow_overview")
-                pending_items = REMINDER_STORE.list_pending(context.user_id)
-                schedule_info = query_tomorrow_schedule(SCHEDULE_PATH, now=get_now_local())
-                tomorrow_query = query_tomorrow_reminders(pending_items, now=get_now_local())
-                reminder_reply = build_tomorrow_reminders_reply(pending_items, now=get_now_local())
-                context.log(
-                    f"[REMINDER_QUERY] tomorrow date={schedule_info['date']}"
-                    f" weekday={schedule_info['weekday_cn']}"
-                    f" pending_count={len(tomorrow_query['items'])}"
-                    f" schedule_count={len(schedule_info.get('courses', []))}"
-                )
-                send_private_msg(
-                    context.user_id,
-                    f"{format_tomorrow_schedule_reply(schedule_info)}\n\n{reminder_reply}",
-                )
                 context.log("[REMINDER_QUERY] answered_without_ocai=True")
                 return SkillResult(handled=True, source=self.name)
 
