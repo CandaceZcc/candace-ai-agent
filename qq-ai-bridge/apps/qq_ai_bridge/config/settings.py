@@ -14,6 +14,18 @@ def _get_int_env(name: str, default: int) -> int:
         return default
 
 
+def _get_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    print(f"[CONFIG] invalid bool env {name}={raw!r}, fallback={default}")
+    return default
+
+
 NAPCAT_HTTP = os.getenv("NAPCAT_HTTP", "http://127.0.0.1:3001").strip() or "http://127.0.0.1:3001"
 NAPCAT_TOKEN = os.getenv("NAPCAT_TOKEN", "hajimi").strip() or "hajimi"
 ALLOWED_PRIVATE_USER = _get_int_env("ALLOWED_PRIVATE_USER", 273007866)
@@ -49,8 +61,11 @@ PRIVATE_CONTEXT_SOFT_LIMIT_SECONDS = max(
 )
 PRIVATE_COMPACT_MAX_TURNS = max(1, _get_int_env("PRIVATE_COMPACT_MAX_TURNS", 2))
 PRIVATE_COMPACT_MAX_CHARS = max(80, _get_int_env("PRIVATE_COMPACT_MAX_CHARS", 400))
-DEFAULT_WEATHER_CITY = os.getenv("DEFAULT_WEATHER_CITY", "Zhuhai").strip() or "Zhuhai"
+DEFAULT_WEATHER_LOCATION = (
+    os.getenv("DEFAULT_WEATHER_LOCATION", os.getenv("DEFAULT_WEATHER_CITY", "Zhuhai")).strip() or "Zhuhai"
+)
 WEATHER_API_TIMEOUT_SECONDS = max(3, _get_int_env("WEATHER_API_TIMEOUT_SECONDS", 8))
+WEATHER_ENABLE_LLM_LOCATION_FALLBACK = _get_bool_env("WEATHER_ENABLE_LLM_LOCATION_FALLBACK", True)
 
 TEXT_LIKE_EXTS = (
     ".md", ".txt", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg",

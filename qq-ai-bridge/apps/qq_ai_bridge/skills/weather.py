@@ -5,9 +5,9 @@ from __future__ import annotations
 from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
 from apps.qq_ai_bridge.services.weather_service import (
     build_weather_reply,
-    extract_weather_city,
+    detect_weather_intent,
     is_weather_query,
-    query_weather,
+    query_weather_by_intent,
 )
 from apps.qq_ai_bridge.skills.base import SkillContext, SkillResult
 
@@ -26,7 +26,9 @@ class WeatherSkill:
         return context.is_private and is_weather_query(context.effective_text)
 
     def handle(self, context: SkillContext) -> SkillResult:
-        city = extract_weather_city(context.effective_text)
-        result = query_weather(city)
+        intent = detect_weather_intent(context.effective_text)
+        if intent is None:
+            return SkillResult(handled=False, source=self.name, status="ignore")
+        result = query_weather_by_intent(intent)
         send_private_msg(context.user_id, build_weather_reply(result))
         return SkillResult(handled=True, source=self.name)
