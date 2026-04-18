@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from storage_utils import append_private_history, append_private_style_sample
+
 from apps.qq_ai_bridge.adapters.napcat_client import send_group_msg, send_private_msg
 from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
 from apps.qq_ai_bridge.services.private_chat_service import get_user_workspace
 from apps.qq_ai_bridge.services.prompt_service import build_vision_user_text
 from apps.qq_ai_bridge.services.vision_service import run_vision_pipeline
 from apps.qq_ai_bridge.skills.base import SkillContext, SkillResult
-from storage_utils import append_private_history, append_private_style_sample
 
 
 class ImageUnderstandingSkill:

@@ -4,8 +4,8 @@ import os
 import re
 from pathlib import Path
 
-from flask import Flask
 from dotenv import load_dotenv
+from flask import Flask
 
 
 def _load_runtime_env() -> None:
@@ -37,6 +37,22 @@ def _load_runtime_env() -> None:
 
 _load_runtime_env()
 
+from shared.ai.llm_client import call_ai
+
+from apps.qq_ai_bridge.adapters.message_parser import (
+    extract_text_and_mention,
+    has_meaningful_text,
+    normalize_query_text,
+)
+from apps.qq_ai_bridge.adapters.napcat_client import (
+    fetch_napcat_file_download_info,
+)
+from apps.qq_ai_bridge.adapters.napcat_client import (
+    send_group_msg as _send_group_msg_raw,
+)
+from apps.qq_ai_bridge.adapters.napcat_client import (
+    send_private_msg as _send_private_msg_raw,
+)
 from apps.qq_ai_bridge.adapters.webhook import register_routes
 from apps.qq_ai_bridge.config.settings import (
     AGENT_SYSTEM_PROMPT,
@@ -54,8 +70,8 @@ from apps.qq_ai_bridge.config.settings import (
     NAPCAT_HTTP,
     NAPCAT_TOKEN,
     OFFICE_XML_EXTS,
-    OWNER_QQ,
     OWNER_NAME,
+    OWNER_QQ,
     PC_AGENT_URL,
     PRIVATE_UPLOAD_DIR,
     PRIVATE_USERS_DIR,
@@ -93,18 +109,17 @@ from apps.qq_ai_bridge.services.file_service import (
     safe_filename,
 )
 from apps.qq_ai_bridge.services.group_chat_service import load_group_config, should_log_group
-from apps.qq_ai_bridge.services.private_chat_service import build_private_ai_prompt, get_user_workspace
-from apps.qq_ai_bridge.services.prompt_service import build_group_safe_prompt, build_vision_user_text, load_group_soul
+from apps.qq_ai_bridge.services.private_chat_service import (
+    build_private_ai_prompt,
+    get_user_workspace,
+)
+from apps.qq_ai_bridge.services.prompt_service import (
+    build_group_safe_prompt,
+    build_vision_user_text,
+    load_group_soul,
+)
 from apps.qq_ai_bridge.services.scheduler import start_scheduler
 from apps.qq_ai_bridge.services.vision_service import log_vision_config_status, run_vision_pipeline
-from apps.qq_ai_bridge.adapters.message_parser import extract_text_and_mention, has_meaningful_text, normalize_query_text
-from apps.qq_ai_bridge.adapters.napcat_client import (
-    fetch_napcat_file_download_info,
-    send_group_msg as _send_group_msg_raw,
-    send_private_msg as _send_private_msg_raw,
-)
-from shared.ai.llm_client import call_ai
-
 
 app = Flask(__name__)
 

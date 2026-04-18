@@ -1,0 +1,17 @@
+[tool.ruff]
+# Set the maximum line length to 100.
+line-length = 100
+
+# Assume Python 3.10
+target-version = "py310"
+
+[tool.ruff.lint]
+# Enable Pyflakes (`F`), pycodestyle (`E`, `W`), isort (`I`)
+select = ["E", "W", "F", "I"]
+
+# Disable some rules that might be too noisy or conflict with formatter
+ignore = []
+
+# Allow auto-fix for all enabled rules
+fixable = ["ALL"]
+unfixable = []

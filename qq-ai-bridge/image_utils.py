@@ -6,7 +6,6 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
 
-
 SUPPORTED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
 

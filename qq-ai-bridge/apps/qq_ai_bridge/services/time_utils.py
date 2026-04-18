@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-
 LOCAL_TIMEZONE = ZoneInfo("Asia/Shanghai")
 WEEKDAY_CN = {
     0: "周一",

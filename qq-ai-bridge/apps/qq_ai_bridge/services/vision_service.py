@@ -4,9 +4,10 @@ import traceback
 from typing import Iterable
 from urllib.parse import urlparse
 
-from apps.qq_ai_bridge.config.settings import IMAGE_TMP_DIR
 from image_utils import download_image
 from vision.client import analyze_image_with_details, read_vision_config
+
+from apps.qq_ai_bridge.config.settings import IMAGE_TMP_DIR
 
 VISION_USER_FALLBACK = "我这边暂时看不了图，稍后再试试。"
 VISION_USER_DOWNLOAD_FALLBACK = "这张图我暂时没拿到，麻烦稍后重发试试。"

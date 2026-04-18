@@ -3,7 +3,6 @@
 from apps.qq_ai_bridge import runtime
 from apps.qq_ai_bridge.app import app
 
-
 if __name__ == "__main__":
     print("[SYSTEM] bridge 启动中，监听 0.0.0.0:5000")
     print(f"[SYSTEM] 私聊文件目录: {runtime.PRIVATE_UPLOAD_DIR}")

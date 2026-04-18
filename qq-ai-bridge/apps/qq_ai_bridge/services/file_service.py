@@ -4,23 +4,25 @@ import mimetypes
 import os
 import shutil
 import stat
-import zipfile
 import xml.etree.ElementTree as ET
+import zipfile
 
 import requests
+from shared.ai.llm_client import call_ai
 
-from apps.qq_ai_bridge.adapters.napcat_client import fetch_napcat_file_download_info, send_group_msg, send_private_msg
+from apps.qq_ai_bridge.adapters.napcat_client import (
+    fetch_napcat_file_download_info,
+    send_group_msg,
+    send_private_msg,
+)
 from apps.qq_ai_bridge.config.settings import (
     ALLOWED_PRIVATE_USER,
     GROUP_UPLOAD_DIR,
     MAX_ARCHIVE_LISTING,
-    MAX_ARCHIVE_PREVIEW_FILES,
     MAX_FILE_CONTENT_LEN,
-    OFFICE_XML_EXTS,
     PRIVATE_UPLOAD_DIR,
     TEXT_LIKE_EXTS,
 )
-from shared.ai.llm_client import call_ai
 
 
 def extract_file_info(event_data):

@@ -11,7 +11,6 @@ from typing import Any, Callable
 
 from apps.qq_ai_bridge.services.time_utils import get_now_local
 
-
 _LOCK_REGISTRY: dict[str, threading.Lock] = {}
 _LOCK_REGISTRY_GUARD = threading.Lock()
 DONE_LIMIT = 50

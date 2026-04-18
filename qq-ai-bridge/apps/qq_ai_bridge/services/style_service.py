@@ -5,8 +5,9 @@ from __future__ import annotations
 import math
 import time
 
-from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
 from storage_utils import get_group_workspace, load_json_file, save_json_file
+
+from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
 
 SUMMARY_VERSION = 1
 MAX_TOKEN_COUNTS = 16

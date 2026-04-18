@@ -3,7 +3,6 @@ import os
 import random
 import time
 
-
 DEFAULT_GROUP_CONFIG = {
     "default": {
         "capture_all_messages": False,

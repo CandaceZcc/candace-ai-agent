@@ -1,22 +1,27 @@
 """Prompt-building helpers for bridge tasks."""
 
-import os
 import re
 from pathlib import Path
 from typing import Any
 
+from storage_utils import (
+    get_group_workspace,
+    load_json_file,
+    load_private_context,
+    sample_style_lines,
+)
+
+from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
 from apps.qq_ai_bridge.config.settings import (
+    BASE_DATA_DIR,
     GROUP_UPLOAD_DIR,
     MAX_FILE_CONTENT_LEN,
     OWNER_NAME,
-    BASE_DATA_DIR,
     PRIVATE_COMPACT_MAX_CHARS,
     PRIVATE_COMPACT_MAX_TURNS,
     PRIVATE_CONTEXT_SOFT_LIMIT_SECONDS,
     PRIVATE_CONTEXT_WINDOW_SECONDS,
 )
-from storage_utils import get_group_workspace, load_json_file, load_private_context, sample_style_lines
-from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
 from apps.qq_ai_bridge.services.style_service import load_group_style_summary
 
 SHORT_QUERY_LEN = 8

@@ -1,0 +1,9 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "env": true
+    },
+    "http.proxy": "",
+    "http.proxySupport": "off",
+    "http.proxyStrictSSL": false,
+    "extensions.verifySignature": true
+}

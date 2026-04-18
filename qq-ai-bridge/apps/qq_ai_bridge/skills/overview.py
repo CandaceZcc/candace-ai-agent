@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
 from apps.qq_ai_bridge.config.settings import REMINDERS_PATH, SCHEDULE_PATH
-from apps.qq_ai_bridge.services.reminder_service import build_tomorrow_reminders_reply, query_tomorrow_reminders
+from apps.qq_ai_bridge.services.reminder_service import (
+    build_tomorrow_reminders_reply,
+    query_tomorrow_reminders,
+)
 from apps.qq_ai_bridge.services.reminder_store import ReminderStore
-from apps.qq_ai_bridge.services.schedule_service import detect_schedule_intent, format_tomorrow_schedule_reply, query_tomorrow_schedule
+from apps.qq_ai_bridge.services.schedule_service import (
+    detect_schedule_intent,
+    format_tomorrow_schedule_reply,
+    query_tomorrow_schedule,
+)
 from apps.qq_ai_bridge.services.time_utils import get_now_local
 from apps.qq_ai_bridge.skills.base import SkillContext, SkillResult
-
 
 REMINDER_STORE = ReminderStore(REMINDERS_PATH)
 

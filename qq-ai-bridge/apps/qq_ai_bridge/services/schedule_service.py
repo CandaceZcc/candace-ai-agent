@@ -7,8 +7,7 @@ import os
 import traceback
 from datetime import date, datetime, timedelta
 
-from apps.qq_ai_bridge.services.time_utils import get_now_local, get_today_local, get_tomorrow_local, get_weekday_cn
-
+from apps.qq_ai_bridge.services.time_utils import get_now_local, get_weekday_cn
 
 WEEKDAY_NAMES = {
     0: "Monday",
@@ -27,6 +26,50 @@ DEFAULT_SCHEDULE = {
     "Thursday": [],
     "Friday": [],
 }
+
+TODAY_SCHEDULE_EXACT = (
+    "今天课表",
+    "今日课表",
+    "今天课程",
+    "今日课程",
+    "查今天课表",
+    "看今天课表",
+    "有什么课",
+)
+TODAY_SCHEDULE_CONTAINS = (
+    "今天有什么课",
+    "今天有课吗",
+    "今天课表",
+    "今日课表",
+    "今天课程安排",
+    "今日课程安排",
+    "看看今天课表",
+    "查询今天课表",
+    "帮我看看今天课表",
+    "今天的课表",
+    "今日的课表",
+)
+TOMORROW_SCHEDULE_EXACT = (
+    "明天课表",
+    "明日课表",
+    "明天课程",
+    "明日课程",
+    "查明天课表",
+    "看明天课表",
+)
+TOMORROW_SCHEDULE_CONTAINS = (
+    "明天有什么课",
+    "明天有课吗",
+    "明天课表",
+    "明日课表",
+    "明天课程安排",
+    "明日课程安排",
+    "看看明天课表",
+    "查询明天课表",
+    "帮我看看明天课表",
+    "明天的课表",
+    "明日的课表",
+)
 
 
 def ensure_schedule_file(path: str) -> None:
@@ -52,12 +95,22 @@ def load_schedule(path: str) -> dict:
 
 
 def detect_schedule_intent(text: str) -> str | None:
-    normalized = str(text or "").strip()
-    if any(token in normalized for token in ("明天有什么课或者提醒", "明天有什么课和提醒", "明天有课和提醒吗", "明天有提醒和课吗")):
+    normalized = str(text or "").strip().replace(" ", "")
+    if any(
+        token in normalized
+        for token in (
+            "明天有什么课或者提醒",
+            "明天有什么课和提醒",
+            "明天有课和提醒吗",
+            "明天有提醒和课吗",
+        )
+    ):
         return "tomorrow_overview"
-    if any(token in normalized for token in ("明天有什么课", "明天有课吗", "明天课程", "明天有什么课呢")):
+    if normalized in TOMORROW_SCHEDULE_EXACT or any(
+        token in normalized for token in TOMORROW_SCHEDULE_CONTAINS
+    ):
         return "tomorrow_schedule"
-    if any(token in normalized for token in ("今天有什么课", "今天有课吗", "今天课程", "课程", "课表", "有什么课")):
+    if normalized in TODAY_SCHEDULE_EXACT or any(token in normalized for token in TODAY_SCHEDULE_CONTAINS):
         return "today_schedule"
     return None
 

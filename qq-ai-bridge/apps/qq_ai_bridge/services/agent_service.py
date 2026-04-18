@@ -1,259 +1,129 @@
-"""Desktop-agent planning and execution services."""
-
 import json
+import logging
+from typing import Any, Dict
 
 import requests
 
-from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
+from shared.ai.llm_client import call_ai
 from apps.qq_ai_bridge.config.settings import (
-    AGENT_CANCEL_COMMANDS,
-    AGENT_CONTINUE_COMMANDS,
-    AGENT_MAX_HISTORY,
-    AGENT_MAX_ITERATIONS,
-    AGENT_MAX_OCR_CHARS,
-    AGENT_MAX_REPEAT_WORKFLOW,
-    AGENT_SESSION_MEMORY,
     AGENT_SYSTEM_PROMPT,
     ALLOWED_ACTIONS,
     PC_AGENT_URL,
 )
-from apps.qq_ai_bridge.services.prompt_service import build_vision_user_text
-from shared.ai.llm_client import call_ai
 
 
-def call_pc_agent_api(action, params=None, timeout=15):
-    """Call the pc-agent HTTP API."""
+logger = logging.getLogger(__name__)
+
+
+def call_pc_agent_api(endpoint: str, data: Dict[str, Any], timeout: int = 10) -> Dict[str, Any]:
+    """Call an endpoint on the PC Agent service."""
+    url = f"{PC_AGENT_URL.rstrip('/')}/{endpoint.lstrip('/')}"
     try:
-        if params:
-            resp = requests.post(f"{PC_AGENT_URL}/{action}", json=params, timeout=timeout)
-        else:
-            resp = requests.get(f"{PC_AGENT_URL}/{action}", timeout=timeout)
+        response = requests.post(url, json=data, timeout=timeout)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error("PC Agent communication failed: %s", e)
+        return {"status": "error", "message": f"Agent communication failed: {e}"}
 
-        text = resp.text
+
+def execute_agent_plan(user_id: int, plan: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute a parsed JSON plan from the LLM."""
+    actions = plan.get("actions", [])
+    results = []
+
+    for action in actions:
+        action_name = action.get("action")
+        if action_name not in ALLOWED_ACTIONS:
+            results.append({
+                "status": "error",
+                "message": f"Action '{action_name}' is not allowed."
+            })
+            continue
+
+        params = action.get("params", {})
         try:
-            payload = resp.json()
-        except Exception:
-            payload = None
-        return text, payload
+            res = call_pc_agent_api(f"execute/{action_name}", data=params)
+            results.append(res)
+        except requests.RequestException as e:
+            results.append({"status": "error", "message": str(e)})
+
+    return {"status": "completed", "results": results}
+
+
+def get_agent_session(user_id: int) -> Dict[str, Any]:
+    """Retrieve the current session state for an agent user."""
+    try:
+        res = call_pc_agent_api("session/get", data={"user_id": user_id})
+        return res if res.get("status") == "ok" else {}
+    except requests.RequestException as e:
+        logger.error("Failed to retrieve agent session key: %s", e)
+        return {}
+
+
+def reset_agent_session(user_id: int) -> Dict[str, Any]:
+    """Reset the agent session."""
+    return call_pc_agent_api("session/reset", data={"user_id": user_id})
+
+
+def observe_screen_text(user_id: int) -> Dict[str, Any]:
+    """Observe text currently visible on the screen."""
+    return call_pc_agent_api("observe", data={"user_id": user_id})
+
+
+def summarize_agent_issue(user_id: int, history: list) -> str:
+    """Summarize an issue encountered by the agent."""
+    if not history:
+        return "No history available to summarize."
+
+    history_json = json.dumps(history, indent=2, ensure_ascii=False)
+    summary_prompt = f"Summarize the following agent issues:\n{history_json}"
+    return call_agent_llm(summary_prompt, system_prompt="You are a helpful error summarizer.")
+
+
+def call_agent_llm(prompt: str, system_prompt: str | None = None) -> str:
+    """Call the LLM with a specific prompt, typically for agent reasoning."""
+    system_prompt = system_prompt or AGENT_SYSTEM_PROMPT
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt}
+    ]
+    try:
+        return call_ai(messages)
     except Exception as e:
-        return f"pc-agent error: {e}", None
+        logger.error("LLM call failed: %s", e)
+        return json.dumps({"status": "error", "message": "Failed to call LLM"})
 
 
-def get_agent_session(user_id) -> dict:
-    """Return in-memory session state for a user."""
-    key = str(user_id)
-    session = AGENT_SESSION_MEMORY.get(key)
-    if session is None:
-        session = {
-            "task": "",
-            "last_user_command": "",
-            "last_ocr_text": "",
-            "recent_results": [],
-        }
-        AGENT_SESSION_MEMORY[key] = session
-    return session
-
-
-def reset_agent_session(user_id):
-    """Reset in-memory agent session state."""
-    AGENT_SESSION_MEMORY.pop(str(user_id), None)
-
-
-def observe_screen_text():
-    """Capture OCR text from pc-agent for agent replanning."""
-    raw_text, payload = call_pc_agent_api("ocr", timeout=20)
-    if isinstance(payload, dict):
-        text = normalize_query_text(payload.get("text", ""))
-        return {"raw": raw_text, "text": text[:AGENT_MAX_OCR_CHARS]}
-    return {"raw": raw_text, "text": ""}
-
-
-def call_agent_llm(prompt: str, user_text: str) -> str:
-    """Call the LLM for agent planning."""
-    llm_input = f"{prompt.strip()}\n\n用户指令：{user_text.strip()}"
-    return call_ai(llm_input)
-
-
-def agent_llm_plan(user_text: str, session=None) -> dict:
-    """Create the next agent plan from task/session context."""
-    context = {
-        "task": (session or {}).get("task", ""),
-        "latest_user_command": user_text.strip(),
-        "last_ocr_text": (session or {}).get("last_ocr_text", ""),
-        "recent_results": (session or {}).get("recent_results", [])[-AGENT_MAX_HISTORY:],
-    }
-    content = call_agent_llm(AGENT_SYSTEM_PROMPT, json.dumps(context, ensure_ascii=False))
-    print(f"[AGENT] LLM raw output: {content!r}")
+def agent_llm_plan(user_id: int, task: str) -> Dict[str, Any]:
+    """Ask the LLM to generate a plan for a given task."""
+    session = get_agent_session(user_id)
+    session_json = json.dumps(session, indent=2, ensure_ascii=False)
+    prompt = f"Task: {task}\nCurrent session state:\n{session_json}"
 
     try:
-        obj = json.loads(content)
-        if not isinstance(obj, dict):
-            raise ValueError("top-level JSON is not an object")
-        return obj
-    except Exception as e:
-        return {"reply": f"LLM返回不是合法JSON: {e}", "done": True, "actions": []}
+        response_text = call_agent_llm(prompt)
+        plan = json.loads(response_text)
+        return plan
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse LLM plan: %s", e)
+        return {"status": "error", "message": "Failed to parse JSON plan"}
 
 
-def execute_agent_plan(plan: dict) -> str:
-    """Execute a single pc-agent action."""
-    action = plan.get("action")
-    params = plan.get("params", {}) or {}
+def execute_agent_workflow(user_id: int, task: str) -> Dict[str, Any]:
+    """High-level workflow: generate plan and execute it."""
+    plan = agent_llm_plan(user_id, task)
+    if plan.get("status") == "error":
+        return plan
 
-    if action == "reject":
-        return f"拒绝执行：{params.get('reason', '未知原因')}"
-
-    if action not in ALLOWED_ACTIONS:
-        return f"非法 action: {action}"
-
-    if action == "launch_and_open":
-        url = str(params.get("url", "")).strip()
-        if not (url.startswith("http://") or url.startswith("https://")):
-            return f"拒绝执行：非法 URL {url!r}"
-
-    text, _ = call_pc_agent_api(
-        action,
-        params=None if action in {"screenshot", "position", "screen_size", "ocr"} else params,
-        timeout=15,
-    )
-    return text
+    return execute_agent_plan(user_id, plan)
 
 
-def summarize_agent_issue(step: dict, result: str) -> str:
-    """Turn pc-agent raw errors into user-friendly status text."""
-    action = str(step.get("action", ""))
-    params = step.get("params", {}) or {}
-    result = (result or "").strip()
-
-    if not result:
-        return ""
-
-    lowered = result.lower()
-    if "pc-agent error" in lowered:
-        return f"执行 {action} 时出错。"
-    if "非法 action" in result or "拒绝执行" in result:
-        return result
-    if '"status":"not_found"' in result or '"status": "not_found"' in result:
-        if action == "click_text":
-            target = params.get("text", "")
-            return f"屏幕上没找到“{target}”。"
-        if action == "find_text":
-            target = params.get("text", "")
-            return f"屏幕上没找到“{target}”相关文字。"
-        return f"{action} 没有找到目标。"
-    return ""
-
-
-def execute_agent_workflow(plan: dict, session: dict) -> str:
-    """Execute multi-step agent workflows with OCR feedback loop."""
-    last_reply = ""
-    issues = []
-    last_signature = None
-    repeated_signature_count = 0
-    current_plan = plan
-
-    for _ in range(AGENT_MAX_ITERATIONS):
-        reply = str(current_plan.get("reply", "")).strip()
-        if reply:
-            last_reply = reply
-
-        done = bool(current_plan.get("done", False))
-        actions = current_plan.get("actions")
-
-        if actions is None:
-            single_result = execute_agent_plan(current_plan)
-            issue = summarize_agent_issue(current_plan, single_result)
-            if issue:
-                issues.append(issue)
-            break
-
-        if not isinstance(actions, list):
-            issues.append("拒绝执行：actions 必须是数组")
-            break
-
-        if not actions:
-            if not done and not reply:
-                issues.append("没有可执行动作。")
-            break
-
-        signature = json.dumps(actions, ensure_ascii=False, sort_keys=True)
-        if signature == last_signature:
-            repeated_signature_count += 1
-        else:
-            last_signature = signature
-            repeated_signature_count = 0
-
-        if repeated_signature_count > AGENT_MAX_REPEAT_WORKFLOW:
-            issues.append("停止执行：检测到重复 workflow。")
-            break
-
-        iteration_results = []
-        iteration_issues = []
-        for step in actions:
-            if not isinstance(step, dict):
-                msg = "拒绝执行：actions 内存在非对象步骤"
-                iteration_results.append(msg)
-                iteration_issues.append(msg)
-                continue
-            step_result = execute_agent_plan(step)
-            iteration_results.append(step_result)
-            issue = summarize_agent_issue(step, step_result)
-            if issue:
-                iteration_issues.append(issue)
-
-        session["recent_results"] = (session.get("recent_results", []) + iteration_results)[-AGENT_MAX_HISTORY:]
-        if iteration_issues:
-            issues.extend(iteration_issues)
-
-        if done:
-            break
-
-        observation = observe_screen_text()
-        session["last_ocr_text"] = observation["text"]
-        current_plan = agent_llm_plan(session.get("task", ""), session=session)
-        print("[AGENT] Next LLM plan =", current_plan)
-
-        if bool(current_plan.get("done", False)) and not current_plan.get("actions"):
-            final_reply = str(current_plan.get("reply", "")).strip()
-            if final_reply:
-                last_reply = final_reply
-            break
-
-    final_parts = []
-    if last_reply:
-        final_parts.append(last_reply)
-    if issues:
-        final_parts.append("\n".join(issues))
-    final_message = "\n\n".join(part for part in final_parts if part).strip()
-    return final_message or "没有可执行动作。"
-
-
-def handle_pc_agent_command(text: str, user_id):
-    """Handle private-chat `agent ...` commands."""
-    text = (text or "").strip()
-    if not text.startswith("agent "):
-        return None
-
-    cmd = text[6:].strip()
-    if not cmd:
-        return "未知 agent 指令"
-
-    session = get_agent_session(user_id)
-
-    if cmd in AGENT_CANCEL_COMMANDS:
-        reset_agent_session(user_id)
-        return "已清除当前 agent 任务记忆。"
-
-    if cmd in AGENT_CONTINUE_COMMANDS:
-        if not session.get("task"):
-            return "当前没有可继续的任务。"
-        planning_input = f"继续执行任务：{session['task']}"
+def handle_pc_agent_command(user_id: int, command: str) -> Dict[str, Any]:
+    """Parse and handle a raw command text from the user."""
+    if command.strip().lower() == "reset":
+        return reset_agent_session(user_id)
+    elif command.strip().lower() == "observe":
+        return observe_screen_text(user_id)
     else:
-        session["task"] = build_vision_user_text(cmd)
-        session["last_ocr_text"] = ""
-        session["recent_results"] = []
-        planning_input = cmd
-
-    session["last_user_command"] = cmd
-    plan = agent_llm_plan(planning_input, session=session)
-    print("[AGENT] LLM plan =", plan)
-    return execute_agent_workflow(plan, session=session)
+        return execute_agent_workflow(user_id, command)

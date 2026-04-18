@@ -6,14 +6,33 @@ ROOT="$HOME/candace-ai-agent"
 VENV="$ROOT/.venv"
 BRIDGE_DIR="$ROOT/qq-ai-bridge"
 AGENT_DIR="$ROOT/pc-agent"
+OPENMAIC_DIR="$HOME/OpenMAIC"
+
 RUNTIME_DIR="$ROOT/.runtime"
 LOG_DIR="$RUNTIME_DIR/logs"
+PID_DIR="$RUNTIME_DIR/pids"
+
+mkdir -p "$LOG_DIR" "$PID_DIR"
 
 BRIDGE_LOG="$LOG_DIR/bridge.log"
 AGENT_LOG="$LOG_DIR/agent.log"
-PC_AGENT_PORT="${PC_AGENT_PORT:-5050}"
+OPENMAIC_LOG="$LOG_DIR/openmaic.log"
 
-mkdir -p "$LOG_DIR"
+BRIDGE_PID_FILE="$PID_DIR/bridge.pid"
+AGENT_PID_FILE="$PID_DIR/agent.pid"
+OPENMAIC_PID_FILE="$PID_DIR/openmaic.pid"
+
+PC_AGENT_PORT="${PC_AGENT_PORT:-5050}"
+BRIDGE_NODE_VERSION="${BRIDGE_NODE_VERSION:-22.22.1}"
+OPENMAIC_NODE_VERSION="${OPENMAIC_NODE_VERSION:-22.22.2}"
+
+timestamp() {
+  date '+%Y-%m-%d %H:%M:%S'
+}
+
+say() {
+  echo "[$(timestamp)] $*"
+}
 
 pick_terminal() {
   if command -v gnome-terminal >/dev/null 2>&1; then
@@ -64,17 +83,231 @@ ensure_env() {
     echo "  pip install flask numpy requests python-dotenv pillow pyautogui opencv-python pytesseract mss"
     exit 1
   fi
+
+  if [[ ! -d "$BRIDGE_DIR" ]]; then
+    echo "未找到 bridge 目录：$BRIDGE_DIR"
+    exit 1
+  fi
+
+  if [[ ! -d "$AGENT_DIR" ]]; then
+    echo "未找到 agent 目录：$AGENT_DIR"
+    exit 1
+  fi
+
+  if [[ ! -d "$OPENMAIC_DIR" ]]; then
+    echo "未找到 OpenMAIC 目录：$OPENMAIC_DIR"
+    echo "如果路径不对，改 runai.sh 里的 OPENMAIC_DIR"
+    exit 1
+  fi
+}
+
+load_nvm() {
+  export NVM_DIR="$HOME/.nvm"
+  if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+    # shellcheck disable=SC1090
+    source "$NVM_DIR/nvm.sh"
+  else
+    echo "未找到 nvm.sh：$NVM_DIR/nvm.sh"
+    exit 1
+  fi
+}
+
+is_pid_running() {
+  local pid="$1"
+  [[ -n "${pid:-}" ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+service_running() {
+  local pid_file="$1"
+  [[ -f "$pid_file" ]] || return 1
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  [[ -n "${pid:-}" ]] || return 1
+  is_pid_running "$pid"
+}
+
+write_pid() {
+  local pid_file="$1"
+  local pid="$2"
+  echo "$pid" > "$pid_file"
+}
+
+remove_pid() {
+  local pid_file="$1"
+  rm -f "$pid_file"
+}
+
+start_bridge_bg() {
+  if service_running "$BRIDGE_PID_FILE"; then
+    say "bridge 已在运行，PID=$(cat "$BRIDGE_PID_FILE")"
+    return 0
+  fi
+
+  say "启动 bridge ..."
+  (
+    cd "$ROOT" || exit 1
+    source "$VENV/bin/activate"
+    load_nvm
+    nvm use "$BRIDGE_NODE_VERSION" >/dev/null || exit 1
+    cd "$BRIDGE_DIR" || exit 1
+    export PYTHONUNBUFFERED=1
+    nohup python3 -u bridge.py >>"$BRIDGE_LOG" 2>&1 &
+    echo $! > "$BRIDGE_PID_FILE"
+    wait
+  ) >/dev/null 2>&1 &
+
+  sleep 1
+  if service_running "$BRIDGE_PID_FILE"; then
+    say "bridge 启动成功，PID=$(cat "$BRIDGE_PID_FILE")"
+  else
+    say "bridge 启动失败，查看日志：$BRIDGE_LOG"
+    return 1
+  fi
+}
+
+start_agent_bg() {
+  if service_running "$AGENT_PID_FILE"; then
+    say "agent 已在运行，PID=$(cat "$AGENT_PID_FILE")"
+    return 0
+  fi
+
+  say "启动 agent ..."
+  (
+    cd "$ROOT" || exit 1
+    source "$VENV/bin/activate"
+    cd "$AGENT_DIR" || exit 1
+    export PYTHONUNBUFFERED=1
+    nohup env PC_AGENT_PORT="$PC_AGENT_PORT" python3 -u agent.py >>"$AGENT_LOG" 2>&1 &
+    echo $! > "$AGENT_PID_FILE"
+    wait
+  ) >/dev/null 2>&1 &
+
+  sleep 1
+  if service_running "$AGENT_PID_FILE"; then
+    say "agent 启动成功，PID=$(cat "$AGENT_PID_FILE")"
+  else
+    say "agent 启动失败，查看日志：$AGENT_LOG"
+    return 1
+  fi
+}
+
+start_openmaic_bg() {
+  if service_running "$OPENMAIC_PID_FILE"; then
+    say "openmaic 已在运行，PID=$(cat "$OPENMAIC_PID_FILE")"
+    return 0
+  fi
+
+  say "启动 openmaic ..."
+  (
+    load_nvm
+    cd "$OPENMAIC_DIR" || exit 1
+    nvm use "$OPENMAIC_NODE_VERSION" >/dev/null || exit 1
+    nohup pnpm dev --hostname 0.0.0.0 >>"$OPENMAIC_LOG" 2>&1 &
+    echo $! > "$OPENMAIC_PID_FILE"
+    wait
+  ) >/dev/null 2>&1 &
+
+  sleep 2
+  if service_running "$OPENMAIC_PID_FILE"; then
+    say "openmaic 启动成功，PID=$(cat "$OPENMAIC_PID_FILE")"
+  else
+    say "openmaic 启动失败，查看日志：$OPENMAIC_LOG"
+    return 1
+  fi
+}
+
+stop_one() {
+  local name="$1"
+  local pid_file="$2"
+
+  if ! service_running "$pid_file"; then
+    say "$name 未运行"
+    remove_pid "$pid_file"
+    return 0
+  fi
+
+  local pid
+  pid="$(cat "$pid_file")"
+  say "停止 $name，PID=$pid"
+  kill "$pid" 2>/dev/null || true
+
+  for _ in {1..20}; do
+    if is_pid_running "$pid"; then
+      sleep 0.3
+    else
+      break
+    fi
+  done
+
+  if is_pid_running "$pid"; then
+    say "$name 未正常退出，强制结束"
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+
+  remove_pid "$pid_file"
+  say "$name 已停止"
+}
+
+status_one() {
+  local name="$1"
+  local pid_file="$2"
+  if service_running "$pid_file"; then
+    echo "$name: RUNNING (PID=$(cat "$pid_file"))"
+  else
+    echo "$name: STOPPED"
+  fi
+}
+
+run_window_mode() {
+  ensure_env
+
+  local bridge_cmd="
+    cd '$ROOT' || exit 1
+    source '$VENV/bin/activate'
+    export NVM_DIR='$HOME/.nvm'
+    [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\"
+    nvm use '$BRIDGE_NODE_VERSION' >/dev/null || exit 1
+    cd '$BRIDGE_DIR' || exit 1
+    export PYTHONUNBUFFERED=1
+    python3 -u bridge.py 2>&1 | tee -a '$BRIDGE_LOG'
+  "
+
+  local agent_cmd="
+    cd '$ROOT' || exit 1
+    source '$VENV/bin/activate'
+    cd '$AGENT_DIR' || exit 1
+    export PYTHONUNBUFFERED=1
+    env PC_AGENT_PORT='$PC_AGENT_PORT' python3 -u agent.py 2>&1 | tee -a '$AGENT_LOG'
+  "
+
+  local openmaic_cmd="
+    export NVM_DIR='$HOME/.nvm'
+    [ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\"
+    cd '$OPENMAIC_DIR' || exit 1
+    nvm use '$OPENMAIC_NODE_VERSION' >/dev/null || exit 1
+    pnpm dev --hostname 0.0.0.0 2>&1 | tee -a '$OPENMAIC_LOG'
+  "
+
+  echo "窗口模式：弹出 bridge / agent / openmaic 三个独立终端..."
+  open_terminal_window "runai-bridge" "$bridge_cmd" || exit 1
+  open_terminal_window "runai-agent" "$agent_cmd" || exit 1
+  open_terminal_window "runai-openmaic" "$openmaic_cmd" || exit 1
+  echo "已打开三个终端窗口。"
 }
 
 run_dev_mode() {
   ensure_env
+  load_nvm
 
-  echo "开发模式：前台启动 bridge + agent（实时日志）"
-  echo "按 Ctrl+C 可停止两个进程。"
+  echo "开发模式：前台启动 bridge + agent + openmaic（实时日志）"
+  echo "按 Ctrl+C 可停止全部进程。"
 
   (
     cd "$ROOT" || exit 1
     source "$VENV/bin/activate"
+    load_nvm
+    nvm use "$BRIDGE_NODE_VERSION" >/dev/null || exit 1
     cd "$BRIDGE_DIR" || exit 1
     export PYTHONUNBUFFERED=1
     python3 -u bridge.py
@@ -90,11 +323,19 @@ run_dev_mode() {
   ) 2>&1 | sed -u 's/^/[agent] /' &
   AGENT_PID=$!
 
+  (
+    load_nvm
+    cd "$OPENMAIC_DIR" || exit 1
+    nvm use "$OPENMAIC_NODE_VERSION" >/dev/null || exit 1
+    exec pnpm dev --hostname 0.0.0.0
+  ) 2>&1 | sed -u 's/^/[openmaic] /' &
+  OPENMAIC_PID=$!
+
   cleanup() {
-    kill "$BRIDGE_PID" "$AGENT_PID" 2>/dev/null || true
-    sleep 0.3
-    kill -9 "$BRIDGE_PID" "$AGENT_PID" 2>/dev/null || true
-    wait "$BRIDGE_PID" "$AGENT_PID" 2>/dev/null || true
+    kill "$BRIDGE_PID" "$AGENT_PID" "$OPENMAIC_PID" 2>/dev/null || true
+    sleep 0.5
+    kill -9 "$BRIDGE_PID" "$AGENT_PID" "$OPENMAIC_PID" 2>/dev/null || true
+    wait "$BRIDGE_PID" "$AGENT_PID" "$OPENMAIC_PID" 2>/dev/null || true
   }
 
   trap 'echo; echo "[runai] 收到中断，停止中..."; cleanup; exit 130' INT TERM
@@ -104,7 +345,7 @@ run_dev_mode() {
     if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
       wait "$BRIDGE_PID" 2>/dev/null
       STATUS=$?
-      echo "[runai] 检测到 bridge 退出（status=$STATUS），停止 agent..."
+      echo "[runai] 检测到 bridge 退出（status=$STATUS），停止其他服务..."
       cleanup
       trap - INT TERM EXIT
       exit "$STATUS"
@@ -113,7 +354,16 @@ run_dev_mode() {
     if ! kill -0 "$AGENT_PID" 2>/dev/null; then
       wait "$AGENT_PID" 2>/dev/null
       STATUS=$?
-      echo "[runai] 检测到 agent 退出（status=$STATUS），停止 bridge..."
+      echo "[runai] 检测到 agent 退出（status=$STATUS），停止其他服务..."
+      cleanup
+      trap - INT TERM EXIT
+      exit "$STATUS"
+    fi
+
+    if ! kill -0 "$OPENMAIC_PID" 2>/dev/null; then
+      wait "$OPENMAIC_PID" 2>/dev/null
+      STATUS=$?
+      echo "[runai] 检测到 openmaic 退出（status=$STATUS），停止其他服务..."
       cleanup
       trap - INT TERM EXIT
       exit "$STATUS"
@@ -123,29 +373,33 @@ run_dev_mode() {
   done
 }
 
-run_window_mode() {
+start_all() {
   ensure_env
+  start_bridge_bg
+  start_agent_bg
+  start_openmaic_bg
+}
 
-  local bridge_cmd="
-    cd '$ROOT' || exit 1
-    source '$VENV/bin/activate'
-    cd '$BRIDGE_DIR' || exit 1
-    export PYTHONUNBUFFERED=1
-    python3 -u bridge.py 2>&1 | tee -a '$BRIDGE_LOG'
-  "
+stop_all() {
+  stop_one "openmaic" "$OPENMAIC_PID_FILE"
+  stop_one "agent" "$AGENT_PID_FILE"
+  stop_one "bridge" "$BRIDGE_PID_FILE"
+}
 
-  local agent_cmd="
-    cd '$ROOT' || exit 1
-    source '$VENV/bin/activate'
-    cd '$AGENT_DIR' || exit 1
-    export PYTHONUNBUFFERED=1
-    env PC_AGENT_PORT='$PC_AGENT_PORT' python3 -u agent.py 2>&1 | tee -a '$AGENT_LOG'
-  "
+status_all() {
+  status_one "bridge" "$BRIDGE_PID_FILE"
+  status_one "agent" "$AGENT_PID_FILE"
+  status_one "openmaic" "$OPENMAIC_PID_FILE"
+}
 
-  echo "窗口模式：弹出 bridge 与 agent 两个独立终端..."
-  open_terminal_window "runai-bridge" "$bridge_cmd" || exit 1
-  open_terminal_window "runai-agent" "$agent_cmd" || exit 1
-  echo "已打开两个终端窗口。"
+logs_one() {
+  local name="$1"
+  local file="$2"
+  if [[ ! -f "$file" ]]; then
+    echo "日志文件不存在：$file"
+    exit 1
+  fi
+  tail -f "$file"
 }
 
 case "${1:-window}" in
@@ -155,8 +409,38 @@ case "${1:-window}" in
   dev)
     run_dev_mode
     ;;
+  start)
+    start_all
+    ;;
+  stop)
+    stop_all
+    ;;
+  restart)
+    stop_all
+    start_all
+    ;;
+  status)
+    status_all
+    ;;
+  logs)
+    case "${2:-}" in
+      bridge)
+        logs_one "bridge" "$BRIDGE_LOG"
+        ;;
+      agent)
+        logs_one "agent" "$AGENT_LOG"
+        ;;
+      openmaic)
+        logs_one "openmaic" "$OPENMAIC_LOG"
+        ;;
+      *)
+        echo "用法: $0 logs [bridge|agent|openmaic]"
+        exit 1
+        ;;
+    esac
+    ;;
   *)
-    echo "用法: $0 [window|dev]"
+    echo "用法: $0 [window|dev|start|stop|restart|status|logs bridge|agent|openmaic]"
     exit 1
     ;;
 esac

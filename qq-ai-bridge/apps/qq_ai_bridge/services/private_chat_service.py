@@ -6,14 +6,20 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
-from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
-from apps.qq_ai_bridge.services.prompt_service import build_private_ai_prompt, prepare_private_ai_prompt
 from shared.ai.llm_client import call_ai
 from storage_utils import (
     append_private_history,
     append_private_style_sample,
+)
+from storage_utils import (
     get_user_workspace as ensure_user_workspace,
+)
+
+from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
+from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
+from apps.qq_ai_bridge.services.prompt_service import (
+    build_private_ai_prompt,
+    prepare_private_ai_prompt,
 )
 
 DEBOUNCE_MS = 1000

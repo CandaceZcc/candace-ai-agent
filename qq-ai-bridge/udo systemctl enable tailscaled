@@ -1,0 +1,22 @@
+[0;1;32m●[0m tailscaled.service - Tailscale node agent
+     Loaded: loaded (]8;;file://Cancade/usr/lib/systemd/system/tailscaled.service/usr/lib/systemd/system/tailscaled.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: [0;1;32mactive (running)[0m since Mon 2026-04-06 17:42:26 CST; 4min 33s ago
+       Docs: ]8;;https://tailscale.com/docs/https://tailscale.com/docs/]8;;
+   Main PID: 1313 (tailscaled)
+     Status: "[0;1;36mConnected; CandaceZcc@github; 100.70.117.8 fd7a:115c:a1e0::bc01:75b4[0m"
+      Tasks: 15 (limit: 18696)
+     Memory: 46.8M (peak: 48.2M)
+        CPU: 619ms
+     CGroup: /system.slice/tailscaled.service
+             └─[0;38;5;245m1313 /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641[0m
+
+4月 06 17:42:37 Cancade tailscaled[1313]: magicsock: 1 active derp conns: derp-20=cr0s,wr0s
+4月 06 17:42:37 Cancade tailscaled[1313]: control: NetInfo: NetInfo{varies=true ipv6=false ipv6os=true udp=true icmpv4=false derp=#20 portmap= link="" firewallmode="ipt-default"}
+4月 06 17:42:37 Cancade tailscaled[1313]: derphttp.Client.Connect: connecting to derp-20 (hkg)
+4月 06 17:42:37 Cancade tailscaled[1313]: magicsock: endpoints changed: 120.235.237.116:56418 (stun), 120.235.237.116:56657 (stun), 120.235.237.116:41641 (stun4localport), 172.17.0.1:41641 (local), 192.168.110.31:41641 (local)
+4月 06 17:42:37 Cancade tailscaled[1313]: Switching ipn state Starting -> Running (WantRunning=true, nm=true)
+4月 06 17:42:37 Cancade tailscaled[1313]: magicsock: derp-20 connected; connGen=1
+4月 06 17:42:37 Cancade tailscaled[1313]: health(warnable=no-derp-connection): ok
+4月 06 17:43:22 Cancade tailscaled[1313]: logtail: upload succeeded after 1 failures and 58s
+4月 06 17:45:37 Cancade tailscaled[1313]: control: NetInfo: NetInfo{varies=false ipv6=false ipv6os=true udp=true icmpv4=false derp=#20 portmap= link="" firewallmode="ipt-default"}
+4月 06 17:46:00 Cancade tailscaled[1313]: control: NetInfo: NetInfo{varies=true ipv6=false ipv6os=true udp=true icmpv4=false derp=#20 portmap= link="" firewallmode="ipt-default"}

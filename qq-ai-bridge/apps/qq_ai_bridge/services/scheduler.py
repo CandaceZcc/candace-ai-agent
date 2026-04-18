@@ -22,9 +22,11 @@ from apps.qq_ai_bridge.config.settings import (
     TOMORROW_SCHEDULE_TIME,
 )
 from apps.qq_ai_bridge.services.reminder_store import ReminderStore, SchedulerStateStore
-from apps.qq_ai_bridge.services.schedule_service import build_tomorrow_schedule_message, ensure_schedule_file
+from apps.qq_ai_bridge.services.schedule_service import (
+    build_tomorrow_schedule_message,
+    ensure_schedule_file,
+)
 from apps.qq_ai_bridge.services.time_utils import get_now_local
-
 
 _START_LOCK = threading.Lock()
 _STARTED = False

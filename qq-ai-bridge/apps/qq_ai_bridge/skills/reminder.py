@@ -9,8 +9,8 @@ from apps.qq_ai_bridge.config.settings import REMINDERS_PATH
 from apps.qq_ai_bridge.services.reminder_service import (
     CLEAR_COMMANDS,
     HELP_COMMANDS,
-    LIST_COMMANDS,
     HELP_TEXT,
+    LIST_COMMANDS,
     build_add_success_message,
     build_done_list_message,
     build_list_message,
@@ -26,7 +26,6 @@ from apps.qq_ai_bridge.services.reminder_service import (
 from apps.qq_ai_bridge.services.reminder_store import ReminderStore
 from apps.qq_ai_bridge.services.time_utils import get_now_local
 from apps.qq_ai_bridge.skills.base import SkillContext, SkillResult
-
 
 REMINDER_STORE = ReminderStore(REMINDERS_PATH)
 

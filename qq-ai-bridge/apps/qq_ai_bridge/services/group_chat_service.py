@@ -6,12 +6,13 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
-from apps.qq_ai_bridge.adapters.napcat_client import send_group_msg
-from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR, GROUP_CONFIG_PATH
-from apps.qq_ai_bridge.services.prompt_service import prepare_group_ai_prompt
 from shared.ai.llm_client import call_ai
 from storage_utils import load_group_config as load_group_config_from_file
+
+from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
+from apps.qq_ai_bridge.adapters.napcat_client import send_group_msg
+from apps.qq_ai_bridge.config.settings import GROUP_CONFIG_PATH
+from apps.qq_ai_bridge.services.prompt_service import prepare_group_ai_prompt
 
 GROUP_DEBOUNCE_MS = 5000
 
