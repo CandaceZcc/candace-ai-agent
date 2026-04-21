@@ -1,3 +1,4 @@
+import asyncio
 import traceback
 
 from flask import Blueprint, jsonify, request
@@ -7,9 +8,14 @@ from apps.qq_ai_bridge.runtime import (
     _send_group_msg_raw,
     _send_private_msg_raw,
 )
+from apps.qq_ai_bridge.config.settings import VOCAT_WEBHOOK_TOKEN
 from apps.qq_ai_bridge.services.file_service import handle_file_message
 from apps.qq_ai_bridge.services.group_chat_service import load_group_config, should_log_group
 from apps.qq_ai_bridge.services.style_service import capture_group_style
+from apps.qq_ai_bridge.services.vocat_service import (
+    maybe_handle_vocat_remote_command,
+    process_vocat_query,
+)
 from apps.qq_ai_bridge.skills.base import SkillContext
 from apps.qq_ai_bridge.skills.registry import build_skill_registry
 from apps.qq_ai_bridge.skills.router import dispatch_skill
@@ -120,16 +126,24 @@ class SkillDispatcher:
                 capture_group_style("data", group_id, user_id, effective_text, log=print)
 
         context = SkillContext(
-            raw_message=raw_message,
-            effective_text=effective_text,
-            is_private=is_private,
-            is_group=is_group,
+            data={},
+            post_type="message",
+            message_type=msg_type,
             user_id=user_id,
+            self_id=None,
             group_id=group_id,
-            mentioned_self=is_mentioned,
             group_config=group_config,
             should_log=should_log,
+            msg=text,
+            normalized_msg=effective_text,
+            effective_text=effective_text,
+            mentioned_self=is_mentioned,
+            image_inputs={},
+            file_info=None,
+            logger=print,
             timestamp=parsed_data.get("timestamp"),
+            nick=parsed_data.get("nick", ""),
+            raw_message=raw_message,
         )
 
         result = dispatch_skill(context, SKILL_REGISTRY)
@@ -138,6 +152,10 @@ class SkillDispatcher:
                 _send_private_msg_raw(user_id, result.response_text)
             elif is_group:
                 _send_group_msg_raw(group_id, result.response_text)
+
+
+def _run_async(coro):
+    return asyncio.run(coro)
 
 
 @webhook_bp.route("/qq-webhook", methods=["POST"])
@@ -149,6 +167,13 @@ def qq_webhook():
         try:
             parsed = MessageParser.parse_common_data(data)
             if parsed:
+                if parsed.get("type") == "text" and parsed.get("msg_type") == "private":
+                    remote_result = _run_async(
+                        maybe_handle_vocat_remote_command(parsed.get("user_id"), parsed.get("text", ""))
+                    )
+                    if remote_result and remote_result.get("handled"):
+                        _send_private_msg_raw(parsed.get("user_id"), remote_result.get("reply", "已执行。"))
+                        return jsonify({"status": "ok", "source": "vocat_remote_control"})
                 SkillDispatcher.dispatch(parsed)
         except Exception as e:
             print(f"[WEBHOOK] Exception during message processing: {e}")
@@ -171,6 +196,27 @@ def qq_webhook():
             print(f"[WEBHOOK] notice received: {notice_type} {sub_type}")
 
     return jsonify({"status": "ok"})
+
+
+@webhook_bp.route("/vocat/webhook", methods=["POST"])
+def vocat_webhook():
+    """Handle VoCat hardware webhook requests."""
+    data = request.get_json(silent=True) or {}
+    if VOCAT_WEBHOOK_TOKEN:
+        request_token = (
+            request.headers.get("X-Vocat-Token")
+            or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            or str(data.get("token", "")).strip()
+        )
+        if request_token != VOCAT_WEBHOOK_TOKEN:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+    try:
+        result = _run_async(process_vocat_query(data))
+        return jsonify(result)
+    except Exception as exc:
+        print(f"[VOCAT] webhook processing failed: {exc}")
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 def register_routes(app):

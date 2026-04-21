@@ -26,6 +26,8 @@ class SkillContext:
     file_info: Optional[dict]
     logger: Callable[..., None]
     timestamp: int = 0
+    nick: str = ""
+    raw_message: str = ""
 
     @property
     def is_private(self) -> bool:

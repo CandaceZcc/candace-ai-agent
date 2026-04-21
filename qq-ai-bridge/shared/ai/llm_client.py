@@ -1,11 +1,20 @@
 """LLM client helpers."""
 
+import asyncio
 import json
 import subprocess
 import time
 from typing import Any
 
+import requests
+
 from apps.qq_ai_bridge.config.settings import AI_CMD
+from apps.qq_ai_bridge.config.settings import (
+    KIMI_API_KEY,
+    KIMI_BASE_URL,
+    KIMI_MODEL,
+    KIMI_TIMEOUT_SECONDS,
+)
 
 
 def _extract_output_and_usage(raw_output: str) -> tuple[str, dict[str, Any] | None]:
@@ -102,3 +111,81 @@ def call_ai(text: str, metadata: dict[str, Any] | None = None) -> str:
         duration_ms = int((time.monotonic() - started_at) * 1000)
         print(f"[OCAI] exception user_id={user_id} duration_ms={duration_ms} error={e}")
         return f"发生错误：{e}"
+
+
+def _extract_kimi_text(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+
+    first_choice = choices[0] or {}
+    message = first_choice.get("message") or {}
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+        return "\n".join(parts).strip()
+    return ""
+
+
+def call_kimi_text(prompt: str, system_prompt: str | None = None, timeout_seconds: int | None = None) -> str:
+    """Call Kimi chat completions and return plain text output."""
+    if not KIMI_API_KEY:
+        return "Kimi API 未配置。请设置 KIMI_API_KEY。"
+
+    timeout_seconds = timeout_seconds or KIMI_TIMEOUT_SECONDS
+    url = f"{KIMI_BASE_URL.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {KIMI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+    payload = {
+        "model": KIMI_MODEL,
+        "messages": messages,
+        "temperature": 0.3,
+    }
+
+    started_at = time.monotonic()
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=timeout_seconds)
+        response.raise_for_status()
+        data = response.json()
+        text = _extract_kimi_text(data)
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        usage = data.get("usage") if isinstance(data, dict) else {}
+        print(
+            "[KIMI] success"
+            f" duration_ms={duration_ms}"
+            f" prompt_tokens={usage.get('prompt_tokens', 'na') if isinstance(usage, dict) else 'na'}"
+            f" completion_tokens={usage.get('completion_tokens', 'na') if isinstance(usage, dict) else 'na'}"
+            f" total_tokens={usage.get('total_tokens', 'na') if isinstance(usage, dict) else 'na'}"
+        )
+        return text or "Kimi 没有返回内容。"
+    except requests.RequestException as exc:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        print(f"[KIMI] request_error duration_ms={duration_ms} error={exc}")
+        return f"Kimi 调用失败：{exc}"
+    except Exception as exc:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        print(f"[KIMI] exception duration_ms={duration_ms} error={exc}")
+        return f"Kimi 处理失败：{exc}"
+
+
+async def call_kimi_text_async(
+    prompt: str,
+    system_prompt: str | None = None,
+    timeout_seconds: int | None = None,
+) -> str:
+    """Async wrapper for Kimi text generation."""
+    return await asyncio.to_thread(call_kimi_text, prompt, system_prompt, timeout_seconds)

@@ -130,3 +130,23 @@ def handle_weather_query(user_text: str) -> str | None:
     return build_weather_error(
         f"抱歉，我目前只能查几个固定城市的天气，无法识别：{raw_location}"
     )
+
+
+def is_weather_query(text: str) -> bool:
+    """Return whether the text looks like a weather query."""
+    return detect_weather_intent(text) is not None
+
+
+def query_weather_by_intent(intent: str) -> str:
+    """Compatibility wrapper used by WeatherSkill."""
+    query_text = (intent or "").strip()
+    if not query_text:
+        query_text = DEFAULT_WEATHER_LOCATION
+    if not query_text.endswith("天气"):
+        query_text = f"{query_text}天气"
+    return handle_weather_query(query_text) or build_weather_error("天气查询失败。", city=intent)
+
+
+def build_weather_reply(result: str) -> str:
+    """Compatibility wrapper used by WeatherSkill."""
+    return str(result or "暂时没有获取到天气信息。").strip()

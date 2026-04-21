@@ -1,6 +1,7 @@
 """Runtime settings for the QQ AI bridge."""
 
 import os
+from pathlib import Path
 
 
 def _get_int_env(name: str, default: int) -> int:
@@ -26,12 +27,33 @@ def _get_bool_env(name: str, default: bool) -> bool:
     return default
 
 
+def _get_csv_env(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _get_int_set_env(name: str, default: tuple[int, ...] = ()) -> set[int]:
+    values = _get_csv_env(name, tuple(str(v) for v in default))
+    parsed: set[int] = set()
+    for item in values:
+        try:
+            parsed.add(int(item))
+        except ValueError:
+            print(f"[CONFIG] invalid int list item {name}={item!r}, skipped")
+    return parsed
+
+
 NAPCAT_HTTP = os.getenv("NAPCAT_HTTP", "http://127.0.0.1:3001").strip() or "http://127.0.0.1:3001"
 NAPCAT_TOKEN = os.getenv("NAPCAT_TOKEN", "hajimi").strip() or "hajimi"
 ALLOWED_PRIVATE_USER = _get_int_env("ALLOWED_PRIVATE_USER", 273007866)
 OWNER_QQ = _get_int_env("OWNER_QQ", ALLOWED_PRIVATE_USER)
 OWNER_NAME = os.getenv("OWNER_NAME", "Candace").strip() or "Candace"
 AI_CMD = os.getenv("AI_CMD", "/home/cancade/.local/bin/ocai").strip() or "/home/cancade/.local/bin/ocai"
+
+QQ_AI_BRIDGE_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = QQ_AI_BRIDGE_ROOT.parent
 
 MAX_REPLY_LEN = 1500
 MAX_FILE_CONTENT_LEN = 8000
@@ -183,3 +205,25 @@ AGENT_SYSTEM_PROMPT = """
 16. 允许连续多步鼠标操作，不要因为已经点击过一次就立刻结束任务
 17. 在浏览器页面里，scroll 优先使用 {"action":"scroll","params":{"clicks":-700,"method":"keys"}}，这样通常比鼠标滚轮更稳定
 """
+
+KIMI_API_KEY = os.getenv("KIMI_API_KEY", "").strip()
+KIMI_BASE_URL = os.getenv("KIMI_BASE_URL", "https://api.moonshot.cn/v1").strip() or "https://api.moonshot.cn/v1"
+KIMI_MODEL = os.getenv("KIMI_MODEL", "moonshot-v1-8k").strip() or "moonshot-v1-8k"
+KIMI_TIMEOUT_SECONDS = max(5, _get_int_env("KIMI_TIMEOUT_SECONDS", 25))
+
+VOCAT_WEBHOOK_TOKEN = os.getenv("VOCAT_WEBHOOK_TOKEN", "").strip()
+VOCAT_API_TOKEN = os.getenv("VOCAT_API_TOKEN", "").strip()
+VOCAT_EXPRESSION_API_URL = os.getenv("VOCAT_EXPRESSION_API_URL", "").strip()
+VOCAT_TTS_API_URL = os.getenv("VOCAT_TTS_API_URL", "").strip()
+VOCAT_INSTANCE_ID = os.getenv("VOCAT_INSTANCE_ID", "").strip()
+VOCAT_PRODUCT_KEY = os.getenv("VOCAT_PRODUCT_KEY", "").strip()
+VOCAT_DEVICE_NAME = os.getenv("VOCAT_DEVICE_NAME", "").strip()
+VOCAT_BOT_ID = os.getenv("VOCAT_BOT_ID", "").strip()
+VOCAT_CONTROL_TIMEOUT_SECONDS = max(3, _get_int_env("VOCAT_CONTROL_TIMEOUT_SECONDS", 15))
+VOCAT_QQ_FORWARD_USER_ID = _get_int_env("VOCAT_QQ_FORWARD_USER_ID", OWNER_QQ)
+VOCAT_REMOTE_CONTROL_USERS = _get_int_set_env("VOCAT_REMOTE_CONTROL_USERS", (OWNER_QQ,))
+VOCAT_QQ_KEYWORDS = set(_get_csv_env("VOCAT_QQ_KEYWORDS", ("qq", "QQ", "发QQ", "转发QQ", "告诉QQ")))
+VOCAT_MD_ROOT = Path(
+    os.getenv("VOCAT_MD_ROOT", str(REPO_ROOT)).strip() or str(REPO_ROOT)
+).expanduser()
+VOCAT_SKILL_TIMEOUT_SECONDS = max(2, _get_int_env("VOCAT_SKILL_TIMEOUT_SECONDS", 8))

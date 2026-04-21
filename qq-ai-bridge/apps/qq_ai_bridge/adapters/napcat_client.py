@@ -1,5 +1,6 @@
 """NapCat HTTP client helpers."""
 
+import asyncio
 import traceback
 
 import requests
@@ -55,6 +56,16 @@ def send_group_msg(group_id, msg, quiet: bool = False):
             print(f"[SEND_GROUP] 异常: {e}")
             traceback.print_exc()
         return {"ok": False, "error": str(e)}
+
+
+async def send_private_msg_async(user_id, msg, quiet: bool = False):
+    """Async wrapper for sending a private message via NapCat."""
+    return await asyncio.to_thread(send_private_msg, user_id, msg, quiet)
+
+
+async def send_group_msg_async(group_id, msg, quiet: bool = False):
+    """Async wrapper for sending a group message via NapCat."""
+    return await asyncio.to_thread(send_group_msg, group_id, msg, quiet)
 
 
 def get_forward_msg(forward_id: str):
