@@ -1,5 +1,6 @@
 import asyncio
 import traceback
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
@@ -31,6 +32,7 @@ from apps.qq_ai_bridge.skills.router import dispatch_skill
 
 webhook_bp = Blueprint("webhook", __name__)
 SKILL_REGISTRY = build_skill_registry()
+_LAST_VOCAT_POST: dict | None = None
 
 
 class MessageParser:
@@ -240,6 +242,7 @@ def qq_webhook():
 @webhook_bp.route("/vocat/webhook", methods=["GET", "POST"])
 def vocat_webhook():
     """Handle VoCat hardware webhook requests."""
+    global _LAST_VOCAT_POST
     if request.method == "GET":
         ready_for_inbound = True
         ready_for_remote_control = all(
@@ -255,6 +258,7 @@ def vocat_webhook():
                 "service": "vocat_webhook",
                 "ready_for_inbound": ready_for_inbound,
                 "ready_for_remote_control": ready_for_remote_control,
+                "last_vocat_post": _LAST_VOCAT_POST,
                 "config": {
                     "webhook_token_configured": bool(VOCAT_WEBHOOK_TOKEN),
                     "api_token_configured": bool(VOCAT_API_TOKEN),
@@ -269,8 +273,16 @@ def vocat_webhook():
         )
 
     data = request.get_json(silent=True) or {}
+    remote_addr = request.remote_addr or "unknown"
+    query_preview = _preview_text(data.get("query") or data.get("text") or data.get("message") or "")
+    _LAST_VOCAT_POST = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "remote_addr": remote_addr,
+        "is_local_request": remote_addr in {"127.0.0.1", "::1", "localhost"},
+        "query_preview": query_preview,
+    }
     print(
-        f"[VOCAT] recv query={_preview_text(data.get('query') or data.get('text') or data.get('message') or '')!r} "
+        f"[VOCAT] recv remote_addr={remote_addr} query={query_preview!r} "
         f"keys={sorted(data.keys())}"
     )
     if VOCAT_WEBHOOK_TOKEN:
