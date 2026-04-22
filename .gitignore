@@ -10,10 +10,24 @@ venv/
 data/
 tmp/
 logs/
+.runtime/pids/
+*.pid
 
 # browser profile
 profiles/
 browser/profiles/
+
+# tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# env / secrets
+.env
+.env.*
+!.env.example
+zcc
+zcc.pub
 
 # misc
 .DS_Store
