@@ -24,6 +24,22 @@ from apps.qq_ai_bridge.config.settings import (
 )
 from apps.qq_ai_bridge.services.style_service import load_group_style_summary
 
+_CAPABILITY_GROUNDING_RULE = (
+    "Capability grounding (important):\n"
+    "- You are a QQ chat bot. You do NOT have browser automation, SSH access, "
+    "port forwarding, CDP/remote-debugging, or screen control from this chat surface.\n"
+    "- If the user asks you to log into a website, scrape a portal, click buttons, "
+    "or otherwise drive a browser, do NOT invent technical workarounds "
+    "(e.g. 'run ssh -R 9222', 'open chrome --remote-debugging-port', "
+    "'use Playwright connect_over_cdp'). Those are not real options here.\n"
+    "- Instead, say plainly that browser automation is not yet wired up from QQ, "
+    "and offer the simple alternative: ask the user to paste the content / screenshot "
+    "and you will help them process it.\n"
+    "- Never echo or request passwords. If the user sends credentials, acknowledge "
+    "briefly and tell them to change/rotate the password immediately."
+)
+
+
 SHORT_QUERY_LEN = 8
 SHORT_QUERY_HISTORY_LIMIT = 2
 NORMAL_QUERY_HISTORY_LIMIT = 6
@@ -91,6 +107,7 @@ def prepare_private_ai_prompt(user_id, user_text: str, current_timestamp: int | 
         prompt_parts = [
             "You are replying in a private QQ chat.",
             "Respond naturally in Chinese unless the user clearly requests another language.",
+            _CAPABILITY_GROUNDING_RULE,
             "Treat this as a fresh turn and do not assume earlier context.",
             f"Current user message:\n{user_text}",
         ]
@@ -99,18 +116,20 @@ def prepare_private_ai_prompt(user_id, user_text: str, current_timestamp: int | 
         prompt_parts = [
             "You are replying in a private QQ chat.",
             "Respond naturally in Chinese unless the user clearly requests another language.",
+            _CAPABILITY_GROUNDING_RULE,
             "Use only the minimum recent context needed for continuity.",
             f"Current user message:\n{user_text}",
         ]
         if memory:
-            prompt_parts.insert(3, "Memory:\n" + memory[:200])
+            prompt_parts.insert(4, "Memory:\n" + memory[:200])
         if history_lines:
-            prompt_parts.insert(3, "Recent compact context:\n" + "\n".join(history_lines))
+            prompt_parts.insert(4, "Recent compact context:\n" + "\n".join(history_lines))
     else:
         prompt_mode = "full"
         prompt_parts = [
             "You are replying in a private QQ chat.",
             "Respond naturally in Chinese unless the user clearly requests another language.",
+            _CAPABILITY_GROUNDING_RULE,
             "Keep the answer useful and direct.",
         ]
 

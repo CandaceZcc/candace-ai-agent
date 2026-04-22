@@ -9,6 +9,7 @@ import traceback
 from datetime import datetime
 from typing import Any, Callable
 
+from apps.qq_ai_bridge.logging.bridge_log import log_change
 from apps.qq_ai_bridge.services.time_utils import get_now_local
 
 _LOCK_REGISTRY: dict[str, threading.Lock] = {}
@@ -96,11 +97,13 @@ class ReminderStore:
         pending_count = sum(1 for item in items if item.get("status") == "pending")
         done_count = sum(1 for item in items if item.get("status") == "done")
         cancelled_count = sum(1 for item in items if item.get("status") == "cancelled")
-        print(
-            f"[STORE] loaded reminders count={len(items)}"
-            f" pending={pending_count}"
-            f" done={done_count}"
-            f" cancelled={cancelled_count}"
+        snapshot = (len(items), pending_count, done_count, cancelled_count)
+        log_change(
+            "STORE",
+            f"reminders:{self.store.path}",
+            snapshot,
+            "loaded reminders count=%d pending=%d done=%d cancelled=%d",
+            *snapshot,
         )
         return payload
 
@@ -306,7 +309,14 @@ class SchedulerStateStore:
 
     def load_all(self) -> dict[str, Any]:
         payload = self._normalize_payload(self.store.load())
-        print(f"[STORE] loaded scheduler_state keys={self._active_keys(payload)}")
+        keys_snapshot = tuple(self._active_keys(payload))
+        log_change(
+            "STORE",
+            f"scheduler_state:{self.store.path}",
+            keys_snapshot,
+            "loaded scheduler_state keys=%s",
+            list(keys_snapshot),
+        )
         return payload
 
     def mark_daily_sent(self, task_key: str, token: str, sent_at: datetime) -> None:

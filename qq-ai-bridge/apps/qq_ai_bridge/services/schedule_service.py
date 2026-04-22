@@ -7,6 +7,7 @@ import os
 import traceback
 from datetime import date, datetime, timedelta
 
+from apps.qq_ai_bridge.logging.bridge_log import log_change
 from apps.qq_ai_bridge.services.time_utils import get_now_local, get_weekday_cn
 
 WEEKDAY_NAMES = {
@@ -116,15 +117,17 @@ def detect_schedule_intent(text: str) -> str | None:
 
 
 def query_schedule_for_date(schedule_path: str, target_date: date) -> dict:
-    print(f"[SCHEDULE] query target_date={target_date.isoformat()} path={schedule_path}")
     weekday = target_date.weekday()
     weekday_cn = get_weekday_cn(target_date)
     schedule = load_schedule(schedule_path)
     courses = schedule.get(WEEKDAY_NAMES[weekday], []) if weekday < 5 else []
-    print(
-        f"[SCHEDULE] loaded weekday={WEEKDAY_NAMES[weekday]}"
-        f" weekday_cn={weekday_cn}"
-        f" course_count={len(courses)}"
+    snapshot = (target_date.isoformat(), WEEKDAY_NAMES[weekday], len(courses))
+    log_change(
+        "SCHEDULE",
+        f"query:{schedule_path}",
+        snapshot,
+        "query target=%s weekday=%s course_count=%d",
+        *snapshot,
     )
     return {
         "date": target_date.isoformat(),

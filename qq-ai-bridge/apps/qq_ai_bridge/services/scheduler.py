@@ -21,6 +21,7 @@ from apps.qq_ai_bridge.config.settings import (
     TOMORROW_SCHEDULE_TEST_DELAY_MINUTES,
     TOMORROW_SCHEDULE_TIME,
 )
+from apps.qq_ai_bridge.logging.bridge_log import log_change, log_debug, log_event, log_warn
 from apps.qq_ai_bridge.services.reminder_store import ReminderStore, SchedulerStateStore
 from apps.qq_ai_bridge.services.schedule_service import (
     build_tomorrow_schedule_message,
@@ -58,16 +59,16 @@ def start_scheduler() -> None:
 def _scheduler_loop() -> None:
     while True:
         now = get_now_local()
-        print(f"[SCHEDULER] tick now={now.isoformat()}")
+        log_debug("SCHEDULER", "tick now=%s", now.isoformat())
         try:
             next_reminder_wait = _fire_due_reminders(now)
             _run_daily_jobs(now)
             sleep_seconds = _compute_sleep_seconds(now, next_reminder_wait)
         except Exception:
-            print("[SCHEDULER] loop error")
+            log_warn("SCHEDULER", "loop error")
             traceback.print_exc()
             sleep_seconds = SCHEDULER_TICK_SECONDS
-        print(f"[SCHEDULER] sleep seconds={sleep_seconds}")
+        log_debug("SCHEDULER", "sleep seconds=%s", sleep_seconds)
         time.sleep(sleep_seconds)
 
 
@@ -128,7 +129,14 @@ def _run_daily_job(
     if now < scheduled_at:
         return
     if STATE_STORE.was_daily_sent(task_key, token):
-        print(f"[DAILY] skipped already sent date={token} task={task_key}")
+        log_change(
+            "DAILY",
+            f"daily_skipped:{task_key}",
+            token,
+            "skipped already sent date=%s task=%s",
+            token,
+            task_key,
+        )
         return
     try:
         result = send_private_msg(OWNER_QQ, schedule_text, quiet=True)
