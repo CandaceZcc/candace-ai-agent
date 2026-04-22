@@ -25,6 +25,9 @@ OPENMAIC_PID_FILE="$PID_DIR/openmaic.pid"
 PC_AGENT_PORT="${PC_AGENT_PORT:-5050}"
 BRIDGE_NODE_VERSION="${BRIDGE_NODE_VERSION:-22.22.1}"
 OPENMAIC_NODE_VERSION="${OPENMAIC_NODE_VERSION:-22.22.2}"
+BRIDGE_PORT="${BRIDGE_PORT:-5000}"
+OPENMAIC_PORT_PRIMARY="${OPENMAIC_PORT_PRIMARY:-3000}"
+OPENMAIC_PORT_FALLBACK="${OPENMAIC_PORT_FALLBACK:-3002}"
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -118,6 +121,26 @@ is_pid_running() {
   kill -0 "$pid" 2>/dev/null
 }
 
+find_pid_by_port() {
+  local port="$1"
+  ss -ltnp 2>/dev/null | awk -v p=":$port" '
+    index($4, p) {
+      if (match($0, /pid=[0-9]+/)) {
+        print substr($0, RSTART + 4, RLENGTH - 4)
+        exit
+      }
+    }
+  '
+}
+
+service_running_on_port() {
+  local port="$1"
+  local pid
+  pid="$(find_pid_by_port "$port")"
+  [[ -n "${pid:-}" ]] || return 1
+  is_pid_running "$pid"
+}
+
 service_running() {
   local pid_file="$1"
   [[ -f "$pid_file" ]] || return 1
@@ -125,6 +148,20 @@ service_running() {
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   [[ -n "${pid:-}" ]] || return 1
   is_pid_running "$pid"
+}
+
+bridge_running() {
+  service_running "$BRIDGE_PID_FILE" || service_running_on_port "$BRIDGE_PORT"
+}
+
+agent_running() {
+  service_running "$AGENT_PID_FILE" || service_running_on_port "$PC_AGENT_PORT"
+}
+
+openmaic_running() {
+  service_running "$OPENMAIC_PID_FILE" \
+    || service_running_on_port "$OPENMAIC_PORT_PRIMARY" \
+    || service_running_on_port "$OPENMAIC_PORT_FALLBACK"
 }
 
 write_pid() {
@@ -139,8 +176,12 @@ remove_pid() {
 }
 
 start_bridge_bg() {
-  if service_running "$BRIDGE_PID_FILE"; then
-    say "bridge 已在运行，PID=$(cat "$BRIDGE_PID_FILE")"
+  if bridge_running; then
+    local pid
+    pid="$(cat "$BRIDGE_PID_FILE" 2>/dev/null || true)"
+    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$BRIDGE_PORT")"
+    [[ -n "${pid:-}" ]] && write_pid "$BRIDGE_PID_FILE" "$pid"
+    say "bridge 已在运行，PID=${pid:-unknown} PORT=$BRIDGE_PORT"
     return 0
   fi
 
@@ -158,8 +199,12 @@ start_bridge_bg() {
   ) >/dev/null 2>&1 &
 
   sleep 1
-  if service_running "$BRIDGE_PID_FILE"; then
-    say "bridge 启动成功，PID=$(cat "$BRIDGE_PID_FILE")"
+  if bridge_running; then
+    local pid
+    pid="$(cat "$BRIDGE_PID_FILE" 2>/dev/null || true)"
+    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$BRIDGE_PORT")"
+    [[ -n "${pid:-}" ]] && write_pid "$BRIDGE_PID_FILE" "$pid"
+    say "bridge 启动成功，PID=${pid:-unknown} PORT=$BRIDGE_PORT"
   else
     say "bridge 启动失败，查看日志：$BRIDGE_LOG"
     return 1
@@ -167,8 +212,12 @@ start_bridge_bg() {
 }
 
 start_agent_bg() {
-  if service_running "$AGENT_PID_FILE"; then
-    say "agent 已在运行，PID=$(cat "$AGENT_PID_FILE")"
+  if agent_running; then
+    local pid
+    pid="$(cat "$AGENT_PID_FILE" 2>/dev/null || true)"
+    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$PC_AGENT_PORT")"
+    [[ -n "${pid:-}" ]] && write_pid "$AGENT_PID_FILE" "$pid"
+    say "agent 已在运行，PID=${pid:-unknown} PORT=$PC_AGENT_PORT"
     return 0
   fi
 
@@ -184,8 +233,12 @@ start_agent_bg() {
   ) >/dev/null 2>&1 &
 
   sleep 1
-  if service_running "$AGENT_PID_FILE"; then
-    say "agent 启动成功，PID=$(cat "$AGENT_PID_FILE")"
+  if agent_running; then
+    local pid
+    pid="$(cat "$AGENT_PID_FILE" 2>/dev/null || true)"
+    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$PC_AGENT_PORT")"
+    [[ -n "${pid:-}" ]] && write_pid "$AGENT_PID_FILE" "$pid"
+    say "agent 启动成功，PID=${pid:-unknown} PORT=$PC_AGENT_PORT"
   else
     say "agent 启动失败，查看日志：$AGENT_LOG"
     return 1
@@ -193,8 +246,13 @@ start_agent_bg() {
 }
 
 start_openmaic_bg() {
-  if service_running "$OPENMAIC_PID_FILE"; then
-    say "openmaic 已在运行，PID=$(cat "$OPENMAIC_PID_FILE")"
+  if openmaic_running; then
+    local pid
+    pid="$(cat "$OPENMAIC_PID_FILE" 2>/dev/null || true)"
+    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$OPENMAIC_PORT_PRIMARY")"
+    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$OPENMAIC_PORT_FALLBACK")"
+    [[ -n "${pid:-}" ]] && write_pid "$OPENMAIC_PID_FILE" "$pid"
+    say "openmaic 已在运行，PID=${pid:-unknown} PORT=${OPENMAIC_PORT_PRIMARY}/${OPENMAIC_PORT_FALLBACK}"
     return 0
   fi
 
@@ -209,8 +267,13 @@ start_openmaic_bg() {
   ) >/dev/null 2>&1 &
 
   sleep 2
-  if service_running "$OPENMAIC_PID_FILE"; then
-    say "openmaic 启动成功，PID=$(cat "$OPENMAIC_PID_FILE")"
+  if openmaic_running; then
+    local pid
+    pid="$(cat "$OPENMAIC_PID_FILE" 2>/dev/null || true)"
+    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$OPENMAIC_PORT_PRIMARY")"
+    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$OPENMAIC_PORT_FALLBACK")"
+    [[ -n "${pid:-}" ]] && write_pid "$OPENMAIC_PID_FILE" "$pid"
+    say "openmaic 启动成功，PID=${pid:-unknown} PORT=${OPENMAIC_PORT_PRIMARY}/${OPENMAIC_PORT_FALLBACK}"
   else
     say "openmaic 启动失败，查看日志：$OPENMAIC_LOG"
     return 1
@@ -252,11 +315,38 @@ stop_one() {
 status_one() {
   local name="$1"
   local pid_file="$2"
-  if service_running "$pid_file"; then
-    echo "$name: RUNNING (PID=$(cat "$pid_file"))"
-  else
-    echo "$name: STOPPED"
-  fi
+  local pid=""
+  case "$name" in
+    bridge)
+      if bridge_running; then
+        pid="$(cat "$pid_file" 2>/dev/null || true)"
+        [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$BRIDGE_PORT")"
+        [[ -n "${pid:-}" ]] && write_pid "$pid_file" "$pid"
+        echo "$name: RUNNING (PID=${pid:-unknown}, PORT=$BRIDGE_PORT)"
+        return 0
+      fi
+      ;;
+    agent)
+      if agent_running; then
+        pid="$(cat "$pid_file" 2>/dev/null || true)"
+        [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$PC_AGENT_PORT")"
+        [[ -n "${pid:-}" ]] && write_pid "$pid_file" "$pid"
+        echo "$name: RUNNING (PID=${pid:-unknown}, PORT=$PC_AGENT_PORT)"
+        return 0
+      fi
+      ;;
+    openmaic)
+      if openmaic_running; then
+        pid="$(cat "$pid_file" 2>/dev/null || true)"
+        [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$OPENMAIC_PORT_PRIMARY")"
+        [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$OPENMAIC_PORT_FALLBACK")"
+        [[ -n "${pid:-}" ]] && write_pid "$pid_file" "$pid"
+        echo "$name: RUNNING (PID=${pid:-unknown}, PORT=${OPENMAIC_PORT_PRIMARY}/${OPENMAIC_PORT_FALLBACK})"
+        return 0
+      fi
+      ;;
+  esac
+  echo "$name: STOPPED"
 }
 
 run_window_mode() {
@@ -290,9 +380,23 @@ run_window_mode() {
   "
 
   echo "窗口模式：弹出 bridge / agent / openmaic 三个独立终端..."
-  open_terminal_window "runai-bridge" "$bridge_cmd" || exit 1
-  open_terminal_window "runai-agent" "$agent_cmd" || exit 1
-  open_terminal_window "runai-openmaic" "$openmaic_cmd" || exit 1
+  if bridge_running; then
+    open_terminal_window "runai-bridge-log" "tail -f '$BRIDGE_LOG'" || exit 1
+  else
+    open_terminal_window "runai-bridge" "$bridge_cmd" || exit 1
+  fi
+
+  if agent_running; then
+    open_terminal_window "runai-agent-log" "tail -f '$AGENT_LOG'" || exit 1
+  else
+    open_terminal_window "runai-agent" "$agent_cmd" || exit 1
+  fi
+
+  if openmaic_running; then
+    open_terminal_window "runai-openmaic-log" "tail -f '$OPENMAIC_LOG'" || exit 1
+  else
+    open_terminal_window "runai-openmaic" "$openmaic_cmd" || exit 1
+  fi
   echo "已打开三个终端窗口。"
 }
 
