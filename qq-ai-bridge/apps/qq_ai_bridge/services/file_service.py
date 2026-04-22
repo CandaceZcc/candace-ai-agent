@@ -17,12 +17,14 @@ from apps.qq_ai_bridge.adapters.napcat_client import (
 )
 from apps.qq_ai_bridge.config.settings import (
     ALLOWED_PRIVATE_USER,
+    BASE_DATA_DIR,
     GROUP_UPLOAD_DIR,
     MAX_ARCHIVE_LISTING,
     MAX_FILE_CONTENT_LEN,
     PRIVATE_UPLOAD_DIR,
     TEXT_LIKE_EXTS,
 )
+from storage_utils import load_private_context
 
 
 def extract_file_info(event_data):
@@ -184,33 +186,90 @@ def read_text_file(path):
 
 
 def extract_pdf_text(path):
-    """Best-effort PDF text extraction placeholder."""
+    """Best-effort PDF text extraction with multiple backend fallbacks."""
+    tried = []
+
     try:
         import fitz  # type: ignore
 
         doc = fitz.open(path)
-        text = "\n".join(page.get_text() for page in doc)
-        text = text.strip()
+        text = "\n".join(page.get_text() for page in doc).strip()
+        doc.close()
         if text:
-            print(f"[FILE] PDF 文本提取成功: {path}")
-            return text[:MAX_FILE_CONTENT_LEN], "pdf_text"
-        print(f"[FILE] PDF 文本提取为空: {path}")
+            print(f"[FILE] PDF 文本提取成功 (fitz): {path}")
+            return text[:MAX_FILE_CONTENT_LEN], "pdf_text_fitz"
+        tried.append("fitz:empty")
+    except ImportError:
+        tried.append("fitz:missing")
     except Exception as e:
-        print(f"[FILE] PDF 文本提取失败: {e}")
+        tried.append(f"fitz:err={e}")
+
+    try:
+        import pypdf  # type: ignore
+
+        reader = pypdf.PdfReader(path)
+        text = "\n".join((page.extract_text() or "") for page in reader.pages).strip()
+        if text:
+            print(f"[FILE] PDF 文本提取成功 (pypdf): {path}")
+            return text[:MAX_FILE_CONTENT_LEN], "pdf_text_pypdf"
+        tried.append("pypdf:empty")
+    except ImportError:
+        tried.append("pypdf:missing")
+    except Exception as e:
+        tried.append(f"pypdf:err={e}")
+
+    try:
+        from pdfminer.high_level import extract_text as _pdfminer_extract  # type: ignore
+
+        text = (_pdfminer_extract(path) or "").strip()
+        if text:
+            print(f"[FILE] PDF 文本提取成功 (pdfminer): {path}")
+            return text[:MAX_FILE_CONTENT_LEN], "pdf_text_pdfminer"
+        tried.append("pdfminer:empty")
+    except ImportError:
+        tried.append("pdfminer:missing")
+    except Exception as e:
+        tried.append(f"pdfminer:err={e}")
+
+    print(f"[FILE] PDF 文本提取失败: tried={tried}")
     return None, None
 
 
+_DOCX_W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
 def extract_docx_text(path):
-    """Extract text from DOCX files."""
+    """Extract text from DOCX files, preferring python-docx when available."""
+    try:
+        import docx  # type: ignore
+
+        doc = docx.Document(path)
+        parts = [p.text for p in doc.paragraphs if p.text]
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text]
+                if cells:
+                    parts.append(" | ".join(cells))
+        text = "\n".join(parts).strip()
+        if text:
+            print(f"[FILE] DOCX 文本提取成功 (python-docx): {path}")
+            return text[:MAX_FILE_CONTENT_LEN], "docx_text_pydocx"
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"[FILE] DOCX (python-docx) 提取失败，回退到 zipfile 方案: {e}")
+
     try:
         with zipfile.ZipFile(path, "r") as zf:
             with zf.open("word/document.xml") as f:
                 tree = ET.parse(f)
-        texts = [node.text for node in tree.iter() if node.text]
+        texts = [node.text for node in tree.iter(f"{_DOCX_W_NS}t") if node.text]
+        if not texts:
+            texts = [node.text for node in tree.iter() if node.text]
         text = "\n".join(texts).strip()
         if text:
-            print(f"[FILE] DOCX 文本提取成功: {path}")
-            return text[:MAX_FILE_CONTENT_LEN], "docx_text"
+            print(f"[FILE] DOCX 文本提取成功 (zip/xml): {path}")
+            return text[:MAX_FILE_CONTENT_LEN], "docx_text_xml"
     except Exception as e:
         print(f"[FILE] DOCX 文本提取失败: {e}")
     return None, None
@@ -280,6 +339,9 @@ def build_binary_file_summary(path, filename):
     )[:MAX_FILE_CONTENT_LEN], "binary_summary"
 
 
+DOC_LIKE_EXTS = {".pdf", ".docx", ".pptx", ".xlsx"}
+
+
 def extract_file_content_for_ai(path, filename):
     """Extract best-effort readable content from an uploaded file."""
     ext = os.path.splitext(filename or path)[1].lower()
@@ -307,6 +369,16 @@ def extract_file_content_for_ai(path, filename):
         content, reason = extract_xlsx_text(path)
         if content:
             return content, reason
+
+    if ext in DOC_LIKE_EXTS:
+        hint = (
+            f"文件 {filename} 是 {ext[1:].upper()} 文档，但本地解析失败，"
+            "可能缺少对应的解析依赖（PyMuPDF / python-docx / openpyxl），"
+            "或文档本身为扫描件/图片版。"
+        )
+        print(f"[FILE] 文档解析失败，返回缺失依赖提示: {hint}")
+        return hint[:MAX_FILE_CONTENT_LEN], "doc_extract_failed"
+
     if ext == ".zip" or zipfile.is_zipfile(path):
         content, reason = extract_zip_summary(path)
         if content:
@@ -316,6 +388,43 @@ def extract_file_content_for_ai(path, filename):
     if content:
         return content, "text_fallback"
     return build_binary_file_summary(path, filename)
+
+
+_USER_INTENT_LOOKBACK_TURNS = 3
+_USER_INTENT_MAX_AGE_SECONDS = 20 * 60
+
+
+def _recent_user_intent(user_id, now_ts: int | None = None) -> str:
+    """Return the most recent non-empty user message prior to the current file.
+
+    We look a few turns back (default 3) and only accept messages that are
+    reasonably fresh (default 20 min). The goal is to capture intents like
+    "帮我总结这个 pdf 的第三章" that arrive right before the attachment.
+    """
+    import time
+
+    try:
+        context = load_private_context(BASE_DATA_DIR, user_id)
+    except Exception as e:
+        print(f"[FILE] 读取私聊历史失败: {e}")
+        return ""
+
+    history = context.get("history") or []
+    if not history:
+        return ""
+
+    cutoff = (now_ts or int(time.time())) - _USER_INTENT_MAX_AGE_SECONDS
+    for item in reversed(history[-_USER_INTENT_LOOKBACK_TURNS:]):
+        if not isinstance(item, dict):
+            continue
+        user_text = (item.get("user") or "").strip()
+        if not user_text:
+            continue
+        ts = item.get("user_timestamp") or item.get("timestamp") or 0
+        if ts and ts < cutoff:
+            continue
+        return user_text[:600]
+    return ""
 
 
 def handle_file_message(message_type, user_id, group_id, file_info):
@@ -343,6 +452,10 @@ def handle_file_message(message_type, user_id, group_id, file_info):
     save_dir = PRIVATE_UPLOAD_DIR if message_type == "private" else GROUP_UPLOAD_DIR
     saved_path, reason = download_file_if_possible(file_info, save_dir)
 
+    user_intent = _recent_user_intent(user_id) if message_type == "private" else ""
+    if user_intent:
+        print(f"[FILE] 捕获到用户最近意图: {user_intent[:80]}...")
+
     if not saved_path:
         msg = (
             f"已识别文件：{safe_name}\n当前未能获取可用下载链接，也无法从本地路径读取。\n"
@@ -353,14 +466,38 @@ def handle_file_message(message_type, user_id, group_id, file_info):
 
     content, extract_reason = extract_file_content_for_ai(saved_path, safe_name)
     if not content:
-        send_private_msg(user_id, f"文件已保存：{safe_name}\n但当前无法提取内容。")
+        fallback_msg = f"文件已保存：{safe_name}\n但当前无法提取内容。"
+        if user_intent:
+            fallback_msg += f"\n(收到你之前的请求：{user_intent[:120]}，但缺少可读内容，无法执行)"
+        send_private_msg(user_id, fallback_msg)
         return {"status": "file_read_failed"}
 
+    if user_intent:
+        task_line = f"用户在发送此文件之前提出的请求是：{user_intent}\n请优先按这个请求来处理文件；如果请求与文件无关，再退回到默认的文件说明模式。"
+    else:
+        task_line = (
+            "用户没有附带文字说明。请默认做文件说明：告诉用户这是什么、主要内容、有哪些值得注意的信息。"
+        )
+
+    extract_note = ""
+    if extract_reason == "doc_extract_failed":
+        extract_note = (
+            "\n注意：本地解析该文档失败（可能缺少 PyMuPDF / python-docx / openpyxl 依赖或文档是扫描件）。"
+            "请基于下方的说明文本回应，并明确告诉用户你没能读到真实内容。"
+        )
+
     query = (
-        "你是一个文件阅读助手。请基于以下文件内容或文件结构信息，尽量准确说明文件是什么、主要内容是什么、有哪些值得注意的信息。"
-        "如果文件本身无法完整转成纯文本，也要明确说明你是基于结构/元数据进行判断。\n\n"
-        f"文件名：{safe_name}\n保存路径：{saved_path}\n文件下载方式：{reason}\n文件内容提取方式：{extract_reason}\n\n{content}"
+        "你是 Candace 的文件阅读助手。"
+        f"{task_line}"
+        "如果文件本身无法完整转成纯文本，也要明确说明你是基于结构/元数据进行判断。"
+        f"{extract_note}\n\n"
+        f"文件名：{safe_name}\n保存路径：{saved_path}\n文件下载方式：{reason}\n文件内容提取方式：{extract_reason}\n\n"
+        f"------- 文件内容开始 -------\n{content}\n------- 文件内容结束 -------"
     )
-    reply = call_ai(query)
+    reply = call_ai(query, metadata={"user_id": user_id, "prompt_mode": "file_understanding"})
     send_private_msg(user_id, reply)
-    return {"status": "file_processed_private"}
+    return {
+        "status": "file_processed_private",
+        "user_intent_used": bool(user_intent),
+        "extract_reason": extract_reason,
+    }

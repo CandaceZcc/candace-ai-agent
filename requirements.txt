@@ -7,3 +7,10 @@ pyautogui
 opencv-python
 pytesseract
 mss
+
+# Document parsing for file_understanding skill
+# PyMuPDF is preferred; pypdf is a pure-python fallback
+PyMuPDF
+pypdf
+python-docx
+openpyxl
