@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg_async
-from apps.qq_ai_bridge.adapters.vocat_controller import send_expression, send_tts_vocal
+from apps.qq_ai_bridge.adapters.vocat_controller import (
+    VocatControllerError,
+    send_expression,
+    send_tts_vocal,
+)
 from apps.qq_ai_bridge.config.settings import (
     OWNER_QQ,
     SCHEDULE_PATH,
@@ -197,7 +201,14 @@ async def maybe_handle_vocat_remote_command(user_id: int | None, query: str) -> 
     expression_match = re.fullmatch(r"#表情\s+(.+)", stripped)
     if expression_match:
         expression_id = expression_match.group(1).strip()
-        result = await send_expression(expression_id)
+        try:
+            result = await send_expression(expression_id)
+        except VocatControllerError as exc:
+            return {
+                "handled": True,
+                "reply": f"VoCat 表情控制失败：{exc}",
+                "result": {"ok": False, "error": str(exc)},
+            }
         return {
             "handled": True,
             "reply": f"已触发 VoCat 表情：{expression_id}",
@@ -207,7 +218,14 @@ async def maybe_handle_vocat_remote_command(user_id: int | None, query: str) -> 
     tts_match = re.fullmatch(r"#说\s+(.+)", stripped)
     if tts_match:
         text = tts_match.group(1).strip()
-        result = await send_tts_vocal(text)
+        try:
+            result = await send_tts_vocal(text)
+        except VocatControllerError as exc:
+            return {
+                "handled": True,
+                "reply": f"VoCat 播报失败：{exc}",
+                "result": {"ok": False, "error": str(exc)},
+            }
         return {
             "handled": True,
             "reply": f"已让 VoCat 播报：{text[:40]}",

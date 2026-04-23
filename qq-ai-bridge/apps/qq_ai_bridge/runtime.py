@@ -2,37 +2,67 @@
 
 import os
 import re
+import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - dev env only
+    print(
+        "[SYSTEM] 未安装 python-dotenv。请在项目根执行：\n"
+        "  source .venv/bin/activate  && pip install -r requirements.txt\n"
+        "或使用： /path/to/candace-ai-agent/.venv/bin/python3 qq-ai-bridge/bridge.py",
+        file=sys.stderr,
+    )
+    raise
+
 from flask import Flask
 
 
 def _load_runtime_env() -> None:
+    """Load env: repo defaults first, then local secret files (override).
+
+    Secrets should live in (priority high -> low for override application order,
+    we apply low override first, then high override last):
+    - bridge/.env and repo/.env: defaults, not committed with real keys
+    - bridge/.local.env: machine-local, gitignored
+    - ~/.candace/qq-ai-bridge.env: user-level secrets, never in repo
+    """
     bridge_root = Path(__file__).resolve().parents[2]
     repo_root = bridge_root.parent
-    env_candidates = (
-        ("bridge", bridge_root / ".env"),
-        ("repo", repo_root / ".env"),
+    candace_secrets = Path.home() / ".candace" / "qq-ai-bridge.env"
+    env_candidates: tuple[tuple[str, Path, bool], ...] = (
+        ("bridge", bridge_root / ".env", False),
+        ("repo", repo_root / ".env", False),
+        ("bridge_local", bridge_root / ".local.env", True),
+        ("candace_home", candace_secrets, True),
     )
 
     print(
         "[SYSTEM] env search order: "
-        + " -> ".join(f"{label}:{path}" for label, path in env_candidates)
+        + " -> ".join(f"{label}:{path} (override={ov})" for label, path, ov in env_candidates)
     )
     loaded_any = False
-    for label, dotenv_path in env_candidates:
+    for label, dotenv_path, use_override in env_candidates:
         if not dotenv_path.exists():
             print(f"[SYSTEM] env file missing: {label}:{dotenv_path}")
             continue
 
-        loaded = load_dotenv(dotenv_path=dotenv_path, override=False)
+        loaded = load_dotenv(dotenv_path=dotenv_path, override=use_override)
         status = "loaded" if loaded else "present but no new values applied"
         print(f"[SYSTEM] env file {status}: {label}:{dotenv_path}")
         loaded_any = loaded_any or loaded
 
     if not loaded_any:
         print("[SYSTEM] no .env values loaded, using process env only")
+
+    local_env = bridge_root / ".local.env"
+    if not candace_secrets.is_file() and not local_env.is_file():
+        print(
+            "[SYSTEM] 提示: 未找到本机密钥文件 ~/.candace/qq-ai-bridge.env 或 qq-ai-bridge/.local.env。"
+            " 请复制 qq-ai-bridge/.env.example 到上述路径之一并填写 API Key，"
+            "否则 Vision/LLM 等能力会不可用。"
+        )
 
 
 _load_runtime_env()
@@ -53,6 +83,7 @@ from apps.qq_ai_bridge.adapters.napcat_client import (
 from apps.qq_ai_bridge.adapters.napcat_client import (
     send_private_msg as _send_private_msg_raw,
 )
+from apps.qq_ai_bridge.adapters.admin_ui import register_admin_routes
 from apps.qq_ai_bridge.adapters.webhook import register_routes
 from apps.qq_ai_bridge.config.settings import (
     AGENT_SYSTEM_PROMPT,
@@ -182,6 +213,7 @@ for path in (
 
 
 register_routes(app)
+register_admin_routes(app)
 start_scheduler()
 
 

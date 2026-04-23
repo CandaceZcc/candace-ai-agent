@@ -2,21 +2,30 @@ import base64
 import mimetypes
 import os
 import traceback
+import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlparse
 
 import requests
+from PIL import Image
 
 
 def build_vision_prompt(user_text: str) -> str:
     text = str(user_text or "").strip()
     if not text:
-        return "用群聊网感点评这张图，10到15字，自然一点。"
+        return (
+            "按三段式输出："
+            "1) 客观识别一句（只说看到的内容）；"
+            "2) 群聊口语短句（可选，不超过12字）；"
+            "3) 若不确定请明确写“我不确定”。"
+            "禁止模板化夸夸，如“哈哈/太可爱了/萌翻了”连发。"
+        )
     return (
         "先按用户要求答。"
-        "如果只是评价图片，就用群聊网感短评，10到15字。"
-        "如果用户要识别文字，就直接提取文字。"
+        "输出优先三段式：客观识别一句 + 可选口语短句 + 不确定性声明。"
+        "如果用户要识别文字，就直接提取文字，识别不清就明确不确定。"
+        "禁止固定夸夸模板（哈哈/好可爱/萌翻）。"
         f"\n用户补充：{text}"
     )
 
@@ -78,12 +87,24 @@ def analyze_image_with_details(
             error="missing one or more required env vars: VISION_API_URL/VISION_API_KEY/VISION_MODEL",
         )
 
+    prepared_image_path = image_path
+    cleanup_prepared_file = False
+    def _finish(result: VisionResult) -> VisionResult:
+        if cleanup_prepared_file:
+            _safe_remove_file(prepared_image_path)
+        return result
     try:
-        payload = _build_request_payload(image_path, user_text=user_text, model=model)
+        prepared_image_path, cleanup_prepared_file = _prepare_image_for_vision(image_path)
+    except Exception:
+        prepared_image_path = image_path
+        cleanup_prepared_file = False
+
+    try:
+        payload = _build_request_payload(prepared_image_path, user_text=user_text, model=model)
     except Exception as exc:  # pragma: no cover - filesystem/runtime dependent
-        return VisionResult(
+        return _finish(VisionResult(
             **{**base_result.__dict__, "status": "request_build_failed", "error": str(exc), "traceback": traceback.format_exc()},
-        )
+        ))
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -93,17 +114,17 @@ def analyze_image_with_details(
     try:
         resp = requests.post(api_url, json=payload, headers=headers, timeout=60)
     except requests.RequestException as exc:
-        return VisionResult(
+        return _finish(VisionResult(
             **{**base_result.__dict__, "status": "network_error", "error": str(exc), "traceback": traceback.format_exc()},
-        )
+        ))
     except Exception as exc:  # pragma: no cover - defensive fallback
-        return VisionResult(
+        return _finish(VisionResult(
             **{**base_result.__dict__, "status": "unknown_error", "error": str(exc), "traceback": traceback.format_exc()},
-        )
+        ))
 
     response_preview = (resp.text or "")[:500]
     if resp.status_code in (401, 403):
-        return VisionResult(
+        return _finish(VisionResult(
             **{
                 **base_result.__dict__,
                 "status": "auth_failed",
@@ -111,9 +132,9 @@ def analyze_image_with_details(
                 "response_preview": response_preview,
                 "error": f"http {resp.status_code}",
             },
-        )
+        ))
     if resp.status_code == 404:
-        return VisionResult(
+        return _finish(VisionResult(
             **{
                 **base_result.__dict__,
                 "status": "endpoint_not_found",
@@ -121,7 +142,7 @@ def analyze_image_with_details(
                 "response_preview": response_preview,
                 "error": "http 404",
             },
-        )
+        ))
     if not resp.ok:
         lowered = response_preview.lower()
         status = "request_failed"
@@ -129,7 +150,7 @@ def analyze_image_with_details(
             status = "model_unsupported"
         elif _looks_like_image_url_unreachable(lowered):
             status = "image_url_unreachable"
-        return VisionResult(
+        return _finish(VisionResult(
             **{
                 **base_result.__dict__,
                 "status": status,
@@ -137,12 +158,12 @@ def analyze_image_with_details(
                 "response_preview": response_preview,
                 "error": f"http {resp.status_code}",
             },
-        )
+        ))
 
     try:
         data = resp.json()
     except ValueError as exc:
-        return VisionResult(
+        return _finish(VisionResult(
             **{
                 **base_result.__dict__,
                 "status": "response_parse_failed",
@@ -151,11 +172,11 @@ def analyze_image_with_details(
                 "error": str(exc),
                 "traceback": traceback.format_exc(),
             },
-        )
+        ))
 
     content = _extract_response_text(data)
     if not content:
-        return VisionResult(
+        return _finish(VisionResult(
             **{
                 **base_result.__dict__,
                 "status": "response_parse_failed",
@@ -163,8 +184,8 @@ def analyze_image_with_details(
                 "response_preview": response_preview,
                 "error": "response text extraction returned empty content",
             },
-        )
-    return VisionResult(
+        ))
+    result = VisionResult(
         **{
             **base_result.__dict__,
             "status": "ok",
@@ -173,6 +194,7 @@ def analyze_image_with_details(
             "response_preview": response_preview,
         },
     )
+    return _finish(result)
 
 
 def analyze_image(image_path: str, user_text: str = "") -> str:
@@ -195,7 +217,11 @@ def _build_request_payload(image_path: str, user_text: str, model: str) -> dict:
         "messages": [
             {
                 "role": "system",
-                "content": "你是群聊看图助手，回答短、自然、像群友。"
+                "content": (
+                    "你是群聊看图助手。"
+                    "回答要短、自然、可验证。"
+                    "优先客观描述，不要低俗、不攻击，不要模板化夸夸。"
+                )
             },
             {
                 "role": "user",
@@ -206,6 +232,36 @@ def _build_request_payload(image_path: str, user_text: str, model: str) -> dict:
             }
         ]
     }
+
+
+def _prepare_image_for_vision(image_path: str) -> tuple[str, bool]:
+    """
+    Normalize any input image into a JPEG first frame.
+    This avoids provider-side media-type incompatibilities for gifs/webp variants.
+    Returns (path, should_cleanup).
+    """
+    with Image.open(image_path) as img:
+        # Always use the first frame; animated assets are downgraded to static snapshot.
+        try:
+            img.seek(0)
+        except Exception:
+            pass
+        rgb = img.convert("RGB")
+        target_path = _build_prepared_image_path(image_path)
+        rgb.save(target_path, format="JPEG", quality=92)
+    return target_path, True
+
+
+def _build_prepared_image_path(source_path: str) -> str:
+    base_dir = os.path.dirname(source_path) or "."
+    return os.path.join(base_dir, f"{uuid.uuid4().hex}-vision.jpg")
+
+
+def _safe_remove_file(path: str) -> None:
+    try:
+        os.remove(path)
+    except Exception:
+        pass
 
 
 def _extract_response_text(data) -> str:

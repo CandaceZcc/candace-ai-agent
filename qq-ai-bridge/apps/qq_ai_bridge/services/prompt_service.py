@@ -11,7 +11,7 @@ from storage_utils import (
     sample_style_lines,
 )
 
-from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
+from apps.qq_ai_bridge.adapters.message_parser import extract_text_and_mention, normalize_query_text
 from apps.qq_ai_bridge.config.settings import (
     BASE_DATA_DIR,
     GROUP_UPLOAD_DIR,
@@ -54,6 +54,8 @@ GROUP_PERSONA_FULL_CHAR_BUDGET = 220
 GROUP_PERSONA_COMPACT_CHAR_BUDGET = 72
 GROUP_MARKDOWN_CHAR_BUDGET = 240
 GROUP_BATCH_CHAR_BUDGET = 260
+OPENCLAW_RULE_CHAR_BUDGET = 220
+DEFAULT_PERSONA_INTENSITY = 35
 
 _GROUP_SOUL_CACHE = {
     "path": "",
@@ -63,6 +65,13 @@ _GROUP_SOUL_CACHE = {
     "full": "",
 }
 _GROUP_MARKDOWN_CACHE: dict[str, dict[str, Any]] = {}
+_GROUP_RULES_CACHE: dict[str, Any] = {}
+_OPENCLAW_WORKSPACE = Path.home() / ".openclaw" / "workspace"
+_OPENCLAW_RULE_FILES = (
+    _OPENCLAW_WORKSPACE / "SOUL.md",
+    _OPENCLAW_WORKSPACE / "AGENTS.md",
+    _OPENCLAW_WORKSPACE / "memory" / "group_chat_persona.md",
+)
 
 
 def prepare_private_ai_prompt(user_id, user_text: str, current_timestamp: int | None = None) -> dict[str, Any]:
@@ -269,62 +278,114 @@ def load_group_soul() -> str:
     return soul_info["raw"]
 
 
-def prepare_group_ai_prompt(group_id, user_text: str, user_id=None, log=None, batch_context: dict | None = None) -> dict[str, Any]:
+def prepare_group_ai_prompt(
+    group_id,
+    user_text: str,
+    user_id=None,
+    log=None,
+    batch_context: dict | None = None,
+    group_config: dict | None = None,
+) -> dict[str, Any]:
     """Build a compact or full prompt for group chat and return prompt statistics."""
     normalized_text = normalize_query_text(user_text)
     query_len = len(normalized_text)
     prompt_mode = "compact" if query_len <= GROUP_COMPACT_QUERY_LEN else "full"
     soul_info = _load_group_soul_cache()
-    persona = soul_info["compact"] if prompt_mode == "compact" else soul_info["full"]
+    persona_seed = soul_info["compact"] if prompt_mode == "compact" else soul_info["full"]
     workspace = get_group_workspace(BASE_DATA_DIR, group_id)
+    persona_intensity = _parse_persona_intensity(group_config or {})
 
     history_limit = GROUP_COMPACT_HISTORY_LIMIT if prompt_mode == "compact" else GROUP_FULL_HISTORY_LIMIT
     history_budget = GROUP_COMPACT_HISTORY_CHAR_BUDGET if prompt_mode == "compact" else GROUP_FULL_HISTORY_CHAR_BUDGET
     history_lines = _build_group_history_lines(workspace["chat_log_path"], history_limit, history_budget)
     history_text = "\n".join(history_lines)
     history_chars = len(history_text)
+    recent_image_context = _build_recent_image_context(workspace["chat_log_path"])
 
     style_section = load_group_style_summary(BASE_DATA_DIR, group_id, user_id=user_id, log=log)
+    user_profile = _build_lightweight_user_profile(style_section, user_id=user_id)
     markdown_section = _load_group_markdown_context(group_id, log=log)
     batch_section = _build_group_batch_section(batch_context)
+    quoted_context = _build_group_quoted_context(batch_context, log=log)
+    openclaw_rules = _load_openclaw_group_rules(log=log)
 
-    privacy_rules = (
-        "别泄露群友隐私，别提私聊内容、私有文件、真实身份信息。"
-        f"你和{OWNER_NAME}很熟，但别硬提。"
+    baseline_persona = (
+        "底线人格：你是QQ群里的真人群友风格助手。自然、简洁、克制，不装客服，不演戏。"
+        "允许轻吐槽，但不做人身攻击，不煽动对立。"
+    )
+    scene_persona = _build_scene_persona_rules(prompt_mode=prompt_mode, persona_intensity=persona_intensity)
+    safety_layer = (
+        "安全去激化层：遇到辱骂/挑衅，优先降温、转话题或短句结束。"
+        "不要放大冲突，不要用低俗性暗示，不要机械复读梗。"
+    )
+    silent_strategy = (
+        "沉默策略：不是每条都要回复。"
+        "低价值消息可输出 [[NO_REPLY]]（系统会改为贴表情）；"
+        "普通接话优先 8~14 字口语短句；"
+        "明确提问（含问号/怎么/为什么）给结构化回答（结论 + 一句理由）。"
+    )
+    send_split_rule = (
+        "如果你要分多条发送，请用 [[SEND_SPLIT]] 分隔每条内容，不要写任何说明文字。"
+        "例如：第一条[[SEND_SPLIT]]第二条。"
     )
 
     if prompt_mode == "compact":
         prompt_parts = [
             "你在QQ群里接话。",
-            persona,
-            "自然点，别卖萌过头，别为了搞怪乱编。",
-            privacy_rules,
+            baseline_persona,
+            scene_persona,
+            "场景：群聊快速接话。",
+            "别泄露群友隐私，别提私聊内容、私有文件、真实身份信息。",
+            safety_layer,
+            silent_strategy,
+            send_split_rule,
         ]
         if history_text:
             prompt_parts.append("刚刚群里：" + history_text.replace("\n", " | "))
+        if recent_image_context:
+            prompt_parts.append(recent_image_context.replace("\n", " | "))
         if batch_section:
             prompt_parts.append(batch_section.replace("\n", " | "))
-        if style_section:
-            prompt_parts.append(style_section)
+        if quoted_context:
+            prompt_parts.append(quoted_context.replace("\n", " | "))
+        if user_profile:
+            prompt_parts.append(user_profile)
+        if openclaw_rules:
+            prompt_parts.append(openclaw_rules)
         if markdown_section:
             prompt_parts.append(markdown_section)
+        if persona_seed:
+            prompt_parts.append("补充语气种子：" + persona_seed[:90])
         prompt_parts.append("当前消息：" + normalized_text)
     else:
         prompt_parts = [
             "你正在QQ群聊里回复消息。",
-            persona,
+            baseline_persona,
+            scene_persona,
+            "场景：群聊深入回复。",
             "保持像群友，但别过度抽象、别突然喵化、别无意义胡闹。",
-            privacy_rules,
+            "别泄露群友隐私，别提私聊内容、私有文件、真实身份信息。",
+            safety_layer,
+            silent_strategy,
+            send_split_rule,
             "默认是在参与气氛，不是认真客服式答题；除非对方明显在认真求助。",
         ]
         if history_text:
             prompt_parts.append("最近群聊上下文：\n" + history_text)
+        if recent_image_context:
+            prompt_parts.append(recent_image_context)
         if batch_section:
             prompt_parts.append(batch_section)
-        if style_section:
-            prompt_parts.append(style_section)
+        if quoted_context:
+            prompt_parts.append(quoted_context)
+        if user_profile:
+            prompt_parts.append(user_profile)
+        if openclaw_rules:
+            prompt_parts.append(openclaw_rules)
         if markdown_section:
             prompt_parts.append(markdown_section)
+        if persona_seed:
+            prompt_parts.append("补充语气种子：\n" + persona_seed[:180])
         prompt_parts.append("当前群聊消息：\n" + normalized_text)
 
     prompt = "\n\n".join(part for part in prompt_parts if part)
@@ -334,16 +395,95 @@ def prepare_group_ai_prompt(group_id, user_text: str, user_id=None, log=None, ba
         "prompt": prompt,
         "prompt_mode": prompt_mode,
         "query_len": query_len,
-        "persona_chars": len(persona),
+        "persona_chars": len(persona_seed),
+        "persona_intensity": persona_intensity,
         "history_chars": history_chars,
         "history_items": len(history_lines),
+        "recent_image_chars": len(recent_image_context),
         "style_chars": len(style_section),
+        "user_profile_chars": len(user_profile),
         "markdown_chars": len(markdown_section),
         "batch_chars": len(batch_section),
+        "quoted_chars": len(quoted_context),
         "current_message_chars": len(normalized_text),
         "instruction_chars": instruction_chars,
         "prompt_chars": len(prompt),
     }
+
+
+def _parse_persona_intensity(group_config: dict) -> int:
+    raw = group_config.get("persona_intensity", DEFAULT_PERSONA_INTENSITY)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_PERSONA_INTENSITY
+    return max(0, min(100, value))
+
+
+def _build_scene_persona_rules(prompt_mode: str, persona_intensity: int) -> str:
+    if persona_intensity <= 25:
+        style = "低强度：平实表达，少梗，不主动整活。"
+    elif persona_intensity <= 60:
+        style = "中强度：可接梗和轻吐槽，但保持克制。"
+    else:
+        style = "高强度：允许更明显的群聊语气和梗，但仍需克制与安全。"
+    if prompt_mode == "compact":
+        return f"场景人格修饰：{style} 短句优先。"
+    return f"场景人格修饰：{style} 对提问给结构化回答。"
+
+
+def _build_lightweight_user_profile(style_section: str, user_id=None) -> str:
+    if not style_section:
+        return ""
+    compact = normalize_query_text(style_section)
+    if not compact:
+        return ""
+    compact = compact[:120].rstrip("，。；,.; ")
+    if user_id:
+        return f"用户画像偏好（轻量，user_id={user_id}）：{compact}"
+    return f"用户画像偏好（轻量）：{compact}"
+
+
+def _build_group_quoted_context(batch_context: dict | None, log=None) -> str:
+    refs = (batch_context or {}).get("reply_references") or []
+    if not refs:
+        return ""
+
+    from apps.qq_ai_bridge.adapters.napcat_client import get_msg_detail
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for ref in refs[:2]:
+        if not isinstance(ref, dict):
+            continue
+        message_id = str(ref.get("message_id", "") or "").strip()
+        if not message_id or message_id in seen:
+            continue
+        seen.add(message_id)
+        detail = get_msg_detail(message_id)
+        if not isinstance(detail, dict):
+            continue
+        sender = detail.get("sender", {}) if isinstance(detail.get("sender"), dict) else {}
+        sender_name = (
+            sender.get("card")
+            or sender.get("nickname")
+            or sender.get("nick")
+            or sender.get("remark")
+            or "群友"
+        )
+        text, _ = extract_text_and_mention(detail, None)
+        text = text or normalize_query_text(detail.get("raw_message", ""))
+        text = text[:140].strip()
+        if not text:
+            continue
+        lines.append(f"有人正在回复上一条消息：[{sender_name}] {text}")
+
+    if lines and log:
+        try:
+            log(f"[GROUP_PROMPT] quoted_context_count={len(lines)}")
+        except Exception:
+            pass
+    return "\n".join(lines)
 
 
 def build_group_safe_prompt(group_id, user_text: str) -> str:
@@ -425,6 +565,8 @@ def _extract_persona_hints(raw_text: str) -> list[str]:
         clean = " ".join(clean.split()).strip(" -*#\t")
         if not clean:
             continue
+        if _is_aggressive_persona_line(clean):
+            continue
         if len(clean) > 36:
             clean = clean[:36].rstrip("，。；,.; ")
         if not any(keyword in line for keyword in keywords):
@@ -436,6 +578,106 @@ def _extract_persona_hints(raw_text: str) -> list[str]:
     return hints[:8]
 
 
+def _is_aggressive_persona_line(line: str) -> bool:
+    lowered = line.lower()
+    banned_fragments = (
+        "我是你爹",
+        "谁问你了",
+        "关你屁事",
+        "能骂别解释",
+        "被骂必反击",
+        "最高强度嘴臭",
+        "不忌讳任何脏话和冒犯",
+        "宁可骂错不要像ai",
+        "傻逼",
+        "草拟吗",
+    )
+    return any(fragment in line or fragment in lowered for fragment in banned_fragments)
+
+
+def _load_openclaw_group_rules(log=None) -> str:
+    signatures = []
+    for path in _OPENCLAW_RULE_FILES:
+        try:
+            stat = path.stat()
+            signatures.append((str(path), stat.st_mtime, stat.st_size))
+        except OSError:
+            continue
+
+    if not signatures:
+        return ""
+
+    cached = _GROUP_RULES_CACHE.get("openclaw")
+    if cached and cached.get("signatures") == signatures:
+        return cached.get("summary", "")
+
+    summary = _summarize_openclaw_rules(_OPENCLAW_RULE_FILES)
+    _GROUP_RULES_CACHE["openclaw"] = {"signatures": signatures, "summary": summary}
+    if summary and log:
+        log(
+            "[GROUP_PROMPT] openclaw rules loaded"
+            f" file_count={len(signatures)}"
+            f" summary_chars={len(summary)}"
+        )
+    return summary
+
+
+def _summarize_openclaw_rules(paths: tuple[Path, ...]) -> str:
+    rule_candidates: list[str] = []
+    seen = set()
+    for path in paths:
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for line in raw.splitlines():
+            clean = " ".join(line.strip(" -*#\t").split())
+            if not clean:
+                continue
+            if clean in seen:
+                continue
+            if _match_openclaw_rule_line(clean):
+                seen.add(clean)
+                rule_candidates.append(clean)
+
+    if not rule_candidates:
+        return ""
+
+    selected: list[str] = []
+    total_chars = 0
+    for rule in rule_candidates:
+        short = rule[:42].rstrip("，。；,.; ")
+        candidate_len = len(short) + (2 if selected else 0)
+        if selected and total_chars + candidate_len > OPENCLAW_RULE_CHAR_BUDGET:
+            break
+        selected.append(short)
+        total_chars += candidate_len
+        if len(selected) >= 6:
+            break
+    if not selected:
+        return ""
+    return "工作区规则对齐： " + "；".join(selected)
+
+
+def _match_openclaw_rule_line(line: str) -> bool:
+    keywords = (
+        "默认使用中文",
+        "简洁",
+        "直接",
+        "实用",
+        "不是 candace 本人",
+        "群友，不是管理员",
+        "be genuinely helpful",
+        "not performatively helpful",
+        "be careful in group chats",
+        "never send half-baked replies",
+        "不替他做决定",
+        "不用每条都回",
+    )
+    lowered = line.lower()
+    return any(keyword in line or keyword in lowered for keyword in keywords)
+
+
 def _build_group_history_lines(chat_log_path: str, history_limit: int, history_char_budget: int) -> list[str]:
     chat_log = load_json_file(chat_log_path, [])
     lines: list[str] = []
@@ -445,13 +687,61 @@ def _build_group_history_lines(chat_log_path: str, history_limit: int, history_c
         message = normalize_query_text(str(item.get("message", "")).strip())
         if not message:
             continue
+        source = normalize_query_text(str(item.get("source", "")).strip())
+        image_type = normalize_query_text(str(item.get("image_type", "")).strip())
+        social_intent = normalize_query_text(str(item.get("social_intent", "")).strip())
+        hint = _build_history_hint(source=source, image_type=image_type, social_intent=social_intent)
         line = f"{user_id}: {message}"
+        if hint:
+            line = f"{line} {hint}"
         line_len = len(line)
         if lines and total_chars + line_len > history_char_budget:
             break
         lines.insert(0, line)
         total_chars += line_len
     return lines
+
+
+def _build_history_hint(source: str, image_type: str, social_intent: str) -> str:
+    hints: list[str] = []
+    if image_type:
+        hints.append(image_type)
+    if social_intent:
+        hints.append(social_intent)
+    if source.startswith("image_understanding:"):
+        action = source.split(":", 1)[1].strip()
+        if action:
+            hints.append(action)
+    if not hints:
+        return ""
+    return f"[{'/'.join(hints)}]"
+
+
+def _build_recent_image_context(chat_log_path: str) -> str:
+    chat_log = load_json_file(chat_log_path, [])
+    image_items = []
+    for item in reversed(chat_log):
+        image_type = normalize_query_text(str(item.get("image_type", "")).strip())
+        social_intent = normalize_query_text(str(item.get("social_intent", "")).strip())
+        if not image_type and not social_intent:
+            continue
+        message = normalize_query_text(str(item.get("message", "")).strip())
+        if not message:
+            continue
+        image_items.append((message, image_type, social_intent))
+        if len(image_items) >= 2:
+            break
+
+    if not image_items:
+        return ""
+
+    lines = []
+    labels = ("上一张图", "再上一张图")
+    for idx, (message, image_type, social_intent) in enumerate(image_items):
+        parts = [part for part in (image_type, social_intent) if part]
+        summary = "/".join(parts) if parts else "unknown"
+        lines.append(f"{labels[idx]}：{message} [{summary}]")
+    return "最近图片上下文：\n" + "\n".join(lines)
 
 
 def _build_group_batch_section(batch_context: dict | None) -> str:

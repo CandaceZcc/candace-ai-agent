@@ -28,6 +28,7 @@ OPENMAIC_NODE_VERSION="${OPENMAIC_NODE_VERSION:-22.22.2}"
 BRIDGE_PORT="${BRIDGE_PORT:-5000}"
 OPENMAIC_PORT_PRIMARY="${OPENMAIC_PORT_PRIMARY:-3000}"
 OPENMAIC_PORT_FALLBACK="${OPENMAIC_PORT_FALLBACK:-3002}"
+BRIDGE_ADMIN_UI_URL="http://127.0.0.1:${BRIDGE_PORT}/admin/groups"
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -74,6 +75,18 @@ open_terminal_window() {
       xterm -T "$title" -hold -e bash -lc "$cmd" >/dev/null 2>&1 &
       ;;
   esac
+}
+
+build_follow_log_cmd() {
+  local primary="$1"
+  cat <<EOF
+primary='$primary'
+target="\$primary"
+mkdir -p "\$(dirname "\$target")"
+touch "\$target"
+echo "跟随日志: \$target"
+tail -F -n 200 "\$target"
+EOF
 }
 
 ensure_env() {
@@ -351,6 +364,7 @@ status_one() {
 
 run_window_mode() {
   ensure_env
+  echo "Bridge 管理前端入口: $BRIDGE_ADMIN_UI_URL"
 
   local bridge_cmd="
     cd '$ROOT' || exit 1
@@ -381,19 +395,19 @@ run_window_mode() {
 
   echo "窗口模式：弹出 bridge / agent / openmaic 三个独立终端..."
   if bridge_running; then
-    open_terminal_window "runai-bridge-log" "tail -f '$BRIDGE_LOG'" || exit 1
+    open_terminal_window "runai-bridge" "$(build_follow_log_cmd "$BRIDGE_LOG")" || exit 1
   else
     open_terminal_window "runai-bridge" "$bridge_cmd" || exit 1
   fi
 
   if agent_running; then
-    open_terminal_window "runai-agent-log" "tail -f '$AGENT_LOG'" || exit 1
+    open_terminal_window "runai-agent" "$(build_follow_log_cmd "$AGENT_LOG")" || exit 1
   else
     open_terminal_window "runai-agent" "$agent_cmd" || exit 1
   fi
 
   if openmaic_running; then
-    open_terminal_window "runai-openmaic-log" "tail -f '$OPENMAIC_LOG'" || exit 1
+    open_terminal_window "runai-openmaic" "$(build_follow_log_cmd "$OPENMAIC_LOG")" || exit 1
   else
     open_terminal_window "runai-openmaic" "$openmaic_cmd" || exit 1
   fi
@@ -405,6 +419,7 @@ run_dev_mode() {
   load_nvm
 
   echo "开发模式：前台启动 bridge + agent + openmaic（实时日志）"
+  echo "Bridge 管理前端入口: $BRIDGE_ADMIN_UI_URL"
   echo "按 Ctrl+C 可停止全部进程。"
 
   (
@@ -482,6 +497,7 @@ start_all() {
   start_bridge_bg
   start_agent_bg
   start_openmaic_bg
+  say "Bridge 管理前端入口: $BRIDGE_ADMIN_UI_URL"
 }
 
 stop_all() {
@@ -499,11 +515,13 @@ status_all() {
 logs_one() {
   local name="$1"
   local file="$2"
-  if [[ ! -f "$file" ]]; then
-    echo "日志文件不存在：$file"
-    exit 1
+  local target="$file"
+  if [[ ! -f "$target" ]]; then
+    mkdir -p "$(dirname "$target")"
+    touch "$target"
   fi
-  tail -f "$file"
+  echo "跟随日志：$target"
+  tail -F -n 200 "$target"
 }
 
 case "${1:-window}" in

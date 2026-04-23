@@ -9,6 +9,7 @@ BLOCKED_EXACT = {
     "done",
     "null",
     "请求超时",
+    "[[no_reply]]",
 }
 
 BLOCKED_PHRASES = (
@@ -17,6 +18,7 @@ BLOCKED_PHRASES = (
     "processing",
     "done",
     "null",
+    "[[NO_REPLY]]",
 )
 
 

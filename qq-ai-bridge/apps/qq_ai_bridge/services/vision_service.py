@@ -1,5 +1,6 @@
 """Vision pipeline service for QQ bridge."""
 
+import re
 import traceback
 from typing import Iterable
 from urllib.parse import urlparse
@@ -76,7 +77,7 @@ def run_vision_pipeline(image_urls: str | Iterable[str], user_text: str, vision_
 
     if result.status == "ok":
         vision_log("[VISION] api success")
-        return result.content
+        return _postprocess_vision_reply(result.content, user_text=user_text)
 
     if result.status == "response_parse_failed":
         vision_log("[VISION][response_parse_failed] unable to parse response payload")
@@ -84,6 +85,53 @@ def run_vision_pipeline(image_urls: str | Iterable[str], user_text: str, vision_
 
     vision_log(f"[VISION][{result.status}] vision call failed and downgraded")
     return VISION_USER_FALLBACK
+
+
+def _postprocess_vision_reply(reply: str, user_text: str = "") -> str:
+    raw = str(reply or "").strip()
+    if not raw:
+        return "我看到了图，但我不太确定。"
+
+    # 优先解析模型三段式，避免把 `2)` 这种编号带进最终回复。
+    segments = re.findall(r"(?:^|\n)\s*(\d+)\)\s*(.+?)(?=(?:\n\s*\d+\))|$)", raw, flags=re.DOTALL)
+    parts = {}
+    for index, content in segments:
+        parts[index] = " ".join(content.split()).strip("，。！？,.!?:：； ")
+
+    objective = parts.get("1", "")
+    vibe = parts.get("2", "")
+    uncertain = parts.get("3", "")
+
+    if not objective:
+        normalized = " ".join(raw.splitlines()).strip()
+        normalized = re.sub(r"(?:^|\s)\d+\)\s*", " ", normalized)
+        objective = " ".join(normalized.split()).strip("，。！？,.!?:：； ")
+
+    objective = objective.replace("这是一张", "这图是").replace("这是一只", "图里是只")
+    objective = objective.replace("卡通", "Q版").replace("玩偶", "摆件")
+    objective = objective.replace("哈哈", "").replace("太可爱了", "").replace("萌翻", "")
+    objective = " ".join(objective.split()).strip("，。！？,.!?:：； ")
+
+    if not objective:
+        objective = "我看到了图。"
+
+    if len(objective) > 24:
+        objective = objective[:24].rstrip("，。！？,.!?:：； ") + "。"
+
+    text = objective
+    if vibe and len(vibe) <= 12:
+        cleaned_vibe = vibe.replace("哈哈", "").replace("太可爱了", "挺可爱")
+        cleaned_vibe = cleaned_vibe.strip("，。！？,.!?:：； ")
+        if cleaned_vibe:
+            text = f"{text} {cleaned_vibe}"
+
+    asks_detail = any(token in str(user_text or "") for token in ("?", "？", "看清", "写了啥", "是什么", "啥意思", "怎么"))
+    if "不确定" in uncertain and "不太确定" not in text:
+        text = f"{text} 我不太确定。"
+    elif asks_detail and "不确定" not in text:
+        text = f"{text} 我不太确定。"
+
+    return " ".join(text.split())
 
 
 def _mask_request_url(url: str) -> str:

@@ -43,7 +43,7 @@ def execute_agent_plan(user_id: int, plan: Dict[str, Any]) -> Dict[str, Any]:
 
         params = action.get("params", {})
         try:
-            res = call_pc_agent_api(f"execute/{action_name}", data=params)
+            res = call_pc_agent_api(action_name, data=params)
             results.append(res)
         except requests.RequestException as e:
             results.append({"status": "error", "message": str(e)})
@@ -55,7 +55,10 @@ def get_agent_session(user_id: int) -> Dict[str, Any]:
     """Retrieve the current session state for an agent user."""
     try:
         res = call_pc_agent_api("session/get", data={"user_id": user_id})
-        return res if res.get("status") == "ok" else {}
+        if res.get("status") == "ok":
+            session = res.get("session")
+            return session if isinstance(session, dict) else {}
+        return {}
     except requests.RequestException as e:
         logger.error("Failed to retrieve agent session key: %s", e)
         return {}

@@ -5,6 +5,10 @@ import os
 PC_AGENT_PORT = int(os.environ.get("PC_AGENT_PORT", 5050))
 PLAYWRIGHT_PROFILE_DIR = os.environ.get(
     "PC_AGENT_PLAYWRIGHT_PROFILE_DIR",
+    os.path.expanduser("~/.candace/browser-profile"),
+)
+PLAYWRIGHT_LEGACY_PROFILE_DIR = os.environ.get(
+    "PC_AGENT_PLAYWRIGHT_LEGACY_PROFILE_DIR",
     os.path.expanduser("~/.cache/pc-agent/playwright-profile"),
 )
 PLAYWRIGHT_HEADLESS = os.environ.get("PC_AGENT_PLAYWRIGHT_HEADLESS", "").lower() in {"1", "true", "yes"}

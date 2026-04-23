@@ -26,6 +26,8 @@ browser/profiles/
 .env
 .env.*
 !.env.example
+.local.env
+**/.local.env
 zcc
 zcc.pub
 

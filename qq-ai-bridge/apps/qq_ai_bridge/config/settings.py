@@ -45,6 +45,20 @@ def _get_int_set_env(name: str, default: tuple[int, ...] = ()) -> set[int]:
     return parsed
 
 
+def _resolve_project_path(raw_value: str, fallback_relative: str) -> str:
+    """
+    Resolve path env vars relative to qq-ai-bridge root by default.
+    This avoids cwd-dependent config/data paths after restart.
+    """
+    value = (raw_value or "").strip()
+    if not value:
+        return str((QQ_AI_BRIDGE_ROOT / fallback_relative).resolve())
+    candidate = Path(value).expanduser()
+    if candidate.is_absolute():
+        return str(candidate.resolve())
+    return str((QQ_AI_BRIDGE_ROOT / candidate).resolve())
+
+
 NAPCAT_HTTP = os.getenv("NAPCAT_HTTP", "http://127.0.0.1:3001").strip() or "http://127.0.0.1:3001"
 NAPCAT_TOKEN = os.getenv("NAPCAT_TOKEN", "hajimi").strip() or "hajimi"
 ALLOWED_PRIVATE_USER = _get_int_env("ALLOWED_PRIVATE_USER", 273007866)
@@ -58,14 +72,15 @@ REPO_ROOT = QQ_AI_BRIDGE_ROOT.parent
 MAX_REPLY_LEN = 1500
 MAX_FILE_CONTENT_LEN = 8000
 
-BASE_DATA_DIR = os.getenv("BASE_DATA_DIR", "./data").strip() or "./data"
+BASE_DATA_DIR = _resolve_project_path(os.getenv("BASE_DATA_DIR", ""), "data")
 PRIVATE_UPLOAD_DIR = os.path.join(BASE_DATA_DIR, "private_uploads")
 GROUP_UPLOAD_DIR = os.path.join(BASE_DATA_DIR, "group_uploads")
 PRIVATE_USERS_DIR = os.path.join(BASE_DATA_DIR, "private_users")
 GROUP_DATA_DIR = os.path.join(BASE_DATA_DIR, "groups")
-CONFIG_DIR = os.getenv("CONFIG_DIR", "./config").strip() or "./config"
+BROWSER_AGENT_TASKS_PATH = os.path.join(BASE_DATA_DIR, "browser_agent_tasks.json")
+CONFIG_DIR = _resolve_project_path(os.getenv("CONFIG_DIR", ""), "config")
 GROUP_CONFIG_PATH = os.path.join(CONFIG_DIR, "groups.json")
-IMAGE_TMP_DIR = "./tmp/images"
+IMAGE_TMP_DIR = _resolve_project_path(os.getenv("IMAGE_TMP_DIR", ""), "tmp/images")
 REMINDERS_PATH = os.path.join(BASE_DATA_DIR, "reminders.json")
 SCHEDULER_STATE_PATH = os.path.join(BASE_DATA_DIR, "scheduler_state.json")
 SCHEDULE_PATH = os.path.join(BASE_DATA_DIR, "schedule.json")
@@ -102,6 +117,10 @@ MAX_ARCHIVE_LISTING = 40
 MAX_ARCHIVE_PREVIEW_FILES = 5
 
 PC_AGENT_URL = "http://127.0.0.1:5050"
+BROWSER_AGENT_HTTP_TIMEOUT_SECONDS = max(3, _get_int_env("BROWSER_AGENT_HTTP_TIMEOUT_SECONDS", 12))
+BROWSER_AGENT_MAX_TASKS = max(5, _get_int_env("BROWSER_AGENT_MAX_TASKS", 30))
+BROWSER_AGENT_MAX_STEPS = max(3, _get_int_env("BROWSER_AGENT_MAX_STEPS", 8))
+BROWSER_AGENT_MAX_REPEAT_ACTIONS = max(1, _get_int_env("BROWSER_AGENT_MAX_REPEAT_ACTIONS", 2))
 AGENT_MAX_ITERATIONS = 6
 AGENT_MAX_HISTORY = 8
 AGENT_MAX_OCR_CHARS = 1200
@@ -206,6 +225,39 @@ AGENT_SYSTEM_PROMPT = """
 17. 在浏览器页面里，scroll 优先使用 {"action":"scroll","params":{"clicks":-700,"method":"keys"}}，这样通常比鼠标滚轮更稳定
 """
 
+BROWSER_AGENT_LOOP_PROMPT = """
+你是一个本地浏览器 Agent 规划器。你只能为当前浏览器页面生成下一步 JSON 动作。
+
+返回格式：
+{
+  "reply": "给用户的简短进度说明",
+  "done": false,
+  "actions": [
+    {"action":"xxx","params":{}}
+  ]
+}
+
+允许的 action:
+- open_url
+- click_text
+- find_text
+- ocr
+- extract_deadline
+- wait
+- scroll
+
+规则：
+1. 只返回 JSON，不要 markdown。
+2. 每次最多返回 2 个 action。
+3. 优先 extract_deadline、click_text、find_text，不要猜固定坐标。
+4. 如果已经看到 deadline / ddl / due / assignment / 作业 / 截止 信息，优先 extract_deadline。
+5. 如果明显处于登录、统一身份认证、SSO、验证码、人机验证页面，必须 done=true 且 actions=[]，并在 reply 里要求人工接管。
+6. 如果最近动作重复且页面几乎没变化，不要继续重复；done=true 并说明卡住位置。
+7. 对 portal / moodle / ispace / dashboard / assignment 这类校园门户，可以合理点击 Sign in、登录、Course、Assignments、Timeline、Dashboard。
+8. 如果当前还没打开目标网站，并且 task 里包含明确 URL 或域名，可以先 open_url。
+9. 如果任务已经完成，返回 done=true 且 actions=[]。
+"""
+
 KIMI_API_KEY = os.getenv("KIMI_API_KEY", "").strip()
 KIMI_BASE_URL = os.getenv("KIMI_BASE_URL", "https://api.moonshot.cn/v1").strip() or "https://api.moonshot.cn/v1"
 KIMI_MODEL = os.getenv("KIMI_MODEL", "moonshot-v1-8k").strip() or "moonshot-v1-8k"
@@ -227,3 +279,7 @@ VOCAT_MD_ROOT = Path(
     os.getenv("VOCAT_MD_ROOT", str(REPO_ROOT)).strip() or str(REPO_ROOT)
 ).expanduser()
 VOCAT_SKILL_TIMEOUT_SECONDS = max(2, _get_int_env("VOCAT_SKILL_TIMEOUT_SECONDS", 8))
+
+# Group routing policy
+GLOBAL_LISTEN_GROUP_IDS = _get_int_set_env("GLOBAL_LISTEN_GROUP_IDS", (1065429760,))
+VISION_GROUP_COOLDOWN_SECONDS = max(0, _get_int_env("VISION_GROUP_COOLDOWN_SECONDS", 45))

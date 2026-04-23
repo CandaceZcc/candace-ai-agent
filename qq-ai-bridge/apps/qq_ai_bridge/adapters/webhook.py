@@ -4,7 +4,11 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
-from apps.qq_ai_bridge.adapters.message_parser import extract_text_and_mention, normalize_query_text
+from apps.qq_ai_bridge.adapters.message_parser import (
+    extract_reply_reference,
+    extract_text_and_mention,
+    normalize_query_text,
+)
 from apps.qq_ai_bridge.runtime import (
     _send_group_msg_raw,
     _send_private_msg_raw,
@@ -19,7 +23,10 @@ from apps.qq_ai_bridge.config.settings import (
     VOCAT_TTS_API_URL,
     VOCAT_WEBHOOK_TOKEN,
 )
-from apps.qq_ai_bridge.services.file_service import handle_file_message
+from apps.qq_ai_bridge.services.file_service import (
+    extract_file_info as extract_uploaded_file_info,
+    handle_file_message,
+)
 from apps.qq_ai_bridge.services.group_chat_service import load_group_config, should_log_group
 from apps.qq_ai_bridge.services.style_service import capture_group_style
 from apps.qq_ai_bridge.services.vocat_service import (
@@ -29,6 +36,8 @@ from apps.qq_ai_bridge.services.vocat_service import (
 from apps.qq_ai_bridge.skills.base import SkillContext
 from apps.qq_ai_bridge.skills.registry import build_skill_registry
 from apps.qq_ai_bridge.skills.router import dispatch_skill
+from storage_utils import is_group_whitelisted
+from apps.qq_ai_bridge.config.settings import GROUP_CONFIG_PATH
 
 webhook_bp = Blueprint("webhook", __name__)
 SKILL_REGISTRY = build_skill_registry()
@@ -62,8 +71,10 @@ class MessageParser:
         else:
             nick = sender.get("nickname") or sender.get("nick") or sender.get("remark") or str(user_id)
 
-        file_info = extract_file_info(data)
+        file_info = extract_uploaded_file_info(data)
         if file_info:
+            file_info = file_info.copy()
+            file_info["message_id"] = data.get("message_id")
             return {
                 "type": "file",
                 "msg_type": msg_type,
@@ -72,9 +83,12 @@ class MessageParser:
                 "file_info": file_info,
                 "raw_message": raw_message_text,
                 "nick": nick,
+                "message_id": data.get("message_id"),
             }
 
         text, is_mentioned = extract_text_and_mention(data, self_id)
+        image_inputs = extract_image_inputs(data, text)
+        reply_reference = extract_reply_reference(data)
         return {
             "type": "text",
             "msg_type": msg_type,
@@ -85,29 +99,73 @@ class MessageParser:
             "raw_message": raw_message_text,
             "nick": nick,
             "timestamp": data.get("time"),
+            "image_inputs": image_inputs,
+            "reply_reference": reply_reference,
+            "message_id": data.get("message_id"),
         }
 
 
-def extract_file_info(data: dict) -> dict | None:
+def extract_image_inputs(data: dict, text: str) -> dict:
+    """Extract image URLs from OneBot/NapCat payloads."""
+    image_urls: list[str] = []
+    dropped_image_urls: list[str] = []
+    resolved_relative_urls: list[str] = []
+
+    def _collect_url(raw_url) -> None:
+        url = normalize_query_text(str(raw_url or ""))
+        if not url:
+            return
+        if url.startswith("http://") or url.startswith("https://"):
+            image_urls.append(url)
+            return
+        if url.startswith("//"):
+            resolved = "https:" + url
+            image_urls.append(resolved)
+            resolved_relative_urls.append(resolved)
+            return
+        dropped_image_urls.append(url)
+
     message_chain = data.get("message", [])
     if isinstance(message_chain, list):
         for elem in message_chain:
-            if elem.get("type") == "file":
-                file_elem = elem.get("data", {})
-                return {
-                    "name": file_elem.get("fileName") or file_elem.get("name"),
-                    "url": (
-                        file_elem.get("downloadUrl")
-                        or file_elem.get("url")
-                        or file_elem.get("fileUrl")
-                    ),
-                    "size": file_elem.get("fileSize"),
-                    "uuid": file_elem.get("fileUuid") or file_elem.get("fileId"),
-                    "base64": file_elem.get("base64"),
-                }
-    return None
+            if not isinstance(elem, dict):
+                continue
+            elem_type = str(elem.get("type", "")).lower()
+            payload = elem.get("data", {}) if isinstance(elem.get("data"), dict) else {}
+            if elem_type not in {"image", "img", "photo", "pic"}:
+                continue
+            for key in ("url", "file", "downloadUrl", "image_url", "originUrl", "src"):
+                _collect_url(payload.get(key))
 
+    elements = data.get("elements", [])
+    if isinstance(elements, list):
+        for elem in elements:
+            if not isinstance(elem, dict):
+                continue
+            pic_elem = elem.get("picElement")
+            if isinstance(pic_elem, dict):
+                for key in ("sourcePath", "sourceUrl", "url", "md5"):
+                    _collect_url(pic_elem.get(key))
+            image_elem = elem.get("imageElement")
+            if isinstance(image_elem, dict):
+                for key in ("url", "sourceUrl", "originUrl", "downloadUrl"):
+                    _collect_url(image_elem.get(key))
 
+    deduped_urls = []
+    seen = set()
+    for url in image_urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        deduped_urls.append(url)
+
+    return {
+        "has_image": bool(deduped_urls),
+        "image_urls": deduped_urls,
+        "text": normalize_query_text(text),
+        "dropped_image_urls": dropped_image_urls,
+        "resolved_relative_urls": resolved_relative_urls,
+    }
 class SkillDispatcher:
     @staticmethod
     def dispatch(parsed_data: dict) -> None:
@@ -136,12 +194,15 @@ class SkillDispatcher:
 
         if is_group and group_id:
             group_config = load_group_config(group_id)
+            if bool(group_config.get("ignore", False)) or not bool(group_config.get("enabled", True)):
+                print(f"[ROUTE] group ignored by config group_id={group_id} enabled={group_config.get('enabled', True)}")
+                return
             should_log = should_log_group(group_id)
             if group_config.get("learn_style", False):
                 capture_group_style("data", group_id, user_id, effective_text, log=print)
 
         context = SkillContext(
-            data={},
+            data=parsed_data,
             post_type="message",
             message_type=msg_type,
             user_id=user_id,
@@ -153,10 +214,11 @@ class SkillDispatcher:
             normalized_msg=effective_text,
             effective_text=effective_text,
             mentioned_self=is_mentioned,
-            image_inputs={},
+            image_inputs=parsed_data.get("image_inputs", {}),
             file_info=None,
             logger=print,
             timestamp=parsed_data.get("timestamp"),
+            message_id=parsed_data.get("message_id"),
             nick=parsed_data.get("nick", ""),
             raw_message=raw_message,
         )
@@ -190,6 +252,8 @@ def qq_webhook():
         try:
             parsed = MessageParser.parse_common_data(data)
             if parsed:
+                if parsed.get("msg_type") == "group" and not is_group_whitelisted(GROUP_CONFIG_PATH, parsed.get("group_id")):
+                    return jsonify({"status": "ok", "skipped": "group_not_whitelisted"})
                 if parsed.get("type") == "text":
                     preview = _preview_text(parsed.get("text", ""))
                     if parsed.get("msg_type") == "private":

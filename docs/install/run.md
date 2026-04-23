@@ -20,6 +20,15 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 ```
 
+## 使用项目虚拟环境（推荐）
+
+系统自带的 `python3` 若未装依赖，会报 `No module named 'dotenv'`。请优先：
+
+```bash
+source .venv/bin/activate
+# 或直接用： .venv/bin/python3 qq-ai-bridge/bridge.py
+```
+
 ## 准备配置
 
 在启动前，至少确认下面这些信息已经可用：
@@ -30,7 +39,7 @@ python3 -m pip install -r requirements.txt
 - reminder / scheduler 配置
 - （可选）OpenClaw / OCAI 命令路径
 
-如果仓库中有 `.env.example`，建议先复制成 `.env` 再修改。
+如果仓库中有 `.env.example`，建议先复制成 `~/.candace/qq-ai-bridge.env`（推荐，不会进 Git）或 `qq-ai-bridge/.local.env`，再填入真实 Key。`qq-ai-bridge/.env` 仅可放非敏感默认项；模板见 `qq-ai-bridge/.env.example`。
 
 ## 启动 QQ bridge
 

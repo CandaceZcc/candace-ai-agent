@@ -1,5 +1,6 @@
 from apps.qq_ai_bridge.services.group_chat_service import enqueue_group_text
 from apps.qq_ai_bridge.services.private_chat_service import enqueue_private_text
+from apps.qq_ai_bridge.config.settings import GLOBAL_LISTEN_GROUP_IDS
 from apps.qq_ai_bridge.skills.base import Skill, SkillContext, SkillResult
 
 
@@ -12,7 +13,6 @@ class ChatSkill(Skill):
 
     def handle(self, context: SkillContext) -> SkillResult:
         query = context.effective_text
-        reply_all_messages = context.group_config.get("reply_all_messages", False)
         ai_prefix = str(context.group_config.get("ai_prefix", "")).strip()
 
         ai_prefix_triggered = False
@@ -43,6 +43,9 @@ class ChatSkill(Skill):
             if not query:
                 return SkillResult(handled=True, source=self.name, status="ignore")
 
+            configured_reply_all = bool(context.group_config.get("reply_all_messages", False))
+            fallback_global_listen = int(context.group_id or 0) in GLOBAL_LISTEN_GROUP_IDS
+            global_listen = configured_reply_all or fallback_global_listen
             queue_info = enqueue_group_text(
                 context.group_id,
                 context.user_id,
@@ -50,12 +53,26 @@ class ChatSkill(Skill):
                 query,
                 group_config=context.group_config,
                 explicit_trigger=bool(
-                    context.mentioned_self or reply_all_messages or ai_prefix_triggered
+                    context.mentioned_self or ai_prefix_triggered or global_listen
                 ),
                 timestamp=context.timestamp,
+                message_id=context.data.get("message_id"),
+                reply_reference=context.data.get("reply_reference"),
                 log=context.log,
             )
-            context.log(f"[ROUTE] 群聊消息已入队 group_id={context.group_id}")
+            if queue_info.get("queued"):
+                context.log(
+                    f"[ROUTE] 群聊消息已入队 group_id={context.group_id}"
+                    f" explicit_trigger={bool(context.mentioned_self or ai_prefix_triggered or global_listen)}"
+                    f" reply_all_messages={bool(context.group_config.get('reply_all_messages', False))}"
+                )
+            else:
+                context.log(
+                    f"[ROUTE] 群聊消息未入队 group_id={context.group_id}"
+                    f" reason={queue_info.get('reason')}"
+                    f" explicit_trigger={bool(context.mentioned_self or ai_prefix_triggered or global_listen)}"
+                    f" reply_all_messages={bool(context.group_config.get('reply_all_messages', False))}"
+                )
             return SkillResult(
                 handled=True,
                 source=self.name,

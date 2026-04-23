@@ -17,6 +17,12 @@ from storage_utils import (
 
 from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
 from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
+from apps.qq_ai_bridge.services.emoji_service import (
+    build_face_cq,
+    extract_emoji_name,
+    is_emoji_request,
+    pick_face_cq,
+)
 from apps.qq_ai_bridge.services.prompt_service import (
     build_private_ai_prompt,
     prepare_private_ai_prompt,
@@ -152,6 +158,28 @@ def _run_private_chat_worker(user_id) -> None:
                 f" trimmed_chars={prompt_payload['history_chars']}"
                 f" user_id={user_id}"
             )
+        # Explicit emoji request in private chat should be handled directly.
+        if is_emoji_request(merged_text):
+            requested_name = extract_emoji_name(merged_text)
+            if requested_name:
+                face_message = build_face_cq(requested_name) or "[CQ:face,id=182]"
+                chosen_name = requested_name
+            else:
+                chosen_name, face_message = pick_face_cq(seed=f"{user_id}:{current_message_ts}:{merged_text}")
+            send_private_msg(user_id, face_message)
+            append_private_history(
+                BASE_DATA_DIR,
+                user_id,
+                merged_text,
+                f"[emoji:{chosen_name}]",
+                limit=20,
+                user_timestamp=current_message_ts or None,
+            )
+            print(
+                f"[PRIVATE_CHAT] emoji_replied user_id={user_id}"
+                f" emoji={chosen_name}"
+            )
+            continue
         reply = call_ai(
             prompt_payload["prompt"],
             metadata={
@@ -165,6 +193,12 @@ def _run_private_chat_worker(user_id) -> None:
                 "prompt_chars": prompt_payload["prompt_chars"],
             },
         )
+        if "[[NO_REPLY]]" in str(reply or ""):
+            emoji_name, reply = pick_face_cq(seed=f"no_reply:{user_id}:{current_message_ts}:{merged_text}")
+            print(
+                f"[PRIVATE_CHAT] replaced_no_reply_with_emoji user_id={user_id}"
+                f" emoji={emoji_name}"
+            )
         append_private_history(
             BASE_DATA_DIR,
             user_id,

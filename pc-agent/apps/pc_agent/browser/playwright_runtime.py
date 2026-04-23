@@ -3,8 +3,26 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any, Optional
+
+import numpy as np
+import pytesseract
+from PIL import Image
+
+from apps.pc_agent.desktop.ocr import extract_targets, match_ocr_text
+
+
+DEADLINE_KEYWORDS = (
+    "due",
+    "deadline",
+    "ddl",
+    "作业",
+    "截止",
+    "assignment",
+    "timeline",
+)
 
 
 class PlaywrightRuntime:
@@ -83,7 +101,101 @@ class PlaywrightRuntime:
         """Return a normalized error payload."""
         message = str(error)
         self._log(f"{action} error: {message}")
-        return {"status": "error", "action": action, "error": message}
+        return {"status": "error", "action": action, "error": message, "error_code": "runtime_error"}
+
+    def health(self) -> dict:
+        """Return minimal browser runtime health."""
+        started = self._context is not None
+        active_url = ""
+        tab_count = 0
+        if started:
+            try:
+                page = self._ensure_page()
+                active_url = page.url
+                tab_count = len(self.context.pages)
+            except Exception:
+                active_url = ""
+                tab_count = 0
+        return {
+            "started": started,
+            "headless": self.headless,
+            "active_tab_url": active_url,
+            "tab_count": tab_count,
+        }
+
+    def _locators_for_text(self, page, target: str):
+        """Build a small set of locators for human-facing text."""
+        escaped = re.escape(target)
+        return [
+            page.get_by_role("button", name=re.compile(escaped, re.IGNORECASE)),
+            page.get_by_role("link", name=re.compile(escaped, re.IGNORECASE)),
+            page.get_by_text(re.compile(escaped, re.IGNORECASE)),
+            page.locator(f"text=/{escaped}/i"),
+        ]
+
+    def _screenshot_path(self, prefix: str = "shot") -> str:
+        filename = f"{prefix}-{int(time.time() * 1000)}.png"
+        return os.path.join(self.screenshot_dir, filename)
+
+    def _find_text_dom(self, targets: list[str]) -> dict | None:
+        page = self._ensure_page()
+        for target in targets:
+            if not target:
+                continue
+            for locator in self._locators_for_text(page, target):
+                try:
+                    count = locator.count()
+                except Exception:
+                    continue
+                if count <= 0:
+                    continue
+                try:
+                    first = locator.first
+                    first.wait_for(timeout=1500)
+                    bbox = first.bounding_box() or {}
+                    return {
+                        "status": "ok",
+                        "found": True,
+                        "matched_text": target,
+                        "strategy": "dom",
+                        "selector_hint": "text",
+                        "bounds": bbox,
+                    }
+                except Exception:
+                    return {
+                        "status": "ok",
+                        "found": True,
+                        "matched_text": target,
+                        "strategy": "dom",
+                        "selector_hint": "text",
+                    }
+        return None
+
+    def _ocr_matches_from_screenshot(self, screenshot_path: str, targets: list[str]) -> list[dict]:
+        img = Image.open(screenshot_path)
+        ocr_data = pytesseract.image_to_data(np.array(img), lang="chi_sim+eng", output_type=pytesseract.Output.DICT)
+        matches: list[dict] = []
+        total = len(ocr_data["text"])
+        for idx in range(total):
+            text = str(ocr_data["text"][idx] or "").strip()
+            if not text or not match_ocr_text(targets, text):
+                continue
+            x = int(ocr_data["left"][idx])
+            y = int(ocr_data["top"][idx])
+            w = int(ocr_data["width"][idx])
+            h = int(ocr_data["height"][idx])
+            matches.append(
+                {
+                    "text": text,
+                    "x": x,
+                    "y": y,
+                    "w": w,
+                    "h": h,
+                    "center_x": x + w // 2,
+                    "center_y": y + h // 2,
+                }
+            )
+        return matches
 
     def open_url(self, url: str, wait_until: str = "domcontentloaded", new_tab: bool = False) -> dict:
         """Navigate to a URL, optionally in a new tab."""
@@ -156,13 +268,139 @@ class PlaywrightRuntime:
         except Exception as e:
             return self._error("get_page_text", e)
 
+    def ocr(self, max_chars: int = 8000) -> dict:
+        """Return page text, falling back to OCR when needed."""
+        text_result = self.get_page_text(max_chars=max_chars)
+        text = str(text_result.get("text", "")).strip()
+        if text_result.get("status") == "ok" and text:
+            return self._result(action="ocr", text=text[:max_chars], source="page_text")
+
+        try:
+            shot_result = self.screenshot(path=self._screenshot_path("ocr"), full_page=False)
+            if shot_result.get("status") != "ok":
+                return shot_result
+            screenshot_path = str(shot_result["path"])
+            text = pytesseract.image_to_string(Image.open(screenshot_path), lang="chi_sim+eng").strip()
+            return self._result(action="ocr", text=text[:max_chars], source="ocr_fallback", path=screenshot_path)
+        except Exception as e:
+            return self._error("ocr", e)
+
+    def find_text(self, data: dict[str, Any]) -> dict:
+        """Find text in the current browser page using DOM first, OCR second."""
+        try:
+            targets = extract_targets(data)
+            if not targets:
+                return {"status": "error", "action": "find_text", "error_code": "invalid_request", "message": "text or texts is required"}
+
+            dom_result = self._find_text_dom(targets)
+            if dom_result is not None:
+                return {"action": "find_text", **dom_result}
+
+            shot_result = self.screenshot(path=self._screenshot_path("find-text"), full_page=False)
+            if shot_result.get("status") != "ok":
+                return shot_result
+            matches = self._ocr_matches_from_screenshot(str(shot_result["path"]), targets)
+            if matches:
+                first = matches[0]
+                return self._result(
+                    action="find_text",
+                    found=True,
+                    matched_text=first["text"],
+                    strategy="ocr",
+                    count=len(matches),
+                    matches=matches,
+                )
+            return {
+                "status": "not_found",
+                "action": "find_text",
+                "found": False,
+                "targets": targets,
+                "strategy": "ocr",
+                "error_code": "text_not_found",
+            }
+        except Exception as e:
+            return self._error("find_text", e)
+
+    def click_text(self, data: dict[str, Any]) -> dict:
+        """Click text in the current browser page using DOM first, OCR second."""
+        try:
+            targets = extract_targets(data)
+            if not targets:
+                return {"status": "error", "action": "click_text", "error_code": "invalid_request", "message": "text or texts is required"}
+
+            page = self._ensure_page()
+            for target in targets:
+                for locator in self._locators_for_text(page, target):
+                    try:
+                        if locator.count() <= 0:
+                            continue
+                        locator.first.click(timeout=2000)
+                        return self._result(
+                            action="click_text",
+                            matched_text=target,
+                            strategy="dom",
+                        )
+                    except Exception:
+                        continue
+
+            shot_result = self.screenshot(path=self._screenshot_path("click-text"), full_page=False)
+            if shot_result.get("status") != "ok":
+                return shot_result
+            matches = self._ocr_matches_from_screenshot(str(shot_result["path"]), targets)
+            if matches:
+                first = matches[0]
+                page.mouse.click(first["center_x"], first["center_y"])
+                return self._result(
+                    action="click_text",
+                    matched_text=first["text"],
+                    strategy="ocr",
+                    center_x=first["center_x"],
+                    center_y=first["center_y"],
+                )
+            return {
+                "status": "not_found",
+                "action": "click_text",
+                "targets": targets,
+                "strategy": "ocr",
+                "error_code": "text_not_found",
+            }
+        except Exception as e:
+            return self._error("click_text", e)
+
+    def extract_deadline(self, max_chars: int = 12000) -> dict:
+        """Extract visible deadline-like lines from the current page."""
+        try:
+            page = self._ensure_page()
+            text_result = self.ocr(max_chars=max_chars)
+            if text_result.get("status") != "ok":
+                return text_result
+            text = str(text_result.get("text", "") or "")
+            page_title = page.title()
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            items = []
+            for line in lines:
+                lower = line.lower()
+                for keyword in DEADLINE_KEYWORDS:
+                    if keyword in lower or keyword in line:
+                        items.append(
+                            {
+                                "text": line,
+                                "matched_keyword": keyword,
+                                "page_title": page_title,
+                                "source": text_result.get("source", "page_text"),
+                            }
+                        )
+                        break
+            return self._result(action="extract_deadline", items=items, count=len(items), page_title=page_title)
+        except Exception as e:
+            return self._error("extract_deadline", e)
+
     def screenshot(self, path: Optional[str] = None, full_page: bool = True) -> dict:
         """Save a screenshot and return its path."""
         try:
             page = self._ensure_page()
             if path is None:
-                filename = f"shot-{int(time.time())}.png"
-                path = os.path.join(self.screenshot_dir, filename)
+                path = self._screenshot_path()
             page.screenshot(path=path, full_page=full_page)
             self._log(f"screenshot {path}")
             return self._result(action="screenshot", path=path)

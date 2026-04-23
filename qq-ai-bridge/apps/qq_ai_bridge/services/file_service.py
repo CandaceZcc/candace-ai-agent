@@ -2,6 +2,7 @@
 
 import mimetypes
 import os
+import re
 import shutil
 import stat
 import xml.etree.ElementTree as ET
@@ -9,9 +10,11 @@ import zipfile
 
 import requests
 from shared.ai.llm_client import call_ai
+from urllib.parse import unquote, urlparse
 
 from apps.qq_ai_bridge.adapters.napcat_client import (
     fetch_napcat_file_download_info,
+    get_msg_detail,
     send_group_msg,
     send_private_msg,
 )
@@ -29,9 +32,48 @@ from storage_utils import load_private_context
 
 def extract_file_info(event_data):
     """Extract file info from NapCat / OneBot message payloads."""
+    def _first_present(payload: dict, *keys: str):
+        for key in keys:
+            value = payload.get(key)
+            if value not in (None, "", []):
+                return value
+        return None
+
+    def _normalize_file_info(payload: dict) -> dict:
+        return {
+            "name": _first_present(payload, "fileName", "name", "file_name", "file"),
+            "url": _first_present(payload, "downloadUrl", "url", "fileUrl", "file_url"),
+            "size": _first_present(payload, "fileSize", "size", "file_size"),
+            "uuid": _first_present(payload, "fileUuid", "fileId", "file_id", "uuid"),
+            "sub_id": _first_present(payload, "fileSubId", "subId", "file_sub_id", "sub_id"),
+            "path": _first_present(payload, "filePath", "path", "file_path"),
+            "raw": payload,
+        }
+
+    def _is_meaningful(info: dict) -> bool:
+        return any(info.get(key) for key in ("name", "url", "uuid", "path"))
+
+    def _parse_cq_file(raw_text: str) -> dict | None:
+        # Example: [CQ:file,file=xxx.docx,url=https://...,file_id=...]
+        if "[CQ:file" not in raw_text:
+            return None
+        match = re.search(r"\[CQ:file,([^\]]+)\]", raw_text)
+        if not match:
+            return None
+        params = {}
+        for item in match.group(1).split(","):
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            params[key.strip()] = value.strip()
+        info = _normalize_file_info(params)
+        return info if _is_meaningful(info) else None
+
     raw_message = event_data.get("message")
     raw_obj = event_data.get("raw", {})
     elements = raw_obj.get("elements", [])
+    if not elements:
+        elements = event_data.get("elements", [])
     file_signal_detected = False
     if isinstance(elements, list):
         for elem in elements:
@@ -42,17 +84,10 @@ def extract_file_info(event_data):
             if file_elem is not None:
                 file_signal_detected = True
             if isinstance(file_elem, dict):
-                file_info = {
-                    "name": file_elem.get("fileName") or file_elem.get("name"),
-                    "url": file_elem.get("downloadUrl") or file_elem.get("url") or file_elem.get("fileUrl"),
-                    "size": file_elem.get("fileSize"),
-                    "uuid": file_elem.get("fileUuid") or file_elem.get("fileId"),
-                    "sub_id": file_elem.get("fileSubId"),
-                    "path": file_elem.get("filePath"),
-                    "raw": file_elem,
-                }
-                print(f"[FILE] extract_file_info 命中 raw.elements: {file_info}")
-                return file_info
+                file_info = _normalize_file_info(file_elem)
+                if _is_meaningful(file_info):
+                    print(f"[FILE] extract_file_info 命中 raw.elements: {file_info}")
+                    return file_info
 
     if isinstance(raw_message, list):
         for seg in raw_message:
@@ -61,17 +96,25 @@ def extract_file_info(event_data):
             if seg.get("type") == "file":
                 file_signal_detected = True
                 data = seg.get("data", {})
-                file_info = {
-                    "name": data.get("name") or data.get("file_name") or data.get("file"),
-                    "url": data.get("url"),
-                    "size": data.get("file_size") or data.get("size"),
-                    "uuid": data.get("file_id"),
-                    "sub_id": data.get("file_sub_id"),
-                    "path": data.get("path") or data.get("file_path"),
-                    "raw": data,
-                }
-                print(f"[FILE] extract_file_info 命中 message.file: {file_info}")
-                return file_info
+                if isinstance(data, dict):
+                    file_info = _normalize_file_info(data)
+                    if _is_meaningful(file_info):
+                        print(f"[FILE] extract_file_info 命中 message.file: {file_info}")
+                        return file_info
+    elif isinstance(raw_message, str):
+        file_signal_detected = file_signal_detected or ("[CQ:file" in raw_message)
+        cq_info = _parse_cq_file(raw_message)
+        if cq_info:
+            print(f"[FILE] extract_file_info 命中 raw_message CQ:file: {cq_info}")
+            return cq_info
+
+    top_level_file = event_data.get("file")
+    if isinstance(top_level_file, dict):
+        file_signal_detected = True
+        file_info = _normalize_file_info(top_level_file)
+        if _is_meaningful(file_info):
+            print(f"[FILE] extract_file_info 命中 top-level file: {file_info}")
+            return file_info
 
     if file_signal_detected:
         print("[FILE] extract_file_info 检测到文件消息但未解析出完整文件信息")
@@ -102,6 +145,32 @@ def safe_filename(name: str) -> str:
     return name.replace("/", "_").replace("\\", "_").strip()
 
 
+def derive_filename(file_info: dict) -> str | None:
+    """Derive filename from known metadata when name is missing."""
+    name = str(file_info.get("name") or "").strip()
+    if name:
+        return name
+
+    file_url = str(file_info.get("url") or "").strip()
+    if file_url:
+        parsed = urlparse(file_url)
+        tail = os.path.basename(parsed.path or "")
+        tail = unquote(tail).strip()
+        if tail:
+            return tail
+
+    file_path = str(file_info.get("path") or "").strip()
+    if file_path:
+        tail = os.path.basename(file_path).strip()
+        if tail:
+            return tail
+
+    file_uuid = str(file_info.get("uuid") or "").strip()
+    if file_uuid:
+        return file_uuid
+    return None
+
+
 def describe_fs_entry(path):
     """Return a human-readable description of a filesystem entry."""
     try:
@@ -117,7 +186,7 @@ def describe_fs_entry(path):
 
 def download_file_if_possible(file_info, save_dir):
     """Download or copy a file attachment into the target directory."""
-    name = safe_filename(file_info.get("name"))
+    name = safe_filename(derive_filename(file_info))
     local_path = file_info.get("path")
     target_path = os.path.join(save_dir, name)
     url, resolve_reason = resolve_file_download_info(file_info)
@@ -429,7 +498,7 @@ def _recent_user_intent(user_id, now_ts: int | None = None) -> str:
 
 def handle_file_message(message_type, user_id, group_id, file_info):
     """Handle uploaded files for private or group contexts."""
-    filename = file_info.get("name")
+    filename = derive_filename(file_info)
     file_url = file_info.get("url")
     file_path = file_info.get("path")
     safe_name = safe_filename(filename or "unknown_file")
@@ -443,6 +512,24 @@ def handle_file_message(message_type, user_id, group_id, file_info):
     if message_type == "group":
         send_group_msg(group_id, "为保护隐私，群聊模式下不会直接解析或输出文件内容，请改为私聊发送。")
         return {"status": "file_blocked_in_group"}
+
+    if not filename:
+        message_id = file_info.get("message_id")
+        recovered_info = None
+        if message_id:
+            detail = get_msg_detail(message_id)
+            if isinstance(detail, dict):
+                recovered_info = extract_file_info(detail)
+        if recovered_info:
+            merged = file_info.copy()
+            merged.update({k: v for k, v in recovered_info.items() if v not in (None, "", [])})
+            file_info = merged
+            filename = derive_filename(file_info)
+            safe_name = safe_filename(filename or "unknown_file")
+            print(
+                f"[FILE] 通过 get_msg 补全文件信息成功: "
+                f"name={file_info.get('name')!r}, uuid={file_info.get('uuid')!r}, url={file_info.get('url')!r}"
+            )
 
     if not filename:
         msg = "已检测到文件事件，但暂时没拿到文件名。"

@@ -49,6 +49,7 @@ nav:
       - Ubuntu Setup: install/ubuntu.md
       - NapCat Setup: install/napcat.md
       - OpenClaw Setup: install/openclaw.md
+      - VoCat No-SD Plan: install/vocat-no-sd.md
       - Run the Bot: install/run.md
   - Troubleshooting:
       - Common Errors: troubleshooting/common-errors.md

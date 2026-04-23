@@ -26,6 +26,7 @@ class SkillContext:
     file_info: Optional[dict]
     logger: Callable[..., None]
     timestamp: int = 0
+    message_id: int | None = None
     nick: str = ""
     raw_message: str = ""
 

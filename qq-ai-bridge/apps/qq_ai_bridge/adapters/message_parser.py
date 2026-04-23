@@ -60,6 +60,44 @@ def extract_text_and_mention(event_data, self_id):
     return "", False
 
 
+def extract_reply_reference(event_data) -> dict | None:
+    """Extract quoted/replied message reference from payload."""
+    raw_message = event_data.get("message")
+    if isinstance(raw_message, list):
+        for seg in raw_message:
+            if not isinstance(seg, dict):
+                continue
+            seg_type = str(seg.get("type", "")).lower()
+            data = seg.get("data", {}) if isinstance(seg.get("data"), dict) else {}
+            if seg_type in {"reply", "reference", "quote"}:
+                message_id = (
+                    data.get("id")
+                    or data.get("message_id")
+                    or data.get("reply_id")
+                    or data.get("msg_id")
+                )
+                if message_id:
+                    return {"message_id": str(message_id)}
+
+    elements = event_data.get("elements", [])
+    if isinstance(elements, list):
+        for elem in elements:
+            if not isinstance(elem, dict):
+                continue
+            reply_elem = elem.get("replyElement") or elem.get("reply")
+            if isinstance(reply_elem, dict):
+                message_id = (
+                    reply_elem.get("replayMsgId")
+                    or reply_elem.get("replyMsgId")
+                    or reply_elem.get("sourceMsgId")
+                    or reply_elem.get("message_id")
+                    or reply_elem.get("id")
+                )
+                if message_id:
+                    return {"message_id": str(message_id)}
+    return None
+
+
 def has_meaningful_text(event_data, self_id) -> bool:
     text, _ = extract_text_and_mention(event_data, self_id)
     return normalize_query_text(text) != ""

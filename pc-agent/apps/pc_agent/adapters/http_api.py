@@ -3,10 +3,14 @@
 from flask import jsonify, request
 
 from apps.pc_agent.browser.chrome import launch_and_open, launch_chrome, open_url
+from apps.pc_agent.browser.service import get_browser_health, get_browser_runtime
 from apps.pc_agent.desktop.keyboard import hotkey, press_key, type_text
 from apps.pc_agent.desktop.mouse import click, double_click, move, position, right_click, scroll
 from apps.pc_agent.desktop.ocr import click_text, find_text
 from apps.pc_agent.desktop.screen import ocr_screen, screen_size, screenshot
+
+
+_SESSION_STATE: dict[int, dict] = {}
 
 
 def register_routes(app):
@@ -76,6 +80,25 @@ def register_routes(app):
     def ping():
         return jsonify({"status": "ok", "pong": True})
 
+    @app.route("/observe", methods=["POST"])
+    def observe_route():
+        _ = request.get_json(force=True)
+        return jsonify(ocr_screen())
+
+    @app.route("/session/get", methods=["POST"])
+    def session_get_route():
+        data = request.get_json(force=True)
+        user_id = int(data.get("user_id", 0))
+        session = _SESSION_STATE.get(user_id, {})
+        return jsonify({"status": "ok", "session": session})
+
+    @app.route("/session/reset", methods=["POST"])
+    def session_reset_route():
+        data = request.get_json(force=True)
+        user_id = int(data.get("user_id", 0))
+        _SESSION_STATE.pop(user_id, None)
+        return jsonify({"status": "ok", "user_id": user_id, "message": "session reset"})
+
     @app.route("/open_url", methods=["POST"])
     def open_url_route():
         data = request.get_json(force=True)
@@ -120,6 +143,58 @@ def register_routes(app):
     def launch_and_open_route():
         data = request.get_json(force=True)
         return jsonify(launch_and_open(data["url"]))
+
+    @app.route("/browser/health", methods=["GET"])
+    def browser_health_route():
+        start_runtime = str(request.args.get("start", "")).lower() in {"1", "true", "yes"}
+        payload = get_browser_health(start_runtime=start_runtime)
+        status = 200 if payload.get("status") == "ok" else 500
+        return jsonify(payload), status
+
+    @app.route("/browser/open_url", methods=["POST"])
+    def browser_open_url_route():
+        data = request.get_json(force=True)
+        runtime = get_browser_runtime()
+        return jsonify(
+            runtime.open_url(
+                data["url"],
+                wait_until=str(data.get("wait_until", "domcontentloaded")),
+                new_tab=bool(data.get("new_tab", False)),
+            )
+        )
+
+    @app.route("/browser/ocr", methods=["GET"])
+    def browser_ocr_route():
+        runtime = get_browser_runtime()
+        return jsonify(runtime.ocr())
+
+    @app.route("/browser/find_text", methods=["POST"])
+    def browser_find_text_route():
+        data = request.get_json(force=True)
+        runtime = get_browser_runtime()
+        result = runtime.find_text(data)
+        status = 200 if result.get("status") in {"ok", "not_found"} else 400
+        return jsonify(result), status
+
+    @app.route("/browser/click_text", methods=["POST"])
+    def browser_click_text_route():
+        data = request.get_json(force=True)
+        runtime = get_browser_runtime()
+        result = runtime.click_text(data)
+        status = 200 if result.get("status") in {"ok", "not_found"} else 400
+        return jsonify(result), status
+
+    @app.route("/browser/extract_deadline", methods=["POST"])
+    def browser_extract_deadline_route():
+        _ = request.get_json(silent=True) or {}
+        runtime = get_browser_runtime()
+        return jsonify(runtime.extract_deadline())
+
+    @app.route("/browser/screenshot", methods=["POST"])
+    def browser_screenshot_route():
+        data = request.get_json(silent=True) or {}
+        runtime = get_browser_runtime()
+        return jsonify(runtime.screenshot(full_page=bool(data.get("full_page", False))))
 
     return app
 

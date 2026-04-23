@@ -9,6 +9,7 @@ DEFAULT_GROUP_CONFIG = {
         "bot_can_reply": True,
         "learn_style": False,
         "reply_all_messages": False,
+        "enable_vision": True,
         "ignore": False,
         "mute_log": False
     }
@@ -139,15 +140,60 @@ def ensure_group_config_file(config_path: str):
     ensure_json_file(config_path, DEFAULT_GROUP_CONFIG)
 
 
-def load_group_config(config_path: str, group_id) -> dict:
+def load_group_config_store(config_path: str) -> dict:
     ensure_group_config_file(config_path)
     data = load_json_file(config_path, DEFAULT_GROUP_CONFIG)
+    if not isinstance(data, dict):
+        return DEFAULT_GROUP_CONFIG.copy()
+
+    default_cfg = data.get("default", {})
+    if not isinstance(default_cfg, dict):
+        default_cfg = {}
+
+    normalized = {"default": {**DEFAULT_GROUP_CONFIG["default"], **default_cfg}}
+    for key, value in data.items():
+        if key == "default" or not isinstance(value, dict):
+            continue
+        normalized[str(key)] = value.copy()
+    return normalized
+
+
+def load_group_config(config_path: str, group_id) -> dict:
+    data = load_group_config_store(config_path)
     default_cfg = data.get("default", DEFAULT_GROUP_CONFIG["default"]).copy()
     group_cfg = data.get(str(group_id), {})
     merged = default_cfg.copy()
     if isinstance(group_cfg, dict):
         merged.update(group_cfg)
     return merged
+
+
+def is_group_whitelisted(config_path: str, group_id) -> bool:
+    data = load_group_config_store(config_path)
+    key = str(group_id)
+    if key not in data:
+        return False
+    group_cfg = data.get(key, {})
+    if not isinstance(group_cfg, dict):
+        return False
+    return bool(group_cfg.get("enabled", False)) and not bool(group_cfg.get("ignore", False))
+
+
+def save_group_config_store(config_path: str, data: dict):
+    normalized = load_group_config_store(config_path)
+    default_cfg = data.get("default", {}) if isinstance(data, dict) else {}
+    if isinstance(default_cfg, dict):
+        normalized["default"] = {**DEFAULT_GROUP_CONFIG["default"], **default_cfg}
+
+    explicit_groups = {}
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key == "default" or not isinstance(value, dict):
+                continue
+            explicit_groups[str(key)] = value
+
+    normalized = {"default": normalized["default"], **explicit_groups}
+    save_json_file(config_path, normalized)
 
 
 def get_group_workspace(base_dir: str, group_id) -> dict:

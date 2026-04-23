@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
 from apps.qq_ai_bridge.config.settings import ALLOWED_PRIVATE_USER
 from apps.qq_ai_bridge.services.agent_service import handle_pc_agent_command
@@ -29,8 +31,9 @@ class DesktopAgentSkill:
 
     def handle(self, context: SkillContext) -> SkillResult:
         """Execute the existing desktop-agent command path if matched."""
-        reply = handle_pc_agent_command(context.normalized_msg, context.user_id)
+        reply = handle_pc_agent_command(context.user_id, context.normalized_msg)
         if reply is None:
             return SkillResult(handled=False, source=self.name, status="ignore")
-        send_private_msg(context.user_id, reply)
+        message = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
+        send_private_msg(context.user_id, message)
         return SkillResult(handled=True, source=self.name, response_payload={"status": "ok", "source": "pc_agent"})

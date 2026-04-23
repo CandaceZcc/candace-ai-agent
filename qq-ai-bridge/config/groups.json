@@ -1,40 +1,67 @@
 {
-  "1065429760": {
-    "name": "麦麦の小屋",
-    "capture_all_messages": true,
-    "bot_can_reply": true,
-    "learn_style": true,
-    "reply_all_messages": true,
-    "enable_vision": true,
-    "ignore": false,
-    "mute_log": false
-  },
-  "437966130": {
-    "name": "群聊",
-    "capture_all_messages": true,
-    "bot_can_reply": true,
-    "learn_style": true,
-    "reply_all_messages": true,
-    "enable_vision": true,
-    "ignore": false,
-    "mute_log": false
-  },
-  "674070498": {
-    "name": "mute group",
-    "capture_all_messages": false,
-    "bot_can_reply": true,
-    "learn_style": false,
-    "reply_all_messages": false,
-    "enable_vision": false,
-    "ignore": false,
-    "mute_log": true
-  },
   "default": {
     "capture_all_messages": false,
     "bot_can_reply": true,
     "learn_style": false,
     "reply_all_messages": false,
+    "enable_vision": true,
     "ignore": false,
-    "mute_log": false
+    "mute_log": false,
+    "persona_intensity": 30
+  },
+  "1041622553": {
+    "name": "OTTO_Sample_Manager",
+    "enabled": true,
+    "ignore": false,
+    "reply_all_messages": true,
+    "reaction_decision_mode": "llm_first",
+    "bot_can_reply": true
+  },
+  "810938203": {
+    "name": "哈基米",
+    "enabled": true,
+    "ignore": false,
+    "reply_all_messages": false,
+    "bot_can_reply": true,
+    "reaction_decision_mode": "llm_first"
+  },
+  "437966130": {
+    "name": "群聊",
+    "enabled": true,
+    "capture_all_messages": true,
+    "bot_can_reply": true,
+    "learn_style": true,
+    "reply_all_messages": false,
+    "persona_intensity": 25,
+    "enable_vision": true,
+    "ignore": false,
+    "mute_log": false,
+    "reaction_decision_mode": "llm_first"
+  },
+  "1065429760": {
+    "name": "麦麦の小屋",
+    "enabled": true,
+    "capture_all_messages": true,
+    "bot_can_reply": true,
+    "learn_style": true,
+    "reply_all_messages": true,
+    "persona_intensity": 55,
+    "enable_vision": true,
+    "ignore": false,
+    "mute_log": false,
+    "reaction_decision_mode": "llm_first"
+  },
+  "674070498": {
+    "name": "mute group",
+    "enabled": false,
+    "capture_all_messages": false,
+    "bot_can_reply": true,
+    "learn_style": false,
+    "reply_all_messages": false,
+    "persona_intensity": 20,
+    "enable_vision": false,
+    "ignore": true,
+    "mute_log": true,
+    "reaction_decision_mode": "llm_first"
   }
 }

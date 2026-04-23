@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NapCat 群配置</title>
+    <style>
+      :root {
+        --bg: #0f1117;
+        --bg-soft: #171a22;
+        --bg-elevated: #1c202b;
+        --bg-active: #252b38;
+        --line: #2e3645;
+        --line-soft: #232a37;
+        --text: #edf2ff;
+        --muted: #9ca8c1;
+        --accent: #49a6ff;
+        --accent-soft: rgba(73, 166, 255, 0.14);
+        --success: #59d48a;
+        --warn: #ffb454;
+        --danger: #ff6b81;
+        --radius: 16px;
+        --shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+        --font-body: "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif;
+        --font-mono: "IBM Plex Mono", "SFMono-Regular", monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html, body {
+        margin: 0;
+        min-height: 100%;
+      }
+
+      body {
+        font-family: var(--font-body);
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(73, 166, 255, 0.12), transparent 26%),
+          linear-gradient(180deg, #12151c 0%, #0d1016 100%);
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      .layout {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 260px minmax(0, 1fr);
+      }
+
+      .sidebar {
+        border-right: 1px solid var(--line-soft);
+        background: rgba(10, 12, 17, 0.88);
+        padding: 22px 16px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 12px;
+        margin-bottom: 22px;
+        border-radius: 14px;
+        background: linear-gradient(180deg, rgba(73, 166, 255, 0.08), rgba(73, 166, 255, 0.03));
+        border: 1px solid rgba(73, 166, 255, 0.14);
+      }
+
+      .brand-mark {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        background: linear-gradient(180deg, #51acff, #2b7dff);
+        color: white;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.28);
+      }
+
+      .brand-title {
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .brand-subtitle {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .nav-section {
+        margin-bottom: 18px;
+      }
+
+      .nav-label {
+        padding: 0 12px;
+        margin-bottom: 8px;
+        color: #7e8aa5;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .nav-list {
+        display: grid;
+        gap: 6px;
+      }
+
+      .nav-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 11px 12px;
+        border-radius: 12px;
+        color: var(--muted);
+        background: transparent;
+        border: 1px solid transparent;
+      }
+
+      .nav-item.active {
+        color: var(--text);
+        background: var(--bg-active);
+        border-color: #3a4355;
+      }
+
+      .nav-item .pill {
+        min-width: 26px;
+        height: 22px;
+        padding: 0 8px;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        color: var(--text);
+        background: rgba(255,255,255,0.06);
+      }
+
+      .sidebar-note {
+        margin-top: 22px;
+        padding: 14px 12px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.02);
+      }
+
+      .sidebar-note-title {
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+
+      .sidebar-note-copy {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .main {
+        padding: 22px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      .topbar-title {
+        font-size: 24px;
+        font-weight: 700;
+      }
+
+      .topbar-copy {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .topbar-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .button {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 16px;
+        cursor: pointer;
+        color: var(--text);
+        background: linear-gradient(180deg, #262d3a, #1d2330);
+        transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+      }
+
+      .button:hover {
+        transform: translateY(-1px);
+      }
+
+      .button.primary {
+        border-color: rgba(73, 166, 255, 0.46);
+        background: linear-gradient(180deg, #4ca9ff, #2f80ff);
+      }
+
+      .button.ghost {
+        background: linear-gradient(180deg, #202633, #1a1f2a);
+      }
+
+      .button.danger {
+        border-color: rgba(255, 107, 129, 0.36);
+        background: linear-gradient(180deg, #ff788d, #dc4962);
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 18px;
+      }
+
+      .card,
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: linear-gradient(180deg, rgba(28, 32, 43, 0.95), rgba(20, 23, 31, 0.96));
+        box-shadow: var(--shadow);
+      }
+
+      .card {
+        padding: 16px;
+      }
+
+      .card-label {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 10px;
+      }
+
+      .card-value {
+        font-size: 28px;
+        font-weight: 700;
+      }
+
+      .card-foot {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: 320px minmax(0, 1fr);
+        gap: 18px;
+      }
+
+      .panel-head {
+        padding: 16px 18px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .panel-title {
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .panel-copy {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .panel-body {
+        padding: 18px;
+      }
+
+      .form-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .field {
+        display: grid;
+        gap: 8px;
+      }
+
+      .field label {
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .input {
+        width: 100%;
+        min-width: 0;
+        color: var(--text);
+        background: #161b24;
+        border: 1px solid #30394a;
+        border-radius: 12px;
+        padding: 11px 12px;
+      }
+
+      .input:focus {
+        outline: none;
+        border-color: rgba(73, 166, 255, 0.64);
+        box-shadow: 0 0 0 3px rgba(73, 166, 255, 0.12);
+      }
+
+      .helper {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .status {
+        min-height: 24px;
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .status.ok {
+        color: var(--success);
+      }
+
+      .status.error {
+        color: var(--danger);
+      }
+
+      .table-wrap {
+        overflow: hidden;
+        border-radius: 14px;
+        border: 1px solid var(--line-soft);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      thead th {
+        text-align: left;
+        font-size: 12px;
+        color: #8793ab;
+        letter-spacing: 0.04em;
+        font-weight: 600;
+        padding: 14px 16px;
+        background: #171b24;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      tbody td {
+        padding: 16px;
+        border-bottom: 1px solid var(--line-soft);
+        vertical-align: middle;
+      }
+
+      tbody tr:last-child td {
+        border-bottom: 0;
+      }
+
+      tbody tr:hover {
+        background: rgba(255,255,255,0.02);
+      }
+
+      .group-cell {
+        display: grid;
+        gap: 5px;
+      }
+
+      .group-name {
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .group-id {
+        color: var(--muted);
+        font-size: 12px;
+        font-family: var(--font-mono);
+      }
+
+      .tag-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 28px;
+        padding: 0 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        color: var(--muted);
+        border: 1px solid #31394a;
+        background: #1a202b;
+      }
+
+      .tag.success {
+        color: #dfffea;
+        border-color: rgba(89, 212, 138, 0.26);
+        background: rgba(89, 212, 138, 0.12);
+      }
+
+      .switch {
+        position: relative;
+        width: 48px;
+        height: 28px;
+        display: inline-block;
+      }
+
+      .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      .slider {
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        background: #2a3140;
+        border: 1px solid #394356;
+        transition: 160ms ease;
+      }
+
+      .slider::before {
+        content: "";
+        position: absolute;
+        left: 4px;
+        top: 4px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #dce8ff;
+        transition: 160ms ease;
+      }
+
+      .switch input:checked + .slider {
+        background: rgba(73, 166, 255, 0.3);
+        border-color: rgba(73, 166, 255, 0.5);
+      }
+
+      .switch input:checked + .slider::before {
+        transform: translateX(19px);
+        background: white;
+      }
+
+      .segmented {
+        display: inline-grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 4px;
+        padding: 4px;
+        background: #171d27;
+        border: 1px solid #31394a;
+        border-radius: 12px;
+      }
+
+      .segmented button {
+        border: 0;
+        min-width: 92px;
+        padding: 9px 10px;
+        border-radius: 9px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .segmented button.active {
+        color: white;
+        background: linear-gradient(180deg, #4ca9ff, #2d7fff);
+      }
+
+      .table-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .empty {
+        padding: 42px 18px;
+        text-align: center;
+        color: var(--muted);
+      }
+
+      @media (max-width: 1100px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          display: none;
+        }
+
+        .cards,
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .main {
+          padding: 14px;
+        }
+
+        .cards {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .table-wrap {
+          overflow-x: auto;
+        }
+
+        table {
+          min-width: 840px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="layout">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">NC</div>
+          <div>
+            <div class="brand-title">NapCat Control</div>
+            <div class="brand-subtitle">Candace QQ Bridge</div>
+          </div>
+        </div>
+
+        <section class="nav-section">
+          <div class="nav-label">System</div>
+          <div class="nav-list">
+            <div class="nav-item">
+              <span>概览</span>
+              <span class="pill">01</span>
+            </div>
+            <div class="nav-item active">
+              <span>群聊配置</span>
+              <span class="pill" id="navGroupCount">0</span>
+            </div>
+            <div class="nav-item">
+              <span>Webhook</span>
+              <span class="pill">/qq</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="nav-section">
+          <div class="nav-label">Policy</div>
+          <div class="nav-list">
+            <div class="nav-item">
+              <span>白名单</span>
+              <span class="pill" id="navWhitelistCount">0</span>
+            </div>
+            <div class="nav-item">
+              <span>全局触发</span>
+              <span class="pill" id="navAllModeCount">0</span>
+            </div>
+            <div class="nav-item">
+              <span>艾特触发</span>
+              <span class="pill" id="navMentionModeCount">0</span>
+            </div>
+          </div>
+        </section>
+
+        <div class="sidebar-note">
+          <div class="sidebar-note-title">当前页面作用</div>
+          <div class="sidebar-note-copy">
+            在这里配置群聊白名单，并决定机器人是全群响应，还是仅在被艾特时触发。
+          </div>
+        </div>
+      </aside>
+
+      <section class="main">
+        <header class="topbar">
+          <div>
+            <div class="topbar-title">群聊白名单与回复规则</div>
+            <div class="topbar-copy">按 NapCat 控制台的面板逻辑整理。左边看概览，右边直接改配置。</div>
+          </div>
+          <div class="topbar-actions">
+            <button class="button ghost" id="reloadButton" type="button">重新读取</button>
+            <button class="button primary" id="saveButton" type="button">保存配置</button>
+          </div>
+        </header>
+
+        <section class="cards" id="stats"></section>
+
+        <section class="workspace">
+          <article class="panel">
+            <div class="panel-head">
+              <div class="panel-title">新增群聊</div>
+              <div class="panel-copy">把群号加入白名单，默认规则为“仅艾特触发”。</div>
+            </div>
+            <div class="panel-body">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="newGroupId">群号</label>
+                  <input class="input" id="newGroupId" type="text" inputmode="numeric" placeholder="例如 437966130">
+                </div>
+                <div class="field">
+                  <label for="newGroupName">群名称</label>
+                  <input class="input" id="newGroupName" type="text" placeholder="例如 Candace 测试群">
+                </div>
+                <button class="button ghost" id="addButton" type="button">添加到当前列表</button>
+                <div class="helper">保存后会写入 `qq-ai-bridge/config/groups.json`。</div>
+                <div class="status" id="statusText"></div>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div class="panel-title">群规则表</div>
+              <div class="panel-copy">白名单控制是否接入机器人；触发规则控制“全局回复”还是“仅艾特回复”。</div>
+            </div>
+            <div class="panel-body">
+              <div class="table-wrap" id="groupsContainer"></div>
+            </div>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const state = {
+        groups: [],
+        meta: null,
+      };
+
+      const statsEl = document.getElementById("stats");
+      const groupsContainerEl = document.getElementById("groupsContainer");
+      const statusEl = document.getElementById("statusText");
+      const saveButton = document.getElementById("saveButton");
+      const reloadButton = document.getElementById("reloadButton");
+      const addButton = document.getElementById("addButton");
+      const newGroupIdInput = document.getElementById("newGroupId");
+      const newGroupNameInput = document.getElementById("newGroupName");
+
+      function setStatus(message, kind = "") {
+        statusEl.textContent = message || "";
+        statusEl.className = kind ? `status ${kind}` : "status";
+      }
+
+      function renderStats() {
+        const enabledCount = state.groups.filter((group) => group.enabled).length;
+        const allReplyCount = state.groups.filter((group) => group.enabled && group.trigger_mode === "all").length;
+        const mentionCount = state.groups.filter((group) => group.enabled && group.trigger_mode === "mention").length;
+        const totalCount = state.groups.length;
+
+        statsEl.innerHTML = [
+          statCard("已录入群聊", String(totalCount), "当前配置中的全部群"),
+          statCard("白名单群数", String(enabledCount), "只有这些群会被机器人处理"),
+          statCard("全局触发", String(allReplyCount), "会自动响应普通群消息"),
+          statCard("艾特触发", String(mentionCount), "需要 @ 机器人才会回复"),
+        ].join("");
+
+        document.getElementById("navGroupCount").textContent = String(totalCount);
+        document.getElementById("navWhitelistCount").textContent = String(enabledCount);
+        document.getElementById("navAllModeCount").textContent = String(allReplyCount);
+        document.getElementById("navMentionModeCount").textContent = String(mentionCount);
+      }
+
+      function statCard(label, value, foot) {
+        return `
+          <section class="card">
+            <div class="card-label">${escapeHtml(label)}</div>
+            <div class="card-value">${escapeHtml(value)}</div>
+            <div class="card-foot">${escapeHtml(foot)}</div>
+          </section>
+        `;
+      }
+
+      function renderGroups() {
+        if (!state.groups.length) {
+          groupsContainerEl.innerHTML = `<div class="empty">还没有群配置，先在左边填一个群号。</div>`;
+          return;
+        }
+
+        groupsContainerEl.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 25%">群聊</th>
+                <th style="width: 12%">白名单</th>
+                <th style="width: 20%">回复规则</th>
+                <th style="width: 18%">表情决策</th>
+                <th style="width: 12%">机器人回复</th>
+                <th style="width: 13%"></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${state.groups.map((group, index) => `
+                <tr data-index="${index}">
+                  <td>
+                    <div class="group-cell">
+                      <input class="input" type="text" value="${escapeHtmlAttr(group.name || "")}" data-field="name" placeholder="群名称">
+                      <div class="group-id">${escapeHtml(group.group_id)}</div>
+                      <div class="tag-row">
+                        <span class="tag ${group.enabled ? "success" : ""}">${group.enabled ? "已启用" : "未启用"}</span>
+                        <span class="tag">${group.trigger_mode === "all" ? "全局触发" : "艾特触发"}</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <label class="switch">
+                      <input type="checkbox" data-field="enabled" ${group.enabled ? "checked" : ""}>
+                      <span class="slider"></span>
+                    </label>
+                  </td>
+                  <td>
+                    <div class="segmented">
+                      <button type="button" class="${group.trigger_mode === "mention" ? "active" : ""}" data-trigger="mention">仅艾特</button>
+                      <button type="button" class="${group.trigger_mode === "all" ? "active" : ""}" data-trigger="all">全局</button>
+                    </div>
+                  </td>
+                  <td>
+                    <select class="input" data-field="reaction_decision_mode">
+                      <option value="llm_first" ${group.reaction_decision_mode === "llm_first" ? "selected" : ""}>LLM优先</option>
+                      <option value="hybrid" ${group.reaction_decision_mode === "hybrid" ? "selected" : ""}>混合</option>
+                      <option value="rule_first" ${group.reaction_decision_mode === "rule_first" ? "selected" : ""}>规则优先</option>
+                    </select>
+                  </td>
+                  <td>
+                    <label class="switch">
+                      <input type="checkbox" data-field="bot_can_reply" ${group.bot_can_reply !== false ? "checked" : ""}>
+                      <span class="slider"></span>
+                    </label>
+                  </td>
+                  <td>
+                    <div class="table-actions">
+                      <button class="button danger" type="button" data-action="remove">移除</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `;
+      }
+
+      function bindEvents() {
+        groupsContainerEl.querySelectorAll("tbody tr").forEach((row) => {
+          const index = Number(row.dataset.index);
+
+          row.querySelectorAll("[data-field]").forEach((input) => {
+            const sync = () => {
+              const field = input.dataset.field;
+              state.groups[index][field] = input.type === "checkbox" ? input.checked : input.value;
+              renderStats();
+              renderGroups();
+              bindEvents();
+            };
+            input.addEventListener("change", sync);
+            if (input.type !== "checkbox") {
+              input.addEventListener("input", () => {
+                state.groups[index][input.dataset.field] = input.value;
+              });
+            }
+          });
+
+          row.querySelectorAll("[data-trigger]").forEach((button) => {
+            button.addEventListener("click", () => {
+              state.groups[index].trigger_mode = button.dataset.trigger;
+              renderStats();
+              renderGroups();
+              bindEvents();
+            });
+          });
+
+          row.querySelector('[data-action="remove"]').addEventListener("click", () => {
+            state.groups.splice(index, 1);
+            renderStats();
+            renderGroups();
+            bindEvents();
+          });
+        });
+      }
+
+      function collectPayload() {
+        return {
+          groups: state.groups.map((group) => ({
+            group_id: group.group_id,
+            name: group.name || "",
+            enabled: Boolean(group.enabled),
+            trigger_mode: group.trigger_mode === "all" ? "all" : "mention",
+            reaction_decision_mode: group.reaction_decision_mode || "llm_first",
+            bot_can_reply: group.bot_can_reply !== false,
+          })),
+        };
+      }
+
+      async function loadData() {
+        setStatus("正在读取群配置…");
+        const response = await fetch("/api/admin/groups");
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "读取失败");
+        }
+        state.groups = (payload.groups || []).map((group) => ({
+          ...group,
+          enabled: group.enabled !== false,
+          bot_can_reply: group.bot_can_reply !== false,
+          trigger_mode: group.trigger_mode === "all" ? "all" : "mention",
+          reaction_decision_mode: ["llm_first", "hybrid", "rule_first"].includes(group.reaction_decision_mode)
+            ? group.reaction_decision_mode
+            : "llm_first",
+        }));
+        state.meta = payload.meta || null;
+        renderStats();
+        renderGroups();
+        bindEvents();
+        setStatus("配置已加载。", "ok");
+      }
+
+      async function saveData() {
+        setStatus("正在保存…");
+        saveButton.disabled = true;
+        const response = await fetch("/api/admin/groups", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(collectPayload()),
+        });
+        const payload = await response.json();
+        saveButton.disabled = false;
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "保存失败");
+        }
+        state.groups = (payload.groups || []).map((group) => ({
+          ...group,
+          enabled: group.enabled !== false,
+          bot_can_reply: group.bot_can_reply !== false,
+          trigger_mode: group.trigger_mode === "all" ? "all" : "mention",
+          reaction_decision_mode: ["llm_first", "hybrid", "rule_first"].includes(group.reaction_decision_mode)
+            ? group.reaction_decision_mode
+            : "llm_first",
+        }));
+        state.meta = payload.meta || null;
+        renderStats();
+        renderGroups();
+        bindEvents();
+        setStatus("已保存到 groups.json。", "ok");
+      }
+
+      function addGroup() {
+        const groupId = newGroupIdInput.value.trim();
+        const groupName = newGroupNameInput.value.trim();
+        if (!/^\d+$/.test(groupId)) {
+          setStatus("群号必须是纯数字。", "error");
+          return;
+        }
+        if (state.groups.some((group) => group.group_id === groupId)) {
+          setStatus("这个群已经在列表里了。", "error");
+          return;
+        }
+        state.groups.unshift({
+          group_id: groupId,
+          name: groupName,
+          enabled: true,
+          bot_can_reply: true,
+          trigger_mode: "mention",
+          reaction_decision_mode: "llm_first",
+        });
+        newGroupIdInput.value = "";
+        newGroupNameInput.value = "";
+        renderStats();
+        renderGroups();
+        bindEvents();
+        setStatus("已加入待保存列表。", "ok");
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function escapeHtmlAttr(value) {
+        return escapeHtml(value).replaceAll("`", "&#96;");
+      }
+
+      saveButton.addEventListener("click", () => saveData().catch((error) => setStatus(error.message, "error")));
+      reloadButton.addEventListener("click", () => loadData().catch((error) => setStatus(error.message, "error")));
+      addButton.addEventListener("click", addGroup);
+
+      loadData().catch((error) => setStatus(error.message, "error"));
+    </script>
+  </body>
+</html>
