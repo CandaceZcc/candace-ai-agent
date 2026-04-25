@@ -8,6 +8,7 @@ sys.path.insert(0, "qq-ai-bridge")
 
 from apps.qq_ai_bridge.services.prompt_service import (
     _build_group_history_lines,
+    _build_recent_image_context,
     _build_group_quoted_context,
     prepare_group_ai_prompt,
 )
@@ -74,6 +75,22 @@ class PromptServiceQuotedContextTests(unittest.TestCase):
             self.assertIn("最近图片上下文", payload["prompt"])
             self.assertIn("上一张图", payload["prompt"])
 
+    def test_prepare_group_ai_prompt_includes_owner_identity_boundary(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            group_dir = Path(tmpdir) / "groups" / "123"
+            group_dir.mkdir(parents=True, exist_ok=True)
+            save_json_file(str(group_dir / "chat_log.json"), [])
+            save_json_file(str(group_dir / "style_profiles" / "group_style.json"), {})
+
+            with patch("apps.qq_ai_bridge.services.prompt_service.BASE_DATA_DIR", tmpdir):
+                payload = prepare_group_ai_prompt(123, "你现在是机盖宁还是砍大司", user_id=1, group_config={})
+
+            self.assertIn("你是机盖宁/QQ AI Bridge，不是 Candace 本人", payload["prompt"])
+            self.assertIn("QQ号273007866", payload["prompt"])
+            self.assertIn("砍大司/坎大司/砍大丝", payload["prompt"])
+            self.assertIn("是你的主人", payload["prompt"])
+            self.assertNotIn("主人/主任", payload["prompt"])
+
     def test_simulated_image_then_text_flow_keeps_recent_image_context(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             group_id = 123
@@ -110,6 +127,51 @@ class PromptServiceQuotedContextTests(unittest.TestCase):
             self.assertIn("最近图片上下文", payload["prompt"])
             self.assertIn("上一张图：[图片] 哈哈这图 [meme/joke]", payload["prompt"])
             self.assertIn("tester: 这图后劲挺大", payload["prompt"])
+
+    def test_recent_image_context_requires_image_reference(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chat_log_path = Path(tmpdir) / "chat_log.json"
+            save_json_file(
+                str(chat_log_path),
+                [
+                    {
+                        "timestamp": 100,
+                        "sender_name": "tester",
+                        "message": "[图片] 旧图",
+                        "source": "image_understanding:reaction",
+                        "image_type": "meme",
+                        "social_intent": "joke",
+                    }
+                ],
+            )
+
+            self.assertEqual(_build_recent_image_context(str(chat_log_path), current_text="移动靶打不到"), "")
+            self.assertIn("上一张图", _build_recent_image_context(str(chat_log_path), current_text="这个是什么"))
+
+    def test_recent_image_context_drops_stale_image(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chat_log_path = Path(tmpdir) / "chat_log.json"
+            save_json_file(
+                str(chat_log_path),
+                [
+                    {
+                        "timestamp": 1,
+                        "sender_name": "tester",
+                        "message": "[图片] 很久以前的图",
+                        "source": "image_understanding:reaction",
+                        "image_type": "meme",
+                        "social_intent": "joke",
+                    },
+                    {
+                        "timestamp": 500,
+                        "sender_name": "tester",
+                        "message": "普通聊天",
+                        "source": "group_chat",
+                    },
+                ],
+            )
+
+            self.assertEqual(_build_recent_image_context(str(chat_log_path), current_text="这个是什么"), "")
 
 
 if __name__ == "__main__":

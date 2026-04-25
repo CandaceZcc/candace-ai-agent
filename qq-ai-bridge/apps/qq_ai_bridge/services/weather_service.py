@@ -29,6 +29,56 @@ class CnLocationNormalization:
     guessed_region_bias: str | None
 
 
+_MUNICIPALITIES = {"北京": "北京市", "上海": "上海市", "天津": "天津市", "重庆": "重庆市"}
+_KNOWN_CHONGQING_DISTRICTS = {"沙坪坝", "永川", "渝中", "江北", "南岸", "九龙坡", "大渡口", "北碚", "巴南", "渝北"}
+_KNOWN_NON_CHINA_CJK_LOCATIONS = {"牛津"}
+
+
+# normalize_cn_location：规范化中文地点
+def normalize_cn_location(location: str) -> CnLocationNormalization:
+    """Build conservative Chinese location candidates for geocoding."""
+    raw = str(location or "").strip()
+    compact = re.sub(r"\s+", "", raw)
+    if not compact:
+        return CnLocationNormalization("", [], False, None)
+    if compact in _KNOWN_NON_CHINA_CJK_LOCATIONS:
+        return CnLocationNormalization(compact, [compact], False, None)
+
+    for short_name, full_name in _MUNICIPALITIES.items():
+        if compact in {short_name, full_name}:
+            return CnLocationNormalization(full_name, [full_name], True, short_name)
+        prefix = short_name
+        suffix = compact
+        if compact.startswith(full_name):
+            suffix = compact[len(full_name) :]
+        elif compact.startswith(short_name):
+            suffix = compact[len(short_name) :]
+        else:
+            continue
+        if not suffix:
+            return CnLocationNormalization(full_name, [full_name], True, short_name)
+        district = suffix if suffix.endswith(("区", "县")) else f"{suffix}区"
+        normalized = f"{full_name}{district}"
+        candidates = [normalized, f"{suffix.removesuffix('区').removesuffix('县')} {short_name}"]
+        return CnLocationNormalization(normalized, candidates, True, short_name)
+
+    if compact in _KNOWN_CHONGQING_DISTRICTS:
+        district = compact if compact.endswith(("区", "县")) else f"{compact}区"
+        normalized = f"重庆市{district}"
+        candidates = [normalized, f"{compact.removesuffix('区').removesuffix('县')} 重庆"]
+        return CnLocationNormalization(normalized, candidates, True, "重庆")
+
+    return CnLocationNormalization(compact, [compact], False, None)
+
+
+# build_location_hint：构建地点
+def build_location_hint(location: str) -> str:
+    """Return the best display/geocoding hint for a user location."""
+    plan = normalize_cn_location(location)
+    return plan.normalized_query
+
+
+# query_weather_for_coordinates：查询天气坐标
 def query_weather_for_coordinates(
     requested_location: str, lat: float, lon: float, display_name: str | None = None
 ) -> str:
@@ -75,6 +125,7 @@ def query_weather_for_coordinates(
         return build_weather_error(msg, city=requested_location)
 
 
+# build_weather_error：构建天气错误
 def build_weather_error(base_msg: str, reason: str | None = None, city: str | None = None) -> str:
     """Build a standard weather error message."""
     parts = [base_msg]
@@ -85,6 +136,7 @@ def build_weather_error(base_msg: str, reason: str | None = None, city: str | No
     return " | ".join(parts)
 
 
+# detect_weather_intent：检测天气意图
 def detect_weather_intent(text: str) -> str | None:
     """Detect if the user is asking about the weather."""
     cleaned = re.sub(r"\[CQ:at,qq=\d+\]", "", text).strip()
@@ -98,6 +150,7 @@ def detect_weather_intent(text: str) -> str | None:
     return None
 
 
+# handle_weather_query：处理天气查询请求
 def handle_weather_query(user_text: str) -> str | None:
     """
     Main entrypoint for handling a weather request based on user text.
@@ -132,11 +185,13 @@ def handle_weather_query(user_text: str) -> str | None:
     )
 
 
+# is_weather_query：判断天气查询
 def is_weather_query(text: str) -> bool:
     """Return whether the text looks like a weather query."""
     return detect_weather_intent(text) is not None
 
 
+# query_weather_by_intent：查询天气意图
 def query_weather_by_intent(intent: str) -> str:
     """Compatibility wrapper used by WeatherSkill."""
     query_text = (intent or "").strip()
@@ -147,6 +202,7 @@ def query_weather_by_intent(intent: str) -> str:
     return handle_weather_query(query_text) or build_weather_error("天气查询失败。", city=intent)
 
 
+# build_weather_reply：构建天气回复文本
 def build_weather_reply(result: str) -> str:
     """Compatibility wrapper used by WeatherSkill."""
     return str(result or "暂时没有获取到天气信息。").strip()

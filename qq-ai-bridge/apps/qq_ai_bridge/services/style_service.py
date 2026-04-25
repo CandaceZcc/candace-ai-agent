@@ -18,6 +18,7 @@ CUTE_HINTS = ("喵", "捏", "呀", "哇", "欸")
 COLD_HINTS = ("哦", "行", "随便", "还行", "一般", "无所谓")
 
 
+# capture_group_style：采集群聊说话风格
 def capture_group_style(base_dir: str, group_id, user_id, message: str, log=print) -> None:
     """Update per-group and per-user style profiles for group messages."""
     text = normalize_query_text(message)
@@ -33,6 +34,7 @@ def capture_group_style(base_dir: str, group_id, user_id, message: str, log=prin
     _update_style_profile(group_profile_path, text, scope=f"group:{group_id}:all", log=log)
 
 
+# load_group_style_summary：加载群聊风格摘要
 def load_group_style_summary(base_dir: str, group_id, user_id=None, log=None) -> str:
     """Return a short style summary for the group and optionally the sender."""
     workspace = get_group_workspace(base_dir, group_id)
@@ -60,6 +62,7 @@ def load_group_style_summary(base_dir: str, group_id, user_id=None, log=None) ->
     return summary
 
 
+# _update_style_profile：更新风格画像
 def _update_style_profile(path: str, text: str, scope: str, log=print) -> None:
     profile = load_json_file(path, _default_style_profile())
     profile = _merge_style_features(profile, text)
@@ -74,6 +77,7 @@ def _update_style_profile(path: str, text: str, scope: str, log=print) -> None:
     )
 
 
+# _default_style_profile：默认风格画像处理
 def _default_style_profile() -> dict:
     return {
         "version": SUMMARY_VERSION,
@@ -89,6 +93,7 @@ def _default_style_profile() -> dict:
     }
 
 
+# _merge_style_features：风格处理
 def _merge_style_features(profile: dict, text: str) -> dict:
     count = int(profile.get("message_count", 0)) + 1
     prev_avg = float(profile.get("avg_length", 0))
@@ -130,6 +135,7 @@ def _merge_style_features(profile: dict, text: str) -> dict:
     }
 
 
+# _build_style_summary：构建风格摘要
 def _build_style_summary(profile: dict) -> str:
     parts: list[str] = []
     avg_length = float(profile.get("avg_length", 0))
@@ -164,6 +170,7 @@ def _build_style_summary(profile: dict) -> str:
     return summary
 
 
+# _build_trait_tags：构建特征标签
 def _build_trait_tags(scores: dict, message_count: int) -> list[str]:
     tags = []
     baseline = max(1, math.ceil(message_count / 8))
@@ -176,6 +183,7 @@ def _build_trait_tags(scores: dict, message_count: int) -> list[str]:
     return tags[:3]
 
 
+# _detect_ending：检测尾词
 def _detect_ending(text: str) -> str:
     stripped = text.strip()
     for size in (2, 1):
@@ -186,13 +194,16 @@ def _detect_ending(text: str) -> str:
     return ""
 
 
+# _trim_top_counts：裁剪高频计数
 def _trim_top_counts(data: dict[str, int], limit: int) -> dict[str, int]:
     return dict(_sorted_counts(data)[:limit])
 
 
+# _sorted_counts：计数处理
 def _sorted_counts(data: dict[str, int]) -> list[tuple[str, int]]:
     return sorted(data.items(), key=lambda item: (-int(item[1]), item[0]))
 
 
+# _count_matches：匹配处理
 def _count_matches(text: str, patterns: tuple[str, ...]) -> int:
     return sum(text.count(pattern) for pattern in patterns)

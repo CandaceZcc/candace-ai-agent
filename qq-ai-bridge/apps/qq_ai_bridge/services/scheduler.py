@@ -37,6 +37,7 @@ REMINDER_STORE = ReminderStore(REMINDERS_PATH)
 STATE_STORE = SchedulerStateStore(SCHEDULER_STATE_PATH)
 
 
+# start_scheduler：启动后台调度器
 def start_scheduler() -> None:
     """Start the scheduler thread once."""
     global _STARTED, _STARTED_AT
@@ -56,6 +57,7 @@ def start_scheduler() -> None:
         )
 
 
+# _scheduler_loop：循环处理
 def _scheduler_loop() -> None:
     while True:
         now = get_now_local()
@@ -72,6 +74,7 @@ def _scheduler_loop() -> None:
         time.sleep(sleep_seconds)
 
 
+# _fire_due_reminders：相关逻辑处理
 def _fire_due_reminders(now: datetime) -> int | None:
     reminders = REMINDER_STORE.list_pending()
     next_wait: int | None = None
@@ -99,6 +102,7 @@ def _fire_due_reminders(now: datetime) -> int | None:
     return next_wait
 
 
+# _run_daily_jobs：运行每日任务
 def _run_daily_jobs(now: datetime) -> None:
     _run_daily_job(
         now=now,
@@ -118,6 +122,7 @@ def _run_daily_jobs(now: datetime) -> None:
     )
 
 
+# _run_daily_job：运行每日任务
 def _run_daily_job(
     now: datetime,
     task_key: str,
@@ -150,6 +155,7 @@ def _run_daily_job(
         traceback.print_exc()
 
 
+# _resolve_daily_job_time：解析每日任务时间
 def _resolve_daily_job_time(now: datetime, hhmm: str, test_delay_minutes: int) -> datetime:
     if test_delay_minutes > 0 and _STARTED_AT is not None:
         return _STARTED_AT + timedelta(minutes=test_delay_minutes)
@@ -165,12 +171,14 @@ def _resolve_daily_job_time(now: datetime, hhmm: str, test_delay_minutes: int) -
     return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
+# _build_daily_token：构建每日令牌
 def _build_daily_token(task_key: str, now: datetime, test_delay_minutes: int) -> str:
     if test_delay_minutes > 0:
         return f"{now.date().isoformat()}-test-{task_key}-{test_delay_minutes}m"
     return now.date().isoformat()
 
 
+# _compute_sleep_seconds：睡眠秒数处理
 def _compute_sleep_seconds(now: datetime, next_reminder_wait: int | None) -> int:
     waits = [SCHEDULER_TICK_SECONDS]
     if next_reminder_wait is not None:

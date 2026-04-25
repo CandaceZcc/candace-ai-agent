@@ -73,6 +73,7 @@ TOMORROW_SCHEDULE_CONTAINS = (
 )
 
 
+# ensure_schedule_file：确保课表文件
 def ensure_schedule_file(path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if os.path.exists(path):
@@ -81,6 +82,7 @@ def ensure_schedule_file(path: str) -> None:
         json.dump(DEFAULT_SCHEDULE, fh, ensure_ascii=False, indent=2)
 
 
+# load_schedule：加载课表
 def load_schedule(path: str) -> dict:
     ensure_schedule_file(path)
     try:
@@ -95,6 +97,7 @@ def load_schedule(path: str) -> dict:
         return dict(DEFAULT_SCHEDULE)
 
 
+# detect_schedule_intent：检测课表查询意图
 def detect_schedule_intent(text: str) -> str | None:
     normalized = str(text or "").strip().replace(" ", "")
     if any(
@@ -116,6 +119,7 @@ def detect_schedule_intent(text: str) -> str | None:
     return None
 
 
+# query_schedule_for_date：查询课表日期
 def query_schedule_for_date(schedule_path: str, target_date: date) -> dict:
     weekday = target_date.weekday()
     weekday_cn = get_weekday_cn(target_date)
@@ -137,16 +141,19 @@ def query_schedule_for_date(schedule_path: str, target_date: date) -> dict:
     }
 
 
+# query_today_schedule：查询今日课程
 def query_today_schedule(schedule_path: str, now: datetime | None = None) -> dict:
     now_local = now.astimezone(get_now_local().tzinfo) if now else get_now_local()
     return query_schedule_for_date(schedule_path, now_local.date())
 
 
+# query_tomorrow_schedule：查询明日课程
 def query_tomorrow_schedule(schedule_path: str, now: datetime | None = None) -> dict:
     now_local = now.astimezone(get_now_local().tzinfo) if now else get_now_local()
     return query_schedule_for_date(schedule_path, (now_local + timedelta(days=1)).date())
 
 
+# format_schedule_reply：格式化课表回复
 def format_schedule_reply(schedule_info: dict, prefix: str) -> str:
     weekday_cn = schedule_info["weekday_cn"]
     if schedule_info["is_weekend"]:
@@ -193,13 +200,16 @@ def format_schedule_reply(schedule_info: dict, prefix: str) -> str:
     return "\n".join(lines)
 
 
+# format_today_schedule_reply：格式化今日课表回复
 def format_today_schedule_reply(schedule_info: dict) -> str:
     return format_schedule_reply(schedule_info, "今天")
 
 
+# format_tomorrow_schedule_reply：格式化明日课表回复
 def format_tomorrow_schedule_reply(schedule_info: dict) -> str:
     return format_schedule_reply(schedule_info, "明天")
 
 
+# build_tomorrow_schedule_message：构建明日课表消息
 def build_tomorrow_schedule_message(schedule_path: str, now: datetime | None = None) -> str:
     return format_tomorrow_schedule_reply(query_tomorrow_schedule(schedule_path, now=now))

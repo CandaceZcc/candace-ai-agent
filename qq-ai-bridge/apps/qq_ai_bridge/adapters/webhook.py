@@ -1,14 +1,20 @@
 import asyncio
 import traceback
+import threading
+import time
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
 from apps.qq_ai_bridge.adapters.message_parser import (
+    extract_at_targets,
+    extract_forward_id,
     extract_reply_reference,
     extract_text_and_mention,
+    format_forward_messages,
     normalize_query_text,
 )
+from apps.qq_ai_bridge.adapters.napcat_client import get_forward_msg
 from apps.qq_ai_bridge.runtime import (
     _send_group_msg_raw,
     _send_private_msg_raw,
@@ -28,6 +34,10 @@ from apps.qq_ai_bridge.services.file_service import (
     handle_file_message,
 )
 from apps.qq_ai_bridge.services.group_chat_service import load_group_config, should_log_group
+from apps.qq_ai_bridge.services.reaction_follow_service import (
+    handle_group_reaction_notice,
+    record_group_message_for_reaction_learning,
+)
 from apps.qq_ai_bridge.services.style_service import capture_group_style
 from apps.qq_ai_bridge.services.vocat_service import (
     maybe_handle_vocat_remote_command,
@@ -42,6 +52,9 @@ from apps.qq_ai_bridge.config.settings import GROUP_CONFIG_PATH
 webhook_bp = Blueprint("webhook", __name__)
 SKILL_REGISTRY = build_skill_registry()
 _LAST_VOCAT_POST: dict | None = None
+_PENDING_IMAGE_CAPTIONS: dict[str, dict] = {}
+_PENDING_IMAGE_CAPTIONS_LOCK = threading.Lock()
+IMAGE_CAPTION_GRACE_SECONDS = 5.0
 
 
 class MessageParser:
@@ -89,6 +102,7 @@ class MessageParser:
         text, is_mentioned = extract_text_and_mention(data, self_id)
         image_inputs = extract_image_inputs(data, text)
         reply_reference = extract_reply_reference(data)
+        at_targets = extract_at_targets(data)
         return {
             "type": "text",
             "msg_type": msg_type,
@@ -101,6 +115,8 @@ class MessageParser:
             "timestamp": data.get("time"),
             "image_inputs": image_inputs,
             "reply_reference": reply_reference,
+            "at_targets": at_targets,
+            "self_id": self_id,
             "message_id": data.get("message_id"),
         }
 
@@ -206,7 +222,7 @@ class SkillDispatcher:
             post_type="message",
             message_type=msg_type,
             user_id=user_id,
-            self_id=None,
+            self_id=parsed_data.get("self_id"),
             group_id=group_id,
             group_config=group_config,
             should_log=should_log,
@@ -231,6 +247,62 @@ class SkillDispatcher:
                 _send_group_msg_raw(group_id, result.response_text)
 
 
+def _caption_pending_key(parsed_data: dict) -> str:
+    return f"{parsed_data.get('msg_type')}:{parsed_data.get('group_id') or ''}:{parsed_data.get('user_id') or ''}"
+
+
+def _maybe_handle_image_caption_merge(parsed_data: dict) -> bool:
+    if parsed_data.get("type") != "text" or parsed_data.get("msg_type") != "group":
+        return False
+    image_inputs = parsed_data.get("image_inputs") or {}
+    has_image = bool(image_inputs.get("has_image"))
+    text = normalize_query_text(parsed_data.get("text", ""))
+    key = _caption_pending_key(parsed_data)
+
+    if has_image and not text:
+        with _PENDING_IMAGE_CAPTIONS_LOCK:
+            _PENDING_IMAGE_CAPTIONS[key] = {"parsed": parsed_data, "created_at": time.time()}
+        timer = threading.Timer(IMAGE_CAPTION_GRACE_SECONDS, _flush_pending_image_caption, args=(key,))
+        timer.daemon = True
+        timer.start()
+        print(
+            f"[VISION] waiting_for_caption group_id={parsed_data.get('group_id')}"
+            f" user_id={parsed_data.get('user_id')} grace_seconds={IMAGE_CAPTION_GRACE_SECONDS}"
+        )
+        return True
+
+    if text and not has_image:
+        with _PENDING_IMAGE_CAPTIONS_LOCK:
+            pending = _PENDING_IMAGE_CAPTIONS.pop(key, None)
+        if pending and time.time() - float(pending.get("created_at", 0)) <= IMAGE_CAPTION_GRACE_SECONDS + 0.5:
+            merged = dict(pending["parsed"])
+            merged["text"] = text
+            merged["raw_message"] = f"{pending['parsed'].get('raw_message', '')} {parsed_data.get('raw_message', '')}".strip()
+            image_inputs = dict(merged.get("image_inputs") or {})
+            image_inputs["text"] = text
+            merged["image_inputs"] = image_inputs
+            print(
+                f"[VISION] merged_followup_caption group_id={merged.get('group_id')}"
+                f" user_id={merged.get('user_id')} text={_preview_text(text)!r}"
+            )
+            SkillDispatcher.dispatch(merged)
+            return True
+    return False
+
+
+def _flush_pending_image_caption(key: str) -> None:
+    with _PENDING_IMAGE_CAPTIONS_LOCK:
+        pending = _PENDING_IMAGE_CAPTIONS.pop(key, None)
+    if not pending:
+        return
+    parsed = pending.get("parsed") or {}
+    print(
+        f"[VISION] caption_wait_timeout group_id={parsed.get('group_id')}"
+        f" user_id={parsed.get('user_id')}"
+    )
+    SkillDispatcher.dispatch(parsed)
+
+
 def _run_async(coro):
     return asyncio.run(coro)
 
@@ -240,6 +312,29 @@ def _preview_text(text: str, limit: int = 80) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[:limit].rstrip() + "..."
+
+
+def _attach_forward_text_if_present(raw_event: dict, parsed: dict) -> dict:
+    if parsed.get("type") != "text":
+        return parsed
+    forward_id = extract_forward_id(raw_event)
+    forward_payload = get_forward_msg(forward_id) if forward_id else raw_event
+    forward_text = format_forward_messages(forward_payload)
+    if not forward_text:
+        return parsed
+    merged = dict(parsed)
+    prefix = normalize_query_text(merged.get("text", ""))
+    merged_text = f"{prefix}\n[聊天记录]\n{forward_text}" if prefix else f"[聊天记录]\n{forward_text}"
+    merged["text"] = merged_text
+    merged["raw_message"] = f"{merged.get('raw_message', '')}\n{merged_text}".strip()
+    image_inputs = dict(merged.get("image_inputs") or {})
+    image_inputs["text"] = merged_text
+    merged["image_inputs"] = image_inputs
+    print(
+        f"[WEBHOOK] merged forward chat record forward_id={forward_id or '-'}"
+        f" chars={len(forward_text)}"
+    )
+    return merged
 
 
 @webhook_bp.route("/", methods=["POST"])
@@ -252,6 +347,7 @@ def qq_webhook():
         try:
             parsed = MessageParser.parse_common_data(data)
             if parsed:
+                parsed = _attach_forward_text_if_present(data, parsed)
                 if parsed.get("msg_type") == "group" and not is_group_whitelisted(GROUP_CONFIG_PATH, parsed.get("group_id")):
                     return jsonify({"status": "ok", "skipped": "group_not_whitelisted"})
                 if parsed.get("type") == "text":
@@ -266,6 +362,15 @@ def qq_webhook():
                             f"[WEBHOOK] recv group group_id={parsed.get('group_id')} "
                             f"user_id={parsed.get('user_id')} nick={parsed.get('nick')!r} text={preview!r}"
                         )
+                        record_group_message_for_reaction_learning(
+                            group_id=parsed.get("group_id"),
+                            message_id=parsed.get("message_id"),
+                            user_id=parsed.get("user_id"),
+                            sender_name=parsed.get("nick", ""),
+                            text=parsed.get("text", ""),
+                            raw_message=parsed.get("raw_message", ""),
+                            timestamp=parsed.get("timestamp"),
+                        )
                 elif parsed.get("type") == "file":
                     print(
                         f"[WEBHOOK] recv file msg_type={parsed.get('msg_type')} "
@@ -279,7 +384,8 @@ def qq_webhook():
                     if remote_result and remote_result.get("handled"):
                         _send_private_msg_raw(parsed.get("user_id"), remote_result.get("reply", "已执行。"))
                         return jsonify({"status": "ok", "source": "vocat_remote_control"})
-                SkillDispatcher.dispatch(parsed)
+                if not _maybe_handle_image_caption_merge(parsed):
+                    SkillDispatcher.dispatch(parsed)
         except Exception as e:
             print(f"[WEBHOOK] Exception during message processing: {e}")
             traceback.print_exc()
@@ -296,6 +402,19 @@ def qq_webhook():
                     handle_file_message("group", user_id, group_id, file_info)
             except Exception as e:
                 print(f"[WEBHOOK] Exception during file upload notice processing: {e}")
+                traceback.print_exc()
+        elif notice_type == "group_msg_emoji_like":
+            try:
+                group_id = data.get("group_id") or data.get("groupId")
+                group_config = load_group_config(group_id) if group_id else {}
+                result = handle_group_reaction_notice(data, group_config=group_config, self_id=data.get("self_id"), log=print)
+                print(
+                    f"[WEBHOOK] reaction notice handled={result.get('handled')} followed={result.get('followed')} "
+                    f"group_id={result.get('group_id')} message_id={result.get('message_id')} emoji_id={result.get('emoji_id')} "
+                    f"reason={result.get('reason', '')}"
+                )
+            except Exception as e:
+                print(f"[WEBHOOK] Exception during reaction notice processing: {e}")
                 traceback.print_exc()
         else:
             print(f"[WEBHOOK] notice received: {notice_type} {sub_type}")

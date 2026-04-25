@@ -6,6 +6,7 @@ from unittest.mock import patch
 sys.path.insert(0, "qq-ai-bridge")
 
 from apps.qq_ai_bridge.adapters.napcat_client import (
+    react_message_with_multiple_emojis,
     react_message_with_preferred_emojis,
     send_group_msg,
     send_private_msg,
@@ -60,6 +61,22 @@ class NapcatClientTests(unittest.TestCase):
         self.assertEqual(result["parts_sent"], 1)
         self.assertEqual(result["parts_total"], 1)
 
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_send_private_msg_converts_cq_face_to_message_segment(self, mock_post):
+        mock_post.return_value = SimpleNamespace(ok=True, status_code=200, text="ok")
+
+        result = send_private_msg(67890, "[CQ:face,id=66]", quiet=True, reply_to_message_id=123456)
+
+        self.assertTrue(result["ok"])
+        payload = mock_post.call_args.args[1]
+        self.assertEqual(
+            payload["message"],
+            [
+                {"type": "reply", "data": {"id": "123456"}},
+                {"type": "face", "data": {"id": "66"}},
+            ],
+        )
+
     @patch("apps.qq_ai_bridge.adapters.napcat_client.time.sleep", return_value=None)
     @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
     def test_send_group_msg_force_parts_sends_multiple_messages(self, mock_post, _mock_sleep):
@@ -108,6 +125,68 @@ class NapcatClientTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["emoji_name"], "red_button")
         self.assertEqual(mock_post.call_count, 1)
+
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_react_message_with_preferred_emojis_supports_new_candidates(self, mock_post):
+        mock_post.return_value = SimpleNamespace(ok=True, status_code=200, text='{"retcode":0}')
+        result = react_message_with_preferred_emojis(123, quiet=True, preferred_order=("explode_marker",))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["emoji_name"], "explode_marker")
+
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_react_message_with_preferred_emojis_supports_official_candidates(self, mock_post):
+        mock_post.return_value = SimpleNamespace(ok=True, status_code=200, text='{"retcode":0}')
+
+        result = react_message_with_preferred_emojis(123, quiet=True, preferred_order=("button_marker",))
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["emoji_name"], "button_marker")
+        self.assertEqual(mock_post.call_args.args[1]["emoji_id"], "424")
+
+    @patch("apps.qq_ai_bridge.adapters.napcat_client.time.sleep", return_value=None)
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_react_message_with_multiple_emojis_applies_distinct_reactions(self, mock_post, _mock_sleep):
+        mock_post.return_value = SimpleNamespace(ok=True, status_code=200, text='{"retcode":0}')
+
+        result = react_message_with_multiple_emojis(123456, count=3, quiet=True)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["applied_count"], 3)
+        self.assertEqual(mock_post.call_count, 3)
+
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._append_outbound_event")
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_react_message_with_multiple_emojis_can_preserve_preferred_order(self, mock_post, _mock_event):
+        mock_post.return_value = SimpleNamespace(ok=True, status_code=200, text='{"retcode":0}')
+
+        result = react_message_with_multiple_emojis(
+            123456,
+            count=2,
+            quiet=True,
+            preferred_order=("red_button", "laugh_cry", "lollipop"),
+            preserve_order=True,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["emoji_names"], ["red_button", "laugh_cry"])
+        self.assertEqual(mock_post.call_args_list[0].args[1]["emoji_id"], "66")
+
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._append_outbound_event")
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_react_message_with_multiple_emojis_supports_official_ids(self, mock_post, _mock_event):
+        mock_post.return_value = SimpleNamespace(ok=True, status_code=200, text='{"retcode":0}')
+
+        result = react_message_with_multiple_emojis(
+            123456,
+            count=3,
+            quiet=True,
+            preferred_order=("watermelon", "awkward", "surprised"),
+            preserve_order=True,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["emoji_names"], ["watermelon", "awkward", "surprised"])
+        self.assertEqual([call.args[1]["emoji_id"] for call in mock_post.call_args_list], ["89", "10", "0"])
 
 
 if __name__ == "__main__":

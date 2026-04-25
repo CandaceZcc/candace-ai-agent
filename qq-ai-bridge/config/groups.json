@@ -5,6 +5,7 @@
     "learn_style": false,
     "reply_all_messages": false,
     "enable_vision": true,
+    "follow_group_reactions": false,
     "ignore": false,
     "mute_log": false,
     "persona_intensity": 30
@@ -15,15 +16,37 @@
     "ignore": false,
     "reply_all_messages": true,
     "reaction_decision_mode": "llm_first",
-    "bot_can_reply": true
+    "bot_can_reply": true,
+    "follow_group_reactions": true,
+    "reaction_notice_log": true
   },
   "810938203": {
-    "name": "哈基米",
+    "name": "哈基米音乐作者群（肘击牢大版）",
     "enabled": true,
     "ignore": false,
     "reply_all_messages": false,
     "bot_can_reply": true,
-    "reaction_decision_mode": "llm_first"
+    "reaction_decision_mode": "llm_first",
+    "follow_group_reactions": true,
+    "reaction_notice_log": true
+  },
+  "1084330702": {
+    "name": "活全家大合作",
+    "enabled": true,
+    "ignore": false,
+    "reply_all_messages": true,
+    "reaction_decision_mode": "llm_first",
+    "bot_can_reply": true,
+    "follow_group_reactions": true,
+    "reaction_notice_log": true
+  },
+  "610463880": {
+    "name": "测试群",
+    "enabled": true,
+    "ignore": false,
+    "reply_all_messages": true,
+    "reaction_decision_mode": "llm_first",
+    "bot_can_reply": true
   },
   "437966130": {
     "name": "群聊",

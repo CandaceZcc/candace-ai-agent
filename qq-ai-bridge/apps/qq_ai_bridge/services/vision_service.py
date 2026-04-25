@@ -14,6 +14,7 @@ VISION_USER_FALLBACK = "我这边暂时看不了图，稍后再试试。"
 VISION_USER_DOWNLOAD_FALLBACK = "这张图我暂时没拿到，麻烦稍后重发试试。"
 
 
+# log_vision_config_status：打印视觉配置状态
 def log_vision_config_status(log=print) -> None:
     cfg = read_vision_config()
     has_url = "set" if cfg["api_url"] else "missing"
@@ -29,6 +30,7 @@ def log_vision_config_status(log=print) -> None:
         log(f"[VISION][CONFIG][WARNING] {item} is using a placeholder value and must be replaced with a real value")
 
 
+# run_vision_pipeline：调用视觉模型识图
 def run_vision_pipeline(image_urls: str | Iterable[str], user_text: str, vision_log, save_dir=IMAGE_TMP_DIR) -> str:
     """Download an image, call the vision client, and return a short reply."""
     if isinstance(image_urls, str):
@@ -87,6 +89,7 @@ def run_vision_pipeline(image_urls: str | Iterable[str], user_text: str, vision_
     return VISION_USER_FALLBACK
 
 
+# _postprocess_vision_reply：视觉回复处理
 def _postprocess_vision_reply(reply: str, user_text: str = "") -> str:
     raw = str(reply or "").strip()
     if not raw:
@@ -134,6 +137,7 @@ def _postprocess_vision_reply(reply: str, user_text: str = "") -> str:
     return " ".join(text.split())
 
 
+# _mask_request_url：遮蔽URL
 def _mask_request_url(url: str) -> str:
     if not url:
         return ""
@@ -143,6 +147,7 @@ def _mask_request_url(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
 
 
+# _detect_placeholder_values：检测占位值
 def _detect_placeholder_values(cfg: dict) -> list[str]:
     placeholder_map = {
         "VISION_API_URL": {

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
+# log_decision：记录决策
 def log_decision(log=print, **fields: Any) -> None:
     """Emit one compact structured decision line."""
     ordered_keys = (

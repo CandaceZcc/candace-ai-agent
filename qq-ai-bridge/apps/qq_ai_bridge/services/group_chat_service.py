@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import hashlib
 import threading
 import time
@@ -13,13 +14,17 @@ from storage_utils import append_group_chat_log
 from storage_utils import load_group_config as load_group_config_from_file
 
 from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
-from apps.qq_ai_bridge.adapters.napcat_client import react_message_with_preferred_emojis, send_group_msg
 from apps.qq_ai_bridge.config.settings import GROUP_CONFIG_PATH
 from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
 from apps.qq_ai_bridge.config.settings import GLOBAL_LISTEN_GROUP_IDS
-from apps.qq_ai_bridge.services.expression_selector import select_group_expression
+from apps.qq_ai_bridge.services.emoji_service import infer_reaction_preferred_order
 from apps.qq_ai_bridge.services.prompt_service import prepare_group_ai_prompt
-from apps.qq_ai_bridge.services.timing_gate import evaluate_group_timing_gate
+from apps.qq_ai_bridge.services.response_action import (
+    ActionKind,
+    ResponseAction,
+    execute_group_action,
+    parse_llm_response_action,
+)
 
 GROUP_DEBOUNCE_MS = 5000
 
@@ -50,6 +55,12 @@ class GroupChatState:
 
 _GROUP_CHAT_STATES: dict[str, GroupChatState] = {}
 _GROUP_CHAT_STATES_LOCK = threading.Lock()
+_RECENT_REPEAT_FOLLOWS: dict[str, float] = {}
+_REPEAT_FOLLOW_COOLDOWN_SECONDS = 60
+_REPEAT_FOLLOW_MIN_COUNT = 3
+_REPEAT_FOLLOW_MAX_CHARS = 80
+_TURN_EXTENSION_SECONDS = 2.0
+_TURN_EXTENSION_MAX_WINDOW_SECONDS = 8.0
 _ZH_NUM_MAP = {
     "一": 1,
     "二": 2,
@@ -67,17 +78,20 @@ _REPLY_FILLER_PATTERN = re.compile(r"(?:^|\s)(确实|草|牛逼|典|寄了?|救�
 _REPLY_LOOP_PATTERN = re.compile(r"^(确实|草|牛逼|典|寄了?|救命|贴贴)(\s+(确实|草|牛逼|典|寄了?|救命|贴贴))*$", re.IGNORECASE)
 
 
+# load_group_config：加载群聊配置
 def load_group_config(group_id) -> dict:
     """Load merged group config for a specific QQ group."""
     return load_group_config_from_file(GROUP_CONFIG_PATH, group_id)
 
 
+# should_log_group：判断群聊日志开关
 def should_log_group(group_id) -> bool:
     """Return whether logs should be printed for a group."""
     cfg = load_group_config(group_id)
     return not cfg.get("ignore", False) and not cfg.get("mute_log", False)
 
 
+# enqueue_group_text：群聊文本入队合并
 def enqueue_group_text(
     group_id,
     user_id,
@@ -102,7 +116,7 @@ def enqueue_group_text(
         text=normalized_text,
         timestamp=timestamp,
         message_id=message_id,
-        reply_reference=reply_reference if isinstance(reply_reference, dict) else None,
+        reply_reference=reply_reference,
         explicit_trigger=bool(explicit_trigger),
     )
 
@@ -141,6 +155,7 @@ def enqueue_group_text(
     }
 
 
+# _get_group_chat_state：获取群聊队列状态
 def _get_group_chat_state(group_id) -> GroupChatState:
     key = str(group_id)
     with _GROUP_CHAT_STATES_LOCK:
@@ -151,6 +166,7 @@ def _get_group_chat_state(group_id) -> GroupChatState:
         return state
 
 
+# _run_group_chat_worker：运行群聊消费线程
 def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
     state = _get_group_chat_state(group_id)
     while True:
@@ -163,6 +179,12 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
 
         if wait_ms > 0:
             time.sleep(wait_ms / 1000.0)
+            continue
+
+        with state.lock:
+            extension_ms = _compute_turn_extension_ms(state.pending, state.debounce_started_monotonic)
+        if extension_ms > 0:
+            time.sleep(extension_ms / 1000.0)
             continue
 
         with state.lock:
@@ -191,21 +213,56 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             f" debounce_window_ms={debounce_window_ms}"
         )
 
+        repeat_text, repeat_count = _detect_repeat_follow_text(batch)
+        if repeat_text and _claim_repeat_follow(group_id, repeat_text):
+            action_result = execute_group_action(
+                group_id,
+                ResponseAction(kind=ActionKind.TEXT, text=repeat_text, reason="repeat_follow"),
+                target_message_id=None,
+                quiet=not should_log_group(group_id),
+            )
+            if action_result.get("ok"):
+                append_group_chat_log(
+                    BASE_DATA_DIR,
+                    group_id,
+                    {
+                        "timestamp": int(batch[-1].timestamp or 0) if batch else 0,
+                        "sender_name": "群聊复读",
+                        "user_id": batch[-1].user_id if batch else None,
+                        "message": repeat_text,
+                        "assistant": repeat_text,
+                        "source": "group_chat:repeat_follow",
+                    },
+                    limit=500,
+                )
+                log(
+                    f"[GROUP_CHAT] repeat_followed group_id={group_id}"
+                    f" count={repeat_count} text={repeat_text!r}"
+                )
+                continue
+            log(
+                f"[GROUP_CHAT] repeat_follow_failed group_id={group_id}"
+                f" count={repeat_count} text={repeat_text!r}"
+            )
+
+        global_listen_mode = _is_global_listen_group(group_id, group_config)
         direct_react_count = _detect_direct_reaction_request_count(merged_text)
         decision_mode = _get_reaction_decision_mode(group_config)
         if direct_react_count > 0 and decision_mode in {"rule_first", "hybrid", "llm_first"}:
             target_message_id = _pick_reaction_target_message_id(batch)
             if target_message_id:
-                reacted = 0
-                for _ in range(direct_react_count):
-                    reaction_result = react_message_with_preferred_emojis(
-                        target_message_id,
-                        quiet=not should_log_group(group_id),
-                    )
-                    if not reaction_result.get("ok"):
-                        break
-                    reacted += 1
-                    time.sleep(0.12)
+                action_result = execute_group_action(
+                    group_id,
+                    ResponseAction(
+                        kind=ActionKind.REACTION,
+                        reaction_count=direct_react_count,
+                        preferred_order=infer_reaction_preferred_order(merged_text),
+                        reason="direct_reaction_request",
+                    ),
+                    target_message_id=target_message_id,
+                    quiet=not should_log_group(group_id),
+                )
+                reacted = int(action_result.get("applied_count", 0))
                 if reacted > 0:
                     log(
                         f"[GROUP_CHAT] direct_reacted group_id={group_id} "
@@ -213,52 +270,55 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                     )
                     continue
 
-        timing_decision = evaluate_group_timing_gate(group_id, batch, group_config)
-        if timing_decision:
-            if timing_decision.mode.value == "no_reply":
-                log(
-                    f"[GROUP_CHAT] timing_gate_skip group_id={group_id} "
-                    f"reason={timing_decision.reason} confidence={timing_decision.confidence}"
+        if global_listen_mode:
+            llm_decision = _decide_group_response_mode_with_llm(
+                merged_text=merged_text,
+                batch=batch,
+                group_config=group_config,
+                log=log,
+            )
+            if llm_decision["mode"] == "silence":
+                action_result = execute_group_action(
+                    group_id,
+                    ResponseAction(kind=ActionKind.NO_REPLY, reason=llm_decision.get("reason", "")),
+                    target_message_id=None,
+                    quiet=not should_log_group(group_id),
                 )
-                continue
-            if timing_decision.mode.value == "reaction":
+                if action_result.get("ok"):
+                    log(
+                        f"[GROUP_CHAT] llm_decision=silence group_id={group_id}"
+                        f" reason={llm_decision.get('reason', '')}"
+                    )
+                    continue
+            if llm_decision["mode"] == "reaction":
                 target_message_id = _pick_reaction_target_message_id(batch)
                 if target_message_id:
-                    reaction_result = react_message_with_preferred_emojis(
-                        target_message_id,
+                    action_result = execute_group_action(
+                        group_id,
+                        ResponseAction(
+                            kind=ActionKind.REACTION,
+                            reaction_count=1,
+                            preferred_order=infer_reaction_preferred_order(merged_text),
+                            reason=llm_decision.get("reason", ""),
+                        ),
+                        target_message_id=target_message_id,
                         quiet=not should_log_group(group_id),
                     )
-                    if reaction_result.get("ok"):
+                    if action_result.get("ok"):
                         log(
-                            f"[GROUP_CHAT] timing_gate_reacted group_id={group_id} "
-                            f"message_id={target_message_id} reason={timing_decision.reason}"
+                            f"[GROUP_CHAT] llm_decision=reaction group_id={group_id}"
+                            f" message_id={target_message_id}"
+                            f" applied_count={action_result.get('applied_count', 0)}"
+                            f" reason={llm_decision.get('reason', '')}"
                         )
                         continue
-            if timing_decision.mode.value == "text" and timing_decision.text:
-                send_group_msg(
-                    group_id,
-                    timing_decision.text,
-                    quiet=not should_log_group(group_id),
-                    reply_to_message_id=_pick_reply_target_message_id(batch),
-                )
-                append_group_chat_log(
-                    BASE_DATA_DIR,
-                    group_id,
-                    {
-                        "timestamp": int(batch[-1].timestamp or 0) if batch else 0,
-                        "sender_name": "群聊时机门控",
-                        "user_id": batch[-1].user_id if batch else None,
-                        "message": merged_text,
-                        "assistant": timing_decision.text,
-                        "source": "timing_gate",
-                    },
-                    limit=500,
-                )
-                log(
-                    f"[GROUP_CHAT] timing_gate_replied group_id={group_id} "
-                    f"reason={timing_decision.reason} text={timing_decision.text!r}"
-                )
-                continue
+                    log(
+                        f"[GROUP_CHAT] llm_reaction_failed group_id={group_id}"
+                        f" message_id={target_message_id}"
+                        f" reason={llm_decision.get('reason', '')}"
+                    )
+                else:
+                    log(f"[GROUP_CHAT] llm_reaction_skipped_missing_message_id group_id={group_id}")
 
         prompt_payload = prepare_group_ai_prompt(
             group_id,
@@ -268,7 +328,7 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             batch_context=merged_batch,
             group_config=group_config,
         )
-        reply = call_ai(
+        llm_raw_reply = call_ai(
             prompt_payload["prompt"],
             metadata={
                 "user_id": f"group:{group_id}",
@@ -281,28 +341,44 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                 "prompt_chars": prompt_payload["prompt_chars"],
             },
         )
-        reply = _humanize_group_reply(reply, merged_text)
-        reply = select_group_expression(reply, merged_text, group_config=group_config)
-        requested_parts = _detect_requested_parts(batch[-1].text if batch else "")
-        if _should_use_reaction_instead(merged_text, reply, group_config=group_config):
-            target_message_id = _pick_reaction_target_message_id(batch)
-            if target_message_id:
-                reaction_result = react_message_with_preferred_emojis(
-                    target_message_id,
+        llm_action = parse_llm_response_action(llm_raw_reply)
+        if llm_action.kind == ActionKind.NO_REPLY:
+            fallback_text = _build_explicit_trigger_no_reply_fallback(merged_text, batch, llm_action)
+            if fallback_text:
+                llm_action = ResponseAction(kind=ActionKind.TEXT, text=fallback_text, reason="explicit_no_reply_fallback")
+            else:
+                execute_group_action(
+                    group_id,
+                    llm_action,
+                    target_message_id=None,
                     quiet=not should_log_group(group_id),
                 )
-                if reaction_result.get("ok"):
-                    log(
-                        f"[GROUP_CHAT] reacted group_id={group_id} message_id={target_message_id} "
-                        f"emoji={reaction_result.get('emoji_name')} id={reaction_result.get('emoji_id')}"
-                    )
-                    continue
-        send_group_msg(
+                log(f"[GROUP_CHAT] llm_action=no_reply group_id={group_id} reason={llm_action.reason!r}")
+                continue
+        if llm_action.kind == ActionKind.REACTION:
+            target_message_id = _pick_reaction_target_message_id(batch)
+            action_result = execute_group_action(
+                group_id,
+                llm_action,
+                target_message_id=target_message_id,
+                quiet=not should_log_group(group_id),
+            )
+            if action_result.get("ok"):
+                log(
+                    f"[GROUP_CHAT] llm_action=reaction group_id={group_id}"
+                    f" message_id={target_message_id} applied_count={action_result.get('applied_count', 0)}"
+                )
+                continue
+        llm_action.text = _humanize_group_reply(llm_action.text, merged_text)
+        requested_parts = _detect_requested_parts(batch[-1].text if batch else "")
+        reply_to_message_id = _pick_text_reply_target_message_id(batch, llm_action.text)
+        execute_group_action(
             group_id,
-            reply,
+            llm_action,
+            target_message_id=None,
             quiet=not should_log_group(group_id),
             force_parts=requested_parts,
-            reply_to_message_id=_pick_reply_target_message_id(batch),
+            reply_to_message_id=reply_to_message_id,
         )
         append_group_chat_log(
             BASE_DATA_DIR,
@@ -312,7 +388,7 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                 "sender_name": "群聊汇总",
                 "user_id": batch[-1].user_id if batch else None,
                 "message": merged_text,
-                "assistant": reply,
+                "assistant": llm_action.text,
                 "source": "group_chat",
             },
             limit=500,
@@ -322,6 +398,7 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             f" merged_message_count={merged_count}"
             f" merged_user_count={user_count}"
             f" requested_parts={requested_parts or 1}"
+            f" reply_to_message_id={reply_to_message_id or '-'}"
             f" prompt_mode={prompt_payload['prompt_mode']}"
             f" query_len={prompt_payload['query_len']}"
             f" history_chars={prompt_payload['history_chars']}"
@@ -332,18 +409,16 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
         )
 
 
+# _merge_pending_group_messages：合并待处理群消息
 def _merge_pending_group_messages(messages: list[PendingGroupMessage]) -> dict:
     merged_blocks: list[dict] = []
     raw_messages = 0
-    reply_references: list[dict] = []
 
     for item in messages:
         text = normalize_query_text(item.text)
         if not text:
             continue
         raw_messages += 1
-        if item.reply_reference:
-            reply_references.append(item.reply_reference)
         sender_name = item.sender_name or str(item.user_id or "?")
         if merged_blocks and merged_blocks[-1]["user_id"] == item.user_id:
             merged_blocks[-1]["texts"].append(text)
@@ -368,10 +443,102 @@ def _merge_pending_group_messages(messages: list[PendingGroupMessage]) -> dict:
         "message_count": raw_messages,
         "user_count": len({str(block['user_id']) for block in merged_blocks}),
         "merged_blocks": merged_blocks,
-        "reply_references": reply_references,
     }
 
 
+# _compute_turn_extension_ms：计算补话等待时长
+def _compute_turn_extension_ms(messages: list[PendingGroupMessage], debounce_started_monotonic: float) -> int:
+    if len(messages) < 2 or not debounce_started_monotonic:
+        return 0
+    elapsed = time.monotonic() - debounce_started_monotonic
+    if elapsed >= _TURN_EXTENSION_MAX_WINDOW_SECONDS:
+        return 0
+    latest = messages[-1]
+    previous = messages[-2]
+    if latest.user_id is None or latest.user_id != previous.user_id:
+        return 0
+    latest_text = normalize_query_text(latest.text)
+    previous_text = normalize_query_text(previous.text)
+    if not latest_text or not previous_text:
+        return 0
+    if latest.explicit_trigger or previous.explicit_trigger or _looks_like_followup_text(latest_text):
+        return int(_TURN_EXTENSION_SECONDS * 1000)
+    return 0
+
+
+# _looks_like_followup_text：判断是否补充发言
+def _looks_like_followup_text(text: str) -> bool:
+    normalized = normalize_query_text(text)
+    if not normalized:
+        return False
+    if len(normalized) <= 18:
+        return True
+    return any(token in normalized for token in ("还有", "然后", "补充", "刚才", "上面", "这个", "那个", "的话", "所以"))
+
+
+# _detect_repeat_follow_text：检测复读跟刷文本
+def _detect_repeat_follow_text(messages: list[PendingGroupMessage]) -> tuple[str, int]:
+    counts: dict[str, int] = {}
+    first_seen_order: list[str] = []
+    for item in messages:
+        text = normalize_query_text(item.text)
+        if not _is_safe_repeat_follow_text(text):
+            continue
+        if text not in counts:
+            first_seen_order.append(text)
+            counts[text] = 0
+        counts[text] += 1
+        if counts[text] >= _REPEAT_FOLLOW_MIN_COUNT:
+            return text, counts[text]
+
+    for text in first_seen_order:
+        count = counts.get(text, 0)
+        if count >= _REPEAT_FOLLOW_MIN_COUNT:
+            return text, count
+    return "", 0
+
+
+# _is_safe_repeat_follow_text：校验复读文本安全
+def _is_safe_repeat_follow_text(text: str) -> bool:
+    normalized = normalize_query_text(text)
+    if not normalized:
+        return False
+    if len(normalized) > _REPEAT_FOLLOW_MAX_CHARS:
+        return False
+    if "[CQ:" in normalized or "[[" in normalized or "]]" in normalized:
+        return False
+    if _looks_like_forwarded_chat_record(normalized):
+        return False
+    return True
+
+
+# _claim_repeat_follow：领取复读冷却名额
+def _claim_repeat_follow(group_id, text: str, *, now: float | None = None) -> bool:
+    normalized = normalize_query_text(text)
+    if not _is_safe_repeat_follow_text(normalized):
+        return False
+    current = time.monotonic() if now is None else now
+    _prune_repeat_follow_cache(current)
+    key = f"{group_id}:{hashlib.md5(normalized.encode('utf-8')).hexdigest()}"
+    last_followed = _RECENT_REPEAT_FOLLOWS.get(key)
+    if last_followed is not None and current - last_followed < _REPEAT_FOLLOW_COOLDOWN_SECONDS:
+        return False
+    _RECENT_REPEAT_FOLLOWS[key] = current
+    return True
+
+
+# _prune_repeat_follow_cache：清理复读冷却缓存
+def _prune_repeat_follow_cache(now: float) -> None:
+    expired = [
+        key
+        for key, timestamp in _RECENT_REPEAT_FOLLOWS.items()
+        if now - timestamp >= _REPEAT_FOLLOW_COOLDOWN_SECONDS * 2
+    ]
+    for key in expired:
+        _RECENT_REPEAT_FOLLOWS.pop(key, None)
+
+
+# _detect_requested_parts：检测分条发送数量
 def _detect_requested_parts(text: str) -> int | None:
     normalized = normalize_query_text(text)
     if not normalized:
@@ -396,12 +563,24 @@ def _detect_requested_parts(text: str) -> int | None:
     return min(value, 5)
 
 
+# _detect_direct_reaction_request_count：检测直接贴表情请求
 def _detect_direct_reaction_request_count(text: str) -> int:
     normalized = normalize_query_text(text)
     if not normalized:
         return 0
-    asks_react = any(token in normalized for token in ("贴", "发", "react", "emoji"))
-    has_emoji_word = ("表情" in normalized) or ("emoji" in normalized) or ("react" in normalized)
+    if not any(token in normalized for token in ("消息", "这条", "上面", "它", "那条", "刚才", "上一条", "react")):
+        return 0
+    asks_react = any(token in normalized for token in ("贴", "点", "按", "react"))
+    has_emoji_word = (
+        ("表情" in normalized)
+        or ("emoji" in normalized)
+        or ("react" in normalized)
+        or ("按钮" in normalized)
+        or ("红心" in normalized)
+        or ("爱心" in normalized)
+        or ("不一样" in normalized)
+        or ("换一个" in normalized)
+    )
     if not (asks_react and has_emoji_word):
         return 0
 
@@ -418,6 +597,7 @@ def _detect_direct_reaction_request_count(text: str) -> int:
     return min(max(value, 1), 3)
 
 
+# _get_reaction_decision_mode：读取表情决策模式
 def _get_reaction_decision_mode(group_config: dict | None) -> str:
     cfg = group_config or {}
     mode = str(cfg.get("reaction_decision_mode", "llm_first") or "llm_first").strip().lower()
@@ -426,6 +606,7 @@ def _get_reaction_decision_mode(group_config: dict | None) -> str:
     return mode
 
 
+# _humanize_group_reply：润色群聊回复语气
 def _humanize_group_reply(reply: str, merged_text: str) -> str:
     """Reduce repetitive meme fillers so replies sound less mechanical."""
     normalized = normalize_query_text(reply)
@@ -438,11 +619,77 @@ def _humanize_group_reply(reply: str, merged_text: str) -> str:
     if normalized.startswith("草 "):
         normalized = normalized[2:].strip() or "离谱"
 
+    if _looks_like_clarifying_type_question(normalized) and not _looks_like_user_asked_type_choice(merged_text):
+        return "发啥都行，我看着接。"
+
+    friendly_reply = _humanize_friendly_greeting_reply(normalized, merged_text)
+    if friendly_reply:
+        return friendly_reply
+
     if _REPLY_LOOP_PATTERN.fullmatch(normalized):
         return _build_context_fallback(merged_text)
+    normalized = _soften_plain_group_answer(normalized, merged_text)
     return normalized
 
 
+# _soften_plain_group_answer：群聊处理
+def _soften_plain_group_answer(reply: str, merged_text: str) -> str:
+    normalized = normalize_query_text(reply)
+    if not _looks_like_plain_answer(normalized, merged_text):
+        return normalized
+    if any(token in normalized for token in ("喵", "呀", "捏", "欸", "草", "笑死", "离谱")):
+        return normalized
+    if len(normalized) <= 18:
+        return normalized.rstrip("。！？!? ") + "喵"
+    return normalized.rstrip("。！？!? ") + "，大概是这样喵。"
+
+
+# _humanize_friendly_greeting_reply：回复处理
+def _humanize_friendly_greeting_reply(reply: str, merged_text: str) -> str | None:
+    text = normalize_query_text(merged_text)
+    if reply not in {"在", "嗯", "哦", "啊", "来了", "在呢"}:
+        return None
+    if any(token in text for token in ("宝宝", "宝贝", "亲亲", "老婆", "猫猫", "喵喵")):
+        for token in ("宝宝", "宝贝", "亲亲", "老婆", "猫猫", "喵喵"):
+            if token in text:
+                return token
+    if any(token in text for token in ("在吗", "在嘛", "在不", "喂", "醒醒", "麦麦")):
+        return "在喵"
+    return None
+
+
+# _looks_like_plain_answer：相关逻辑处理
+def _looks_like_plain_answer(reply: str, merged_text: str) -> bool:
+    normalized_reply = normalize_query_text(reply)
+    normalized_query = normalize_query_text(merged_text)
+    if not normalized_reply or len(normalized_reply) > 80:
+        return False
+    if any(token in normalized_query for token in ("草", "妈", "操", "鸡巴", "几把", "色情", "政治", "敏感")):
+        return False
+    if any(token in normalized_reply for token in ("不能", "不要", "抱歉", "违法", "危险")):
+        return False
+    if "，" in normalized_reply or "。" in normalized_reply or any(token in normalized_reply for token in ("是", "不是", "适合", "更好", "因为", "没有")):
+        return True
+    return False
+
+
+# _looks_like_clarifying_type_question：相关逻辑处理
+def _looks_like_clarifying_type_question(reply: str) -> bool:
+    normalized = normalize_query_text(reply)
+    return bool(
+        normalized.endswith(("？", "?"))
+        and "类型" in normalized
+        and any(token in normalized for token in ("文字", "图片", "表情", "发什么", "哪种"))
+    )
+
+
+# _looks_like_user_asked_type_choice：用户处理
+def _looks_like_user_asked_type_choice(text: str) -> bool:
+    normalized = normalize_query_text(text)
+    return any(token in normalized for token in ("什么类型", "哪种", "文字还是图片", "图片还是文字"))
+
+
+# _build_context_fallback：构建上下文兜底
 def _build_context_fallback(merged_text: str) -> str:
     text = normalize_query_text(merged_text)
     if any(token in text for token in ("?", "？", "吗", "咋", "怎么")):
@@ -452,6 +699,27 @@ def _build_context_fallback(merged_text: str) -> str:
     return "收到"
 
 
+# _build_explicit_trigger_no_reply_fallback：构建回复兜底
+def _build_explicit_trigger_no_reply_fallback(
+    merged_text: str,
+    batch: list[PendingGroupMessage],
+    action: ResponseAction,
+) -> str | None:
+    text = normalize_query_text(merged_text)
+    if not text or not any(bool(item.explicit_trigger) for item in batch):
+        return None
+    if _looks_like_stop_talking_request(text):
+        return None
+    if action.reason == "legacy_emoji_tag_blocked":
+        return None
+    if any(token in text for token in ("宝宝", "在吗", "在不", "醒醒", "喂")):
+        return "在呢喵"
+    if any(token in text for token in ("?", "？", "吗", "怎么", "咋", "为什么")):
+        return "咋了"
+    return _build_context_fallback(text)
+
+
+# _pick_reaction_target_message_id：选择贴表情目标消息
 def _pick_reaction_target_message_id(messages: list[PendingGroupMessage]) -> int | None:
     for item in reversed(messages):
         if item.message_id:
@@ -462,10 +730,198 @@ def _pick_reaction_target_message_id(messages: list[PendingGroupMessage]) -> int
     return None
 
 
-def _pick_reply_target_message_id(messages: list[PendingGroupMessage]) -> int | None:
-    return _pick_reaction_target_message_id(messages)
+# _pick_text_reply_target_message_id：选择文本回复引用目标
+def _pick_text_reply_target_message_id(messages: list[PendingGroupMessage], reply_text: str = "") -> int | None:
+    if not messages:
+        return None
+    reply = normalize_query_text(reply_text)
+    scored: list[tuple[int, int, int]] = []
+    for index, item in enumerate(messages):
+        if not item.message_id:
+            continue
+        text = normalize_query_text(item.text)
+        if not text:
+            continue
+        score = index
+        if item.explicit_trigger:
+            score += 1000
+        if any(token in text for token in ("?", "？", "吗", "怎么", "为什么", "咋", "什么", "哪", "谁")):
+            score += 200
+        if any(token in text for token in ("图", "图片", "截图", "聊天记录", "这个", "上面", "刚才")):
+            score += 120
+        if reply and _reply_mentions_message_topic(reply, text):
+            score += 80
+        scored.append((score, index, int(item.message_id)))
+    if not scored:
+        return None
+    return max(scored)[2]
 
 
+# _reply_mentions_message_topic：回复消息处理
+def _reply_mentions_message_topic(reply_text: str, message_text: str) -> bool:
+    reply = normalize_query_text(reply_text).lower()
+    message = normalize_query_text(message_text).lower()
+    if not reply or not message:
+        return False
+    keywords = [
+        token
+        for token in re.split(r"[\s，。！？,.!?:：；、/|]+", message)
+        if len(token) >= 2 and token not in {"这个", "那个", "什么", "怎么", "为什么"}
+    ]
+    return any(token in reply for token in keywords[:8])
+
+
+# _is_global_listen_group：判断是否全局监听群
+def _is_global_listen_group(group_id, group_config: dict | None) -> bool:
+    cfg = group_config or {}
+    return bool(cfg.get("reply_all_messages", False)) or int(group_id or 0) in GLOBAL_LISTEN_GROUP_IDS
+
+
+# _decide_group_response_mode_with_llm：调用模型决定回复模式
+def _decide_group_response_mode_with_llm(
+    merged_text: str,
+    batch: list[PendingGroupMessage],
+    group_config: dict | None,
+    log,
+) -> dict:
+    normalized_text = normalize_query_text(merged_text)
+    if not normalized_text:
+        return {"mode": "silence", "reason": "empty_text"}
+
+    mentions_bot = any(bool(item.explicit_trigger) for item in batch)
+    has_question = any(token in normalized_text for token in ("?", "？", "怎么", "为什么", "吗", "咋"))
+    message_count = len(batch)
+    if _looks_like_forwarded_chat_record(normalized_text):
+        return {"mode": "text", "reason": "forwarded_chat_record"}
+    local_reaction_reason = _local_global_reaction_reason(normalized_text, mentions_bot=mentions_bot)
+    if local_reaction_reason:
+        decision = {"mode": "reaction", "reason": local_reaction_reason}
+        log(
+            f"[GROUP_CHAT] llm_mode_decision mode={decision['mode']}"
+            f" reason={decision.get('reason', '')!r}"
+            f" mentions_bot={mentions_bot} source=local_reaction_hint"
+        )
+        return decision
+    if _should_silence_trivial_global_message(normalized_text, mentions_bot=mentions_bot):
+        return {"mode": "silence", "reason": "trivial_global_message"}
+
+    reaction_bias = 0.24 if not mentions_bot else 0.18
+    reaction_bias = max(0.0, min(0.95, reaction_bias))
+
+    prompt = (
+        "你是群聊响应决策器，只输出 JSON，不要解释。\n"
+        "任务：从 silence/reaction/text 三选一。\n"
+        "规则：\n"
+        "1) 低信息熵、闲聊噪音、明显不是对机器人说话 -> silence。\n"
+        "2) 明确提问、求助、点名机器人 -> text。\n"
+        "3) reaction 只用于明确适合轻互动的消息；不要每条都贴。\n"
+        "4) 输出 JSON: {\"mode\":\"silence|reaction|text\",\"reason\":\"<=20字\"}\n"
+        f"上下文摘要: message_count={message_count}, mentions_bot={mentions_bot}, has_question={has_question},"
+        f" reaction_bias={reaction_bias}\n"
+        f"群消息:\n{normalized_text}"
+    )
+    raw = call_ai(
+        prompt,
+        metadata={
+            "user_id": "group_mode_selector",
+            "prompt_mode": "group_response_mode",
+            "query_len": len(normalized_text),
+        },
+    )
+    decision = _parse_group_response_mode(raw)
+    if mentions_bot and decision["mode"] == "silence" and not _looks_like_stop_talking_request(normalized_text):
+        decision = {"mode": "text", "reason": "explicit_trigger_override"}
+    if decision["mode"] == "reaction" and _should_silence_trivial_global_message(normalized_text, mentions_bot=mentions_bot):
+        decision = {"mode": "silence", "reason": "local_trivial_override"}
+    log(
+        f"[GROUP_CHAT] llm_mode_decision mode={decision['mode']}"
+        f" reason={decision.get('reason', '')!r}"
+        f" mentions_bot={mentions_bot}"
+    )
+    return decision
+
+
+# _looks_like_stop_talking_request：请求相关逻辑
+def _looks_like_stop_talking_request(text: str) -> bool:
+    normalized = normalize_query_text(text)
+    return any(token in normalized for token in ("别多嘴", "闭嘴", "别说话", "别回", "不要回", "少说", "安静", "别插嘴"))
+
+
+# _looks_like_forwarded_chat_record：聊天处理
+def _looks_like_forwarded_chat_record(text: str) -> bool:
+    normalized = normalize_query_text(text)
+    return "[聊天记录]" in normalized or "聊天记录" in normalized or "合并转发" in normalized
+
+
+# _local_global_reaction_reason：本地reaction原因处理
+def _local_global_reaction_reason(text: str, *, mentions_bot: bool) -> str:
+    normalized = normalize_query_text(text)
+    if not normalized or mentions_bot:
+        return ""
+    if any(token in normalized for token in ("想摸", "想舔", "想冲", "冲了", "擦边", "涩", "色", "骚", "烧", "老婆睡", "大果睡")):
+        return "sexual_reaction_hint"
+    if any(token in normalized for token in ("睡觉了", "晚安", "睡了", "困了", "先睡")):
+        return "goodnight_reaction_hint"
+    return ""
+
+
+# _should_silence_trivial_global_message：消息处理
+def _should_silence_trivial_global_message(text: str, *, mentions_bot: bool) -> bool:
+    normalized = normalize_query_text(text)
+    if not normalized or mentions_bot:
+        return False
+    if any(token in normalized for token in ("?", "？", "吗", "怎么", "为什么", "咋", "谁", "哪", "啥")):
+        return False
+    if any(token in normalized for token in ("贴", "表情", "emoji", "react", "按钮", "红心", "舔屏")):
+        return False
+    if len(normalized) <= 8:
+        return True
+    trivial_tokens = ("哈哈", "笑死", "笑了", "草", "绷", "666", "确实", "害怕", "击败", "离谱")
+    return any(token in normalized for token in trivial_tokens) and len(normalized) <= 14
+
+
+# _parse_group_response_mode：解析群聊模式JSON
+def _parse_group_response_mode(raw) -> dict:
+    text = str(raw or "").strip()
+    if not text:
+        return {"mode": "silence", "reason": "empty_llm_output"}
+    candidate = text
+    if "{" in text and "}" in text:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            candidate = text[start : end + 1]
+    mode = ""
+    reason = ""
+    try:
+        obj = json.loads(candidate)
+        mode = str(obj.get("mode", "")).strip().lower()
+        reason = str(obj.get("reason", "")).strip()
+    except Exception:
+        lowered = text.lower()
+        if "silence" in lowered:
+            mode = "silence"
+        elif "text" in lowered:
+            mode = "text"
+        elif "reaction" in lowered:
+            mode = "reaction"
+    if mode not in {"silence", "reaction", "text"}:
+        return {"mode": "silence", "reason": "invalid_mode_fallback"}
+    return {"mode": mode, "reason": reason[:20]}
+
+
+# _extract_emoji_tag：提取表情
+def _extract_emoji_tag(reply: str) -> str | None:
+    normalized = normalize_query_text(reply)
+    if not normalized:
+        return None
+    m = re.fullmatch(r"\[emoji:([a-zA-Z0-9_/\u4e00-\u9fa5]+)\]", normalized.strip())
+    if not m:
+        return None
+    return str(m.group(1)).strip().lower()
+
+
+# _should_use_reaction_instead：reaction处理
 def _should_use_reaction_instead(merged_text: str, reply: str, group_config: dict | None = None) -> bool:
     text = normalize_query_text(merged_text)
     generated = normalize_query_text(reply)

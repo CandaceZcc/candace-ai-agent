@@ -22,6 +22,7 @@ BLOCKED_PHRASES = (
 )
 
 
+# sanitize_outbound_reply：清洗外发回复文本
 def sanitize_outbound_reply(text: str) -> str:
     """Remove empty or status-only replies and normalize spacing."""
     normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -52,6 +53,7 @@ def sanitize_outbound_reply(text: str) -> str:
     return "\n".join(lines)
 
 
+# _is_status_only：判断状态仅
 def _is_status_only(text: str) -> bool:
     parts = [part for part in re.split(r"[\s,.;:!?，。！？、/|_-]+", text) if part]
     if not parts:
@@ -59,5 +61,6 @@ def _is_status_only(text: str) -> bool:
     return all(part in BLOCKED_EXACT for part in parts)
 
 
+# _is_only_punctuation：判断仅标点
 def _is_only_punctuation(text: str) -> bool:
     return re.fullmatch(r"[\W_]+", text, flags=re.UNICODE) is not None

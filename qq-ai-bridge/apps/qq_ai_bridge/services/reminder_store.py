@@ -17,6 +17,7 @@ _LOCK_REGISTRY_GUARD = threading.Lock()
 DONE_LIMIT = 50
 
 
+# _get_path_lock：获取路径
 def _get_path_lock(path: str) -> threading.Lock:
     with _LOCK_REGISTRY_GUARD:
         lock = _LOCK_REGISTRY.get(path)
@@ -29,24 +30,28 @@ def _get_path_lock(path: str) -> threading.Lock:
 class JsonFileStore:
     """Thread-safe JSON file store with atomic writes."""
 
+    # __init__：初始化对象状态
     def __init__(self, path: str, default_factory):
         self.path = path
         self.default_factory = default_factory
         self.lock = _get_path_lock(path)
         self._ensure_file()
 
+    # _ensure_file：确保文件
     def _ensure_file(self) -> None:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         if os.path.exists(self.path):
             return
         self._write_data(self.default_factory())
 
+    # _write_data：相关逻辑处理
     def _write_data(self, payload: dict[str, Any]) -> None:
         tmp_path = f"{self.path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=2)
         os.replace(tmp_path, self.path)
 
+    # _load_unlocked：加载相关逻辑
     def _load_unlocked(self) -> dict[str, Any]:
         self._ensure_file()
         try:
@@ -59,10 +64,12 @@ class JsonFileStore:
             self._write_data(payload)
             return payload
 
+    # load：加载相关逻辑
     def load(self) -> dict[str, Any]:
         with self.lock:
             return self._load_unlocked()
 
+    # save：保存相关逻辑
     def save(self, payload: dict[str, Any]) -> None:
         with self.lock:
             try:
@@ -72,6 +79,7 @@ class JsonFileStore:
                 traceback.print_exc()
                 raise
 
+    # mutate：相关逻辑处理
     def mutate(self, mutator: Callable[[dict[str, Any]], Any]) -> Any:
         with self.lock:
             payload = self._load_unlocked()
@@ -83,13 +91,16 @@ class JsonFileStore:
 class ReminderStore:
     """Manage persisted reminder items."""
 
+    # __init__：初始化对象状态
     def __init__(self, path: str):
         self.store = JsonFileStore(path, self._default_payload)
 
+    # _default_payload：默认载荷处理
     @staticmethod
     def _default_payload() -> dict[str, Any]:
         return {"next_id": 1, "items": []}
 
+    # load_all：加载相关逻辑
     def load_all(self) -> dict[str, Any]:
         payload = self.store.load()
         payload = self._normalize_payload(payload)
@@ -107,6 +118,7 @@ class ReminderStore:
         )
         return payload
 
+    # save_all：保存相关逻辑
     def save_all(self, payload: dict[str, Any]) -> None:
         normalized = self._normalize_payload(payload)
         items = normalized.get("items", [])
@@ -121,7 +133,9 @@ class ReminderStore:
             f" cancelled={cancelled_count}"
         )
 
+    # add_reminder：新增提醒处理
     def add_reminder(self, user_id: int, trigger_at: datetime, text: str, is_recurring: bool = False) -> dict[str, Any]:
+        # mutate：相关逻辑处理
         def mutate(payload: dict[str, Any]) -> dict[str, Any]:
             normalized = self._normalize_payload(payload)
             reminder_id = int(normalized.get("next_id", 1))
@@ -147,6 +161,7 @@ class ReminderStore:
         print(f"[REMINDER] added id={item['id']} trigger_at={item['trigger_at']} text={item['text']}")
         return item
 
+    # list_pending：列出待办
     def list_pending(self, user_id: int | None = None) -> list[dict[str, Any]]:
         items = self.load_all().get("items", [])
         pending = [item for item in items if item.get("status") == "pending"]
@@ -154,6 +169,7 @@ class ReminderStore:
             pending = [item for item in pending if int(item.get("user_id", 0)) == int(user_id)]
         return sorted(pending, key=lambda item: item.get("trigger_at", ""))
 
+    # list_done：列出完成
     def list_done(self, user_id: int | None = None, limit: int = 5) -> list[dict[str, Any]]:
         items = self.load_all().get("items", [])
         done = [item for item in items if item.get("status") == "done"]
@@ -162,6 +178,7 @@ class ReminderStore:
         done.sort(key=lambda item: item.get("fired_at") or item.get("trigger_at", ""), reverse=True)
         return done[:limit]
 
+    # get_next_pending：获取下一步待办
     def get_next_pending(self, user_id: int | None = None) -> dict[str, Any] | None:
         pending = self.list_pending(user_id=user_id)
         if pending:
@@ -170,6 +187,7 @@ class ReminderStore:
         print("[REMINDER] next_pending id=None")
         return None
 
+    # cancel_reminder：取消提醒
     def cancel_reminder(self, reminder_id: int, user_id: int | None = None) -> dict[str, Any] | None:
         cancelled = self._update_status(
             reminder_id=reminder_id,
@@ -182,9 +200,11 @@ class ReminderStore:
             print(f"[REMINDER] deleted id={cancelled['id']}")
         return cancelled
 
+    # clear_pending：清空待办
     def clear_pending(self, user_id: int | None = None) -> int:
         now = get_now_local().isoformat()
 
+        # mutate：相关逻辑处理
         def mutate(payload: dict[str, Any]) -> int:
             normalized = self._normalize_payload(payload)
             count = 0
@@ -203,6 +223,7 @@ class ReminderStore:
         print(f"[REMINDER] cleared count={count} user_id={user_id}")
         return count
 
+    # mark_fired：标记相关逻辑
     def mark_fired(self, reminder_id: int, fired_at: datetime) -> dict[str, Any] | None:
         updated = self._update_status(
             reminder_id=reminder_id,
@@ -215,6 +236,7 @@ class ReminderStore:
             print(f"[REMINDER] completed id={updated['id']} fired_at={updated.get('fired_at')}")
         return updated
 
+    # _update_status：更新状态
     def _update_status(
         self,
         reminder_id: int,
@@ -225,6 +247,7 @@ class ReminderStore:
     ) -> dict[str, Any] | None:
         timestamp_value = timestamp.isoformat()
 
+        # mutate：相关逻辑处理
         def mutate(payload: dict[str, Any]) -> dict[str, Any] | None:
             normalized = self._normalize_payload(payload)
             target = None
@@ -246,6 +269,7 @@ class ReminderStore:
 
         return self.store.mutate(mutate)
 
+    # _normalize_payload：规范化载荷
     def _normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         normalized = {"next_id": int(payload.get("next_id", 1) or 1), "items": []}
         for item in payload.get("items", []):
@@ -274,6 +298,7 @@ class ReminderStore:
             normalized["next_id"] = max(normalized["next_id"], normalized_item["id"] + 1)
         return self._prune_done_items(normalized)
 
+    # _prune_done_items：完成处理
     def _prune_done_items(self, payload: dict[str, Any]) -> dict[str, Any]:
         done_items = [item for item in payload.get("items", []) if item.get("status") == "done"]
         keep_done_ids = {
@@ -296,9 +321,11 @@ class SchedulerStateStore:
         "tomorrow_schedule": "tomorrow_schedule_last_sent_date",
     }
 
+    # __init__：初始化对象状态
     def __init__(self, path: str):
         self.store = JsonFileStore(path, self._default_payload)
 
+    # _default_payload：默认载荷处理
     @staticmethod
     def _default_payload() -> dict[str, Any]:
         return {
@@ -307,6 +334,7 @@ class SchedulerStateStore:
             "meta": {},
         }
 
+    # load_all：加载相关逻辑
     def load_all(self) -> dict[str, Any]:
         payload = self._normalize_payload(self.store.load())
         keys_snapshot = tuple(self._active_keys(payload))
@@ -319,9 +347,11 @@ class SchedulerStateStore:
         )
         return payload
 
+    # mark_daily_sent：标记每日
     def mark_daily_sent(self, task_key: str, token: str, sent_at: datetime) -> None:
         state_key = self.KEY_MAP.get(task_key, f"{task_key}_last_sent_date")
 
+        # mutate：相关逻辑处理
         def mutate(payload: dict[str, Any]) -> None:
             normalized = self._normalize_payload(payload)
             normalized[state_key] = token
@@ -333,11 +363,13 @@ class SchedulerStateStore:
         self.store.mutate(mutate)
         print(f"[STORE] saved scheduler_state keys={self._active_keys(self.load_all())}")
 
+    # was_daily_sent：判断每日
     def was_daily_sent(self, task_key: str, token: str) -> bool:
         payload = self.load_all()
         state_key = self.KEY_MAP.get(task_key, f"{task_key}_last_sent_date")
         return str(payload.get(state_key, "")) == str(token)
 
+    # _normalize_payload：规范化载荷
     def _normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         daily_tasks = payload.get("daily_tasks", {}) if isinstance(payload.get("daily_tasks"), dict) else {}
         normalized = self._default_payload()
@@ -354,5 +386,6 @@ class SchedulerStateStore:
             normalized["meta"].update(meta)
         return normalized
 
+    # _active_keys：相关逻辑处理
     def _active_keys(self, payload: dict[str, Any]) -> list[str]:
         return [key for key in self.KEY_MAP.values() if payload.get(key)]

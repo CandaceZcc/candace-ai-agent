@@ -24,6 +24,7 @@ _CUTE_TEMPLATES = ("在喵", "在呢", "麦麦路过", "喵一下")
 _DRY_TEMPLATES = ("收到", "行", "确实", "是有点")
 
 
+# decide_quick_reply：决策回复
 def decide_quick_reply(topic: TopicWindow, group_config: dict) -> ReplyDecision | None:
     """Return a local reply decision for low-value topics, otherwise None."""
     if not topic.messages:
@@ -64,6 +65,7 @@ def decide_quick_reply(topic: TopicWindow, group_config: dict) -> ReplyDecision 
     return None
 
 
+# _pick_template：选择模板
 def _pick_template(seed_text: str, group_config: dict, templates: tuple[str, ...]) -> str:
     bias = str(group_config.get("quick_reply_style", "") or "").strip().lower()
     if bias == "dry":

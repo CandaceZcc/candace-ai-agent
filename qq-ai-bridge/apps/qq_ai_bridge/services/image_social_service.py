@@ -20,6 +20,7 @@ _PRODUCT_TOKENS = ("能买吗", "价格", "产品", "耳机", "手机", "电脑"
 _LOW_INFO_TOKENS = ("表情包", "贴纸", "猫猫头", "狗头", "黄豆", "梗图", "meme", "斗图")
 
 
+# classify_group_image_social：群聊图片社交处理
 def classify_group_image_social(
     image_urls: list[str],
     user_text: str,
@@ -136,6 +137,7 @@ def classify_group_image_social(
     )
 
 
+# rewrite_group_vision_reply：群聊视觉回复处理
 def rewrite_group_vision_reply(reply: str, social: ImageSocialClassification, user_text: str) -> str:
     """Trim descriptive model outputs into something closer to group-chat speech."""
     cleaned = " ".join(str(reply or "").split()).strip()
@@ -157,6 +159,7 @@ def rewrite_group_vision_reply(reply: str, social: ImageSocialClassification, us
     return cleaned
 
 
+# _build_human_short_reply：构建回复
 def _build_human_short_reply(image_type: str, social_intent: str, user_text: str) -> str:
     lowered = str(user_text or "").lower()
     if social_intent == "ask_identify":
@@ -176,6 +179,7 @@ def _build_human_short_reply(image_type: str, social_intent: str, user_text: str
     return "有点东西。"
 
 
+# _try_remove：相关逻辑处理
 def _try_remove(path: str) -> None:
     if not path:
         return

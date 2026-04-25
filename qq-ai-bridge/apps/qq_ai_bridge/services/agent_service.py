@@ -15,6 +15,7 @@ from apps.qq_ai_bridge.config.settings import (
 logger = logging.getLogger(__name__)
 
 
+# call_pc_agent_api：调用电脑AgentAPI
 def call_pc_agent_api(endpoint: str, data: Dict[str, Any], timeout: int = 10) -> Dict[str, Any]:
     """Call an endpoint on the PC Agent service."""
     url = f"{PC_AGENT_URL.rstrip('/')}/{endpoint.lstrip('/')}"
@@ -27,6 +28,7 @@ def call_pc_agent_api(endpoint: str, data: Dict[str, Any], timeout: int = 10) ->
         return {"status": "error", "message": f"Agent communication failed: {e}"}
 
 
+# execute_agent_plan：执行Agent计划
 def execute_agent_plan(user_id: int, plan: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a parsed JSON plan from the LLM."""
     actions = plan.get("actions", [])
@@ -51,6 +53,7 @@ def execute_agent_plan(user_id: int, plan: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "completed", "results": results}
 
 
+# get_agent_session：获取Agent会话
 def get_agent_session(user_id: int) -> Dict[str, Any]:
     """Retrieve the current session state for an agent user."""
     try:
@@ -64,16 +67,19 @@ def get_agent_session(user_id: int) -> Dict[str, Any]:
         return {}
 
 
+# reset_agent_session：重置Agent会话
 def reset_agent_session(user_id: int) -> Dict[str, Any]:
     """Reset the agent session."""
     return call_pc_agent_api("session/reset", data={"user_id": user_id})
 
 
+# observe_screen_text：观察屏幕文本
 def observe_screen_text(user_id: int) -> Dict[str, Any]:
     """Observe text currently visible on the screen."""
     return call_pc_agent_api("observe", data={"user_id": user_id})
 
 
+# summarize_agent_issue：总结Agent问题
 def summarize_agent_issue(user_id: int, history: list) -> str:
     """Summarize an issue encountered by the agent."""
     if not history:
@@ -84,6 +90,7 @@ def summarize_agent_issue(user_id: int, history: list) -> str:
     return call_agent_llm(summary_prompt, system_prompt="You are a helpful error summarizer.")
 
 
+# call_agent_llm：调用Agent大模型
 def call_agent_llm(prompt: str, system_prompt: str | None = None) -> str:
     """Call the LLM with a specific prompt, typically for agent reasoning."""
     system_prompt = system_prompt or AGENT_SYSTEM_PROMPT
@@ -98,6 +105,7 @@ def call_agent_llm(prompt: str, system_prompt: str | None = None) -> str:
         return json.dumps({"status": "error", "message": "Failed to call LLM"})
 
 
+# agent_llm_plan：Agent大模型计划处理
 def agent_llm_plan(user_id: int, task: str) -> Dict[str, Any]:
     """Ask the LLM to generate a plan for a given task."""
     session = get_agent_session(user_id)
@@ -113,6 +121,7 @@ def agent_llm_plan(user_id: int, task: str) -> Dict[str, Any]:
         return {"status": "error", "message": "Failed to parse JSON plan"}
 
 
+# execute_agent_workflow：执行Agent流程
 def execute_agent_workflow(user_id: int, task: str) -> Dict[str, Any]:
     """High-level workflow: generate plan and execute it."""
     plan = agent_llm_plan(user_id, task)
@@ -122,6 +131,7 @@ def execute_agent_workflow(user_id: int, task: str) -> Dict[str, Any]:
     return execute_agent_plan(user_id, plan)
 
 
+# handle_pc_agent_command：处理电脑Agent命令
 def handle_pc_agent_command(user_id: int, command: str) -> Dict[str, Any]:
     """Parse and handle a raw command text from the user."""
     if command.strip().lower() == "reset":

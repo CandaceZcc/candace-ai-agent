@@ -17,6 +17,7 @@ class EarlyGateResult:
     reason: str = ""
 
 
+# gate_raw_event：门控原始事件处理
 def gate_raw_event(data: dict, log=print) -> EarlyGateResult:
     """Drop raw webhook events before deeper parsing when possible."""
     post_type = str(data.get("post_type") or "")
@@ -42,6 +43,7 @@ def gate_raw_event(data: dict, log=print) -> EarlyGateResult:
     return EarlyGateResult(dropped=False)
 
 
+# gate_parsed_event：门控解析后事件处理
 def gate_parsed_event(parsed_data: dict, log=print) -> EarlyGateResult:
     """Drop already parsed events using text/image/file signals."""
     if not parsed_data:

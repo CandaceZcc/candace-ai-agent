@@ -1,11 +1,11 @@
-"""Placeholder skill for future browser automation tasks."""
+"""Browser automation skill backed by the local pc-agent service."""
 
 from __future__ import annotations
 
 import re
 
 from apps.qq_ai_bridge.adapters.napcat_client import send_group_msg, send_private_msg
-from apps.qq_ai_bridge.services.browser_agent_service import build_browser_agent_request
+from apps.qq_ai_bridge.services.browser_agent_service import run_browser_agent_task
 from apps.qq_ai_bridge.skills.base import SkillContext, SkillResult
 
 
@@ -22,24 +22,8 @@ _BROWSER_INTENT_KEYWORDS = (
     "remote-debug", "remote debug", "cdp", "端口转发",
 )
 
-_PLACEHOLDER_MSG = (
-    "浏览器自动化当前还没有接入 QQ 侧：BrowserAgentSkill 还是占位状态，\n"
-    "pc-agent 的 Playwright runtime 也没暴露给 bridge 调用。\n"
-    "不要按我（或 chat）之前的建议去开 Chrome 远程调试端口或做 SSH 转发——那条路径根本没有实现。\n\n"
-    "变通办法：\n"
-    "1. 你自己登录目标页面，把内容复制或截图发给我，我来整理\n"
-    "2. 如果要做批量抓取 portal/DDL，直接运行 ~/.openclaw/workspace/crawl_assignments.js\n"
-    "3. 等 browser_agent 接通 Playwright 后再说（优先级在 VoCat 之后）"
-)
-
-
 class BrowserAgentSkill:
-    """Reserved placeholder for future browser-agent integration.
-
-    Now also matches on URL / browser-intent keywords so that users who naturally
-    say "帮我登录 portal.xxx 找 ddl" get an honest placeholder reply instead of
-    falling through to chat, which tends to hallucinate SSH/CDP workarounds.
-    """
+    """Route browser-intent requests to the local browser-agent service."""
 
     name = "browser_agent"
 
@@ -92,20 +76,35 @@ class BrowserAgentSkill:
         }
 
     def handle(self, context: SkillContext) -> SkillResult:
-        """Return an honest placeholder response instead of falling through to chat."""
-        _ = build_browser_agent_request("open_url", {"url": "about:blank"})
+        """Run the local browser-agent task and relay its summary."""
+        result = run_browser_agent_task(
+            int(context.user_id or 0),
+            context.effective_text,
+            source_skill=self.name,
+        )
+        reply = str(result.get("reply") or "浏览器任务已处理。").strip()
         if context.is_private:
-            send_private_msg(context.user_id, _PLACEHOLDER_MSG)
+            send_private_msg(context.user_id, reply)
             return SkillResult(
                 handled=True,
                 source=self.name,
-                response_payload={"status": "ok", "source": self.name, "mode": "placeholder"},
+                response_payload={
+                    "status": str(result.get("status") or "ok"),
+                    "source": self.name,
+                    "mode": "browser_agent",
+                    "task": result.get("task"),
+                },
             )
         if context.is_group:
-            send_group_msg(context.group_id, _PLACEHOLDER_MSG, quiet=not context.should_log)
+            send_group_msg(context.group_id, reply, quiet=not context.should_log)
             return SkillResult(
                 handled=True,
                 source=self.name,
-                response_payload={"status": "ok", "source": self.name, "mode": "placeholder"},
+                response_payload={
+                    "status": str(result.get("status") or "ok"),
+                    "source": self.name,
+                    "mode": "browser_agent",
+                    "task": result.get("task"),
+                },
             )
         return SkillResult(handled=False, source=self.name, status="ignore")

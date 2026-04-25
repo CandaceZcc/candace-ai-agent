@@ -60,6 +60,41 @@ def extract_text_and_mention(event_data, self_id):
     return "", False
 
 
+def extract_at_targets(event_data) -> list[str]:
+    """Extract QQ numbers explicitly mentioned in a message."""
+    targets: list[str] = []
+    raw_message = event_data.get("message")
+    if isinstance(raw_message, list):
+        for seg in raw_message:
+            if not isinstance(seg, dict):
+                continue
+            if str(seg.get("type", "")).lower() != "at":
+                continue
+            data = seg.get("data", {}) if isinstance(seg.get("data"), dict) else {}
+            qq = str(data.get("qq") or "").strip()
+            if qq:
+                targets.append(qq)
+
+    elements = event_data.get("elements", [])
+    if isinstance(elements, list):
+        for elem in elements:
+            if not isinstance(elem, dict):
+                continue
+            for key in ("atUid", "atUin", "uin", "qq", "user_id"):
+                value = str(elem.get(key) or "").strip()
+                if value:
+                    targets.append(value)
+                    break
+            text_elem = elem.get("textElement")
+            if isinstance(text_elem, dict):
+                for key in ("atUid", "atUin", "uin", "qq", "user_id"):
+                    value = str(text_elem.get(key) or "").strip()
+                    if value:
+                        targets.append(value)
+                        break
+    return targets
+
+
 def extract_reply_reference(event_data) -> dict | None:
     """Extract quoted/replied message reference from payload."""
     raw_message = event_data.get("message")
@@ -77,7 +112,11 @@ def extract_reply_reference(event_data) -> dict | None:
                     or data.get("msg_id")
                 )
                 if message_id:
-                    return {"message_id": str(message_id)}
+                    reference = {"message_id": str(message_id)}
+                    sender_id = data.get("sender_id") or data.get("user_id") or data.get("sender_uin") or data.get("uin")
+                    if sender_id:
+                        reference["sender_id"] = str(sender_id)
+                    return reference
 
     elements = event_data.get("elements", [])
     if isinstance(elements, list):
@@ -94,7 +133,16 @@ def extract_reply_reference(event_data) -> dict | None:
                     or reply_elem.get("id")
                 )
                 if message_id:
-                    return {"message_id": str(message_id)}
+                    reference = {"message_id": str(message_id)}
+                    sender_id = (
+                        reply_elem.get("senderUid")
+                        or reply_elem.get("senderUin")
+                        or reply_elem.get("sender_id")
+                        or reply_elem.get("user_id")
+                    )
+                    if sender_id:
+                        reference["sender_id"] = str(sender_id)
+                    return reference
     return None
 
 
@@ -207,6 +255,11 @@ def _content_to_text(value) -> str:
                 text = _filter_forward_content(normalize_query_text(data.get("text", "")))
                 if text:
                     parts.append(text)
+            elif seg_type == "image":
+                summary = normalize_query_text(data.get("summary", "")) or "[图片]"
+                parts.append(summary)
+            elif seg_type in {"forward", "node"}:
+                parts.append("[聊天记录]")
             else:
                 nested = _filter_forward_content(normalize_query_text(str(data.get("content", "") or data.get("text", ""))))
                 if nested:

@@ -25,6 +25,7 @@ class MemeMatchResult:
     emoji_name: str | None = None
 
 
+# match_meme：匹配梗图
 def match_meme(image_path: str, ocr_keywords: Iterable[str] | None = None) -> MemeMatchResult:
     """Try a lightweight local meme match with future-proof extension points."""
     path = Path(image_path)
@@ -60,6 +61,7 @@ def match_meme(image_path: str, ocr_keywords: Iterable[str] | None = None) -> Me
     return MemeMatchResult(matched=False)
 
 
+# _compute_dhash：相关逻辑处理
 def _compute_dhash(path: Path, size: int = 8) -> int:
     with Image.open(path) as image:
         grayscale = image.convert("L").resize((size + 1, size))
@@ -73,6 +75,7 @@ def _compute_dhash(path: Path, size: int = 8) -> int:
     return value
 
 
+# _hamming_distance：相关逻辑处理
 def _hamming_distance(left: int, right: int) -> int:
     return (left ^ right).bit_count()
 

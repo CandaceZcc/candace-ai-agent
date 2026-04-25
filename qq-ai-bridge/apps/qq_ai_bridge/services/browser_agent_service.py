@@ -55,24 +55,29 @@ _BROWSER_ACTION_ROUTES = {
 }
 
 
+# get_browser_agent_endpoint：获取浏览器Agent端点
 def get_browser_agent_endpoint() -> str:
     """Return the local browser-agent endpoint base URL."""
     return os.environ.get("PC_BROWSER_AGENT_URL", PC_AGENT_URL).rstrip("/")
 
 
+# build_browser_agent_request：构建浏览器Agent请求
 def build_browser_agent_request(action: str, params: dict | None = None) -> dict[str, Any]:
     """Build a normalized browser-agent request payload."""
     return {"action": action, "params": params or {}, "endpoint": get_browser_agent_endpoint()}
 
 
+# _task_store_path：任务存储路径处理
 def _task_store_path() -> Path:
     return Path(BROWSER_AGENT_TASKS_PATH)
 
 
+# _ensure_task_store_dir：确保任务存储
 def _ensure_task_store_dir() -> None:
     _task_store_path().parent.mkdir(parents=True, exist_ok=True)
 
 
+# _load_task_store：加载任务存储
 def _load_task_store() -> dict[str, Any]:
     global _TASKS_CACHE
     with _TASK_LOCK:
@@ -93,6 +98,7 @@ def _load_task_store() -> dict[str, Any]:
         return _TASKS_CACHE
 
 
+# _save_task_store：保存任务存储
 def _save_task_store(store: dict[str, Any]) -> None:
     global _TASKS_CACHE
     with _TASK_LOCK:
@@ -104,6 +110,7 @@ def _save_task_store(store: dict[str, Any]) -> None:
         )
 
 
+# _upsert_task：写入任务
 def _upsert_task(task: dict[str, Any]) -> dict[str, Any]:
     store = _load_task_store()
     tasks = [item for item in store.get("tasks", []) if item.get("task_id") != task.get("task_id")]
@@ -114,6 +121,7 @@ def _upsert_task(task: dict[str, Any]) -> dict[str, Any]:
     return task
 
 
+# _recent_task_for_user：近期任务用户处理
 def _recent_task_for_user(user_id: int) -> dict[str, Any] | None:
     tasks = _load_task_store().get("tasks", [])
     for task in tasks:
@@ -122,12 +130,14 @@ def _recent_task_for_user(user_id: int) -> dict[str, Any] | None:
     return None
 
 
+# _update_task：更新任务
 def _update_task(task: dict[str, Any], **changes: Any) -> dict[str, Any]:
     task.update(changes)
     task["updated_at"] = int(time.time())
     return _upsert_task(task)
 
 
+# _new_task：新建任务
 def _new_task(user_id: int, task_text: str, source_skill: str) -> dict[str, Any]:
     now = int(time.time())
     task = {
@@ -146,6 +156,7 @@ def _new_task(user_id: int, task_text: str, source_skill: str) -> dict[str, Any]
     return _upsert_task(task)
 
 
+# _append_result：追加结果
 def _append_result(task: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     recent = list(task.get("recent_results", []))
     recent.append(result)
@@ -153,6 +164,7 @@ def _append_result(task: dict[str, Any], result: dict[str, Any]) -> dict[str, An
     return _update_task(task, recent_results=recent)
 
 
+# _extract_json_object：提取JSON对象
 def _extract_json_object(text: str) -> dict[str, Any]:
     raw = (text or "").strip()
     if not raw:
@@ -172,6 +184,7 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         return {}
 
 
+# _extract_target_url：提取目标URL
 def _extract_target_url(text: str) -> str:
     match = _URL_OR_DOMAIN_RE.search(text or "")
     if not match:
@@ -182,11 +195,13 @@ def _extract_target_url(text: str) -> str:
     return f"https://{value}"
 
 
+# _contains_any：判断相关逻辑
 def _contains_any(text: str, markers: tuple[str, ...] | list[str]) -> bool:
     low = (text or "").lower()
     return any(marker.lower() in low for marker in markers)
 
 
+# _high_risk_note：高风险提示处理
 def _high_risk_note(task_text: str) -> str:
     low = (task_text or "").lower()
     for marker, message in _HIGH_RISK_MARKERS.items():
@@ -195,6 +210,7 @@ def _high_risk_note(task_text: str) -> str:
     return ""
 
 
+# _http_error_payload：HTTP错误载荷处理
 def _http_error_payload(action: str, message: str, error_code: str) -> dict[str, Any]:
     return {
         "action": action,
@@ -205,6 +221,7 @@ def _http_error_payload(action: str, message: str, error_code: str) -> dict[str,
     }
 
 
+# request_browser_action：请求浏览器动作
 def request_browser_action(
     action: str,
     params: dict[str, Any] | None = None,
@@ -258,6 +275,7 @@ def request_browser_action(
     }
 
 
+# _browser_observation：浏览器观察处理
 def _browser_observation(task: dict[str, Any]) -> dict[str, Any]:
     health = request_browser_action("health", task_id=task["task_id"])
     ocr = request_browser_action("ocr", task_id=task["task_id"])
@@ -270,6 +288,7 @@ def _browser_observation(task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# _manual_takeover_reason：手动接管原因处理
 def _manual_takeover_reason(page_text: str, active_url: str, task_text: str) -> str:
     combined = "\n".join(filter(None, [page_text, active_url, task_text]))
     if not _contains_any(combined, _LOGIN_MARKERS):
@@ -279,6 +298,7 @@ def _manual_takeover_reason(page_text: str, active_url: str, task_text: str) -> 
     return "检测到登录或 SSO 页面，请先在本机浏览器完成登录，然后回复“继续任务”。"
 
 
+# _summarize_deadlines：总结截止时间
 def _summarize_deadlines(items: list[dict[str, Any]]) -> str:
     if not items:
         return "暂时还没找到明确的 DDL。"
@@ -286,6 +306,7 @@ def _summarize_deadlines(items: list[dict[str, Any]]) -> str:
     return f"已找到 {len(items)} 条 DDL：{preview}" if preview else f"已找到 {len(items)} 条 DDL。"
 
 
+# _action_signature：动作签名处理
 def _action_signature(action: dict[str, Any]) -> str:
     return json.dumps(
         {"action": action.get("action"), "params": action.get("params", {})},
@@ -294,6 +315,7 @@ def _action_signature(action: dict[str, Any]) -> str:
     )
 
 
+# _build_loop_prompt：构建循环提示词
 def _build_loop_prompt(task: dict[str, Any], observation: dict[str, Any]) -> str:
     payload = {
         "task": task.get("task", ""),
@@ -310,6 +332,7 @@ def _build_loop_prompt(task: dict[str, Any], observation: dict[str, Any]) -> str
     return f"{BROWSER_AGENT_LOOP_PROMPT}\n\n当前上下文：\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
 
 
+# _plan_next_actions：计划下一步动作处理
 def _plan_next_actions(task: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
     task_text = str(task.get("task", "") or "")
     active_url = observation.get("active_url", "")
@@ -356,11 +379,13 @@ def _plan_next_actions(task: dict[str, Any], observation: dict[str, Any]) -> dic
     }
 
 
+# _finalize_task：收尾任务
 def _finalize_task(task: dict[str, Any], status: str, last_step: str, reply: str) -> dict[str, Any]:
     task = _update_task(task, status=status, last_step=last_step)
     return {"status": status, "task": task, "reply": reply}
 
 
+# _result_summary：结果摘要处理
 def _result_summary(result: dict[str, Any]) -> str:
     action = result.get("action", "")
     status = result.get("status", "")
@@ -375,6 +400,7 @@ def _result_summary(result: dict[str, Any]) -> str:
     return f"{action} 失败：{message}"
 
 
+# _run_agent_loop：运行Agent循环
 def _run_agent_loop(task: dict[str, Any]) -> dict[str, Any]:
     seen_signatures: dict[str, int] = {}
     last_observation = ""
@@ -448,6 +474,7 @@ def _run_agent_loop(task: dict[str, Any]) -> dict[str, Any]:
     return _finalize_task(task, "stalled", "max_steps", reply)
 
 
+# _cancel_task：取消任务
 def _cancel_task(user_id: int) -> dict[str, Any]:
     task = _recent_task_for_user(user_id)
     if task is None:
@@ -456,6 +483,7 @@ def _cancel_task(user_id: int) -> dict[str, Any]:
     return {"status": "cancelled", "reply": "已取消最近的浏览器任务。"}
 
 
+# _continue_task：继续任务
 def _continue_task(user_id: int, source_skill: str) -> dict[str, Any]:
     task = _recent_task_for_user(user_id)
     if task is None:
@@ -468,6 +496,7 @@ def _continue_task(user_id: int, source_skill: str) -> dict[str, Any]:
     return result
 
 
+# run_browser_agent_task：运行浏览器Agent任务
 def run_browser_agent_task(user_id: int, command: str, source_skill: str = "browser_agent") -> dict[str, Any]:
     """Run or continue a browser-agent task for one user."""
     normalized = (command or "").strip()

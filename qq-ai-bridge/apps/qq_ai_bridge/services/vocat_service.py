@@ -45,6 +45,7 @@ _MD_READ_PATTERNS = (
 )
 
 
+# _extract_query：提取相关逻辑
 def _extract_query(data: dict[str, Any]) -> str:
     for key in ("query", "text", "asr_text", "message", "content"):
         value = data.get(key)
@@ -53,12 +54,14 @@ def _extract_query(data: dict[str, Any]) -> str:
     return ""
 
 
+# _is_qq_forward_query：判断转发查询
 def _is_qq_forward_query(query: str) -> bool:
     if any(keyword and keyword in query for keyword in VOCAT_QQ_KEYWORDS):
         return True
     return any(pattern.search(query) for pattern in _QQ_FORWARD_PATTERNS)
 
 
+# _extract_md_path：提取Markdown路径
 def _extract_md_path(query: str) -> Path | None:
     for pattern in _MD_READ_PATTERNS:
         match = pattern.search(query)
@@ -80,6 +83,7 @@ def _extract_md_path(query: str) -> Path | None:
     return None
 
 
+# _read_markdown_file：读取Markdown文件
 def _read_markdown_file(path: Path) -> str:
     if not path.exists():
         return f"我没有找到这个 Markdown 文件：{path.name}"
@@ -94,6 +98,7 @@ def _read_markdown_file(path: Path) -> str:
     return f"{path.name} 的内容如下：\n{preview}"
 
 
+# _handle_local_skill_sync：处理本地技能同步
 def _handle_local_skill_sync(query: str) -> dict[str, Any] | None:
     md_path = _extract_md_path(query)
     if md_path is not None:
@@ -138,6 +143,7 @@ def _handle_local_skill_sync(query: str) -> dict[str, Any] | None:
     return None
 
 
+# _run_pc_agent_background：运行电脑Agent后台
 async def _run_pc_agent_background(query: str) -> None:
     result = await asyncio.to_thread(handle_pc_agent_command, OWNER_QQ, query)
     if isinstance(result, dict):
@@ -147,11 +153,13 @@ async def _run_pc_agent_background(query: str) -> None:
     await send_tts_vocal(summary[:300] or "任务已经完成。")
 
 
+# _submit_background_job：后台任务处理
 def _submit_background_job(kind: str, query: str) -> None:
     if kind == "pc_agent":
         _VOCAT_EXECUTOR.submit(asyncio.run, _run_pc_agent_background(query))
 
 
+# process_vocat_query：处理VoCat查询
 async def process_vocat_query(data: dict[str, Any]) -> dict[str, Any]:
     """Process a VoCat webhook request."""
     query = _extract_query(data)
@@ -189,6 +197,7 @@ async def process_vocat_query(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# maybe_handle_vocat_remote_command：处理VoCat遥控命令
 async def maybe_handle_vocat_remote_command(user_id: int | None, query: str) -> dict[str, Any] | None:
     """Handle QQ side remote control commands for the VoCat hardware."""
     if user_id is None or user_id not in VOCAT_REMOTE_CONTROL_USERS:

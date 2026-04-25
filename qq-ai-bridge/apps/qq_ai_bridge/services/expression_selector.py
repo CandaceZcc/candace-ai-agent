@@ -14,6 +14,7 @@ _PLAIN_REPLY_TEMPLATES = {
 }
 
 
+# select_group_expression：选择群聊表情
 def select_group_expression(reply: str, merged_text: str, group_config: dict | None = None) -> str:
     """Gently rewrite flat short replies into more natural chat expressions."""
     normalized_reply = normalize_query_text(reply)
@@ -39,6 +40,7 @@ def select_group_expression(reply: str, merged_text: str, group_config: dict | N
     return templates[idx]
 
 
+# _infer_scene：推断场景
 def _infer_scene(merged_text: str) -> str:
     text = normalize_query_text(merged_text)
     if any(token in text for token in ("图", "图片", "截图", "表情", "梗图")):
@@ -50,11 +52,13 @@ def _infer_scene(merged_text: str) -> str:
     return "ack"
 
 
+# _stable_index：相关逻辑处理
 def _stable_index(seed: str, size: int) -> int:
     digest = hashlib.md5(seed.encode("utf-8")).hexdigest()
     return int(digest[:8], 16) % max(size, 1)
 
 
+# _parse_persona_intensity：解析人格强度
 def _parse_persona_intensity(group_config: dict) -> int:
     try:
         return max(0, min(100, int(group_config.get("persona_intensity", 35))))

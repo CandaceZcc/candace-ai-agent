@@ -44,18 +44,22 @@ class ParsedReminderCommand:
 class ReminderService:
     """Manages the parsing, creation, and retrieval of reminders."""
 
+    # __init__：初始化对象状态
     def __init__(self, store):
         self.store = store
 
+    # process_add_reminder：处理新增提醒
     def process_add_reminder(self, user_id: int, reminder_text: str, trigger_at: dt.datetime) -> dict[str, Any]:
         try:
             return self.store.add_reminder(user_id, trigger_at, reminder_text)
         except KeyError as e:
             return {"status": "error", "message": f"创建提醒失败：缺少必填字段 {e}"}
 
+    # delete_reminder：删除提醒处理
     def delete_reminder(self, user_id: int, reminder_id: int) -> bool:
         return self.store.cancel_reminder(reminder_id, user_id=user_id) is not None
 
+    # list_reminders：列出相关逻辑
     def list_reminders(self, user_id: int) -> list[dict[str, Any]]:
         try:
             return self.store.list_pending(user_id)
@@ -64,10 +68,12 @@ class ReminderService:
             return []
 
 
+# normalize_text：规范化文本
 def normalize_text(text: str) -> str:
     return re.sub(r"\s+", "", str(text or "").strip())
 
 
+# detect_reminder_intent：检测提醒添加意图
 def detect_reminder_intent(text: str) -> ReminderIntent | None:
     normalized = normalize_text(text)
     if not normalized:
@@ -91,10 +97,12 @@ def detect_reminder_intent(text: str) -> ReminderIntent | None:
     return None
 
 
+# is_reminder_command：判断提醒命令
 def is_reminder_command(text: str) -> bool:
     return detect_reminder_intent(text) is not None
 
 
+# parse_delete_command：解析删除命令
 def parse_delete_command(text: str) -> int | None:
     match = _DELETE_PATTERN.search(str(text or ""))
     if not match:
@@ -105,6 +113,7 @@ def parse_delete_command(text: str) -> int | None:
         return None
 
 
+# _resolve_relative_date：解析相对日期
 def _resolve_relative_date(text: str, now: dt.datetime) -> dt.date:
     match = _RELATIVE_DAY_PATTERN.search(text)
     if not match:
@@ -114,6 +123,7 @@ def _resolve_relative_date(text: str, now: dt.datetime) -> dt.date:
     return (now + dt.timedelta(days=offset)).date()
 
 
+# _resolve_hour：解析小时
 def _resolve_hour(period: str | None, hour: int) -> int:
     if period in {"下午", "晚上"} and hour < 12:
         return hour + 12
@@ -122,6 +132,7 @@ def _resolve_hour(period: str | None, hour: int) -> int:
     return hour
 
 
+# parse_reminder_commands：解析提醒命令文本
 def parse_reminder_commands(text: str, now: dt.datetime | None = None) -> list[ParsedReminderCommand]:
     now = now or get_now_local()
     raw = str(text or "").strip()
@@ -152,12 +163,14 @@ def parse_reminder_commands(text: str, now: dt.datetime | None = None) -> list[P
     return [ParsedReminderCommand(text=reminder_text, trigger_at=trigger_at)]
 
 
+# _format_single_reminder：格式化单条提醒
 def _format_single_reminder(item: dict[str, Any]) -> str:
     trigger_at = str(item.get("trigger_at", ""))
     text = str(item.get("text", "")).strip()
     return f"[{item.get('id')}] {trigger_at} - {text}"
 
 
+# build_list_message：构建提醒列表消息
 def build_list_message(items: list[dict[str, Any]]) -> str:
     if not items:
         return "你现在没有待触发的提醒。"
@@ -166,6 +179,7 @@ def build_list_message(items: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+# build_done_list_message：构建完成消息
 def build_done_list_message(items: list[dict[str, Any]]) -> str:
     if not items:
         return "最近没有已完成提醒。"
@@ -174,12 +188,14 @@ def build_done_list_message(items: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+# build_next_pending_message：构建下一步待办消息
 def build_next_pending_message(item: dict[str, Any] | None) -> str:
     if not item:
         return "目前没有待触发提醒。"
     return f"最近一个提醒是：{_format_single_reminder(item)}"
 
 
+# build_add_success_message：构建新增成功消息
 def build_add_success_message(items: list[dict[str, Any]], note: str = "") -> str:
     if not items:
         return "提醒创建失败。"
@@ -190,6 +206,7 @@ def build_add_success_message(items: list[dict[str, Any]], note: str = "") -> st
     return "\n".join(lines)
 
 
+# query_tomorrow_reminders：查询明日提醒列表
 def query_tomorrow_reminders(pending_items: list[dict[str, Any]], now: dt.datetime | None = None) -> dict[str, Any]:
     now = now or get_now_local()
     tomorrow = (now + dt.timedelta(days=1)).date()
@@ -211,6 +228,7 @@ def query_tomorrow_reminders(pending_items: list[dict[str, Any]], now: dt.dateti
     }
 
 
+# build_tomorrow_reminders_reply：构建明日回复
 def build_tomorrow_reminders_reply(pending_items: list[dict[str, Any]], now: dt.datetime | None = None) -> str:
     result = query_tomorrow_reminders(pending_items, now=now)
     if not result["items"]:

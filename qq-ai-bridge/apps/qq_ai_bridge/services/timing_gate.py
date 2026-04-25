@@ -10,6 +10,7 @@ from apps.qq_ai_bridge.services.quick_reply_policy import decide_quick_reply
 from apps.qq_ai_bridge.services.reply_models import IncomingMessage, ReplyDecision, ReplyMode, TopicWindow
 
 
+# evaluate_group_timing_gate：评估群聊门控
 def evaluate_group_timing_gate(group_id, messages: Iterable, group_config: dict | None = None) -> ReplyDecision | None:
     """Return a local timing-gate decision or ``None`` to continue to LLM."""
     normalized = [_to_incoming_message(item) for item in messages]
@@ -34,6 +35,7 @@ def evaluate_group_timing_gate(group_id, messages: Iterable, group_config: dict 
     return decide_quick_reply(topic, group_config or {})
 
 
+# _to_incoming_message：消息处理
 def _to_incoming_message(item) -> IncomingMessage | None:
     text = str(getattr(item, "text", "") or "").strip()
     if not text:
@@ -48,6 +50,7 @@ def _to_incoming_message(item) -> IncomingMessage | None:
     )
 
 
+# _build_topic_key：构建相关逻辑
 def _build_topic_key(group_id, messages: list[IncomingMessage]) -> str:
     seed = f"{group_id}|" + "|".join(f"{item.user_id}:{item.text}" for item in messages)
     return hashlib.md5(seed.encode("utf-8")).hexdigest()[:16]

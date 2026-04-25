@@ -17,17 +17,21 @@ WEEKDAY_CN = {
 }
 
 
+# get_now_local：获取本地
 def get_now_local() -> datetime:
     return datetime.now(LOCAL_TIMEZONE)
 
 
+# get_today_local：获取今日本地
 def get_today_local() -> date:
     return get_now_local().date()
 
 
+# get_tomorrow_local：获取明日本地
 def get_tomorrow_local() -> date:
     return (get_now_local() + timedelta(days=1)).date()
 
 
+# get_weekday_cn：获取星期中文
 def get_weekday_cn(target_date: date) -> str:
     return WEEKDAY_CN[target_date.weekday()]

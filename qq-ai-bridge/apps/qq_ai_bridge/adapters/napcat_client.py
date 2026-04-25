@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import random
 import re
 import time
@@ -9,7 +10,7 @@ import traceback
 
 import requests
 
-from apps.qq_ai_bridge.config.settings import NAPCAT_HTTP, NAPCAT_TOKEN
+from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR, NAPCAT_HTTP, NAPCAT_TOKEN
 from apps.qq_ai_bridge.services.reply_sanitizer import sanitize_outbound_reply
 
 OUTBOUND_SPLIT_PATTERN = re.compile(r"\n\s*\n+")
@@ -21,14 +22,56 @@ REACTION_EMOJI_CANDIDATES = {
     # 目标：减少出现“滚木”等非预期表情的概率。
     "laugh_cry": ("182", "264", "128514", "10002"),
     "red_button": ("66", "2764", "10001"),
+    "button_marker": ("424", "66", "2764"),
     "lollipop": ("147", "127853", "10010"),
-    "lick_screen": ("214", "128069", "10013"),
+    "watermelon": ("89",),
+    "awkward": ("10",),
+    "surprised": ("0",),
+    "lick_screen": ("339", "214", "222", "128069", "10013"),
+    "explode_marker": ("424", "268", "271", "272"),
+    "question": ("268",),
 }
+OUTBOUND_EVENT_LOG_PATH = os.path.join(BASE_DATA_DIR, "logs", "napcat_outbound.jsonl")
+
+
+def _append_outbound_event(event: dict) -> None:
+    payload = dict(event)
+    payload.setdefault("ts", int(time.time()))
+    try:
+        os.makedirs(os.path.dirname(OUTBOUND_EVENT_LOG_PATH), exist_ok=True)
+        with open(OUTBOUND_EVENT_LOG_PATH, "a", encoding="utf-8") as fp:
+            fp.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
 
 
 def _post_json(api_name: str, payload: dict, timeout: int = 15):
     api_url = f"{NAPCAT_HTTP}/{api_name}?access_token={NAPCAT_TOKEN}"
     return requests.post(api_url, json=payload, timeout=timeout)
+
+
+def _build_group_message_payload(part: str, reply_to_message_id: int | None = None):
+    if not reply_to_message_id:
+        return part
+    return [
+        {"type": "reply", "data": {"id": str(reply_to_message_id)}},
+        {"type": "text", "data": {"text": part}},
+    ]
+
+
+def _build_private_message_payload(part: str, reply_to_message_id: int | None = None):
+    face_match = re.fullmatch(r"\[CQ:face,id=(\d+)\]", str(part or "").strip())
+    if face_match:
+        message = [{"type": "face", "data": {"id": face_match.group(1)}}]
+        if reply_to_message_id:
+            return [{"type": "reply", "data": {"id": str(reply_to_message_id)}}] + message
+        return message
+    if not reply_to_message_id:
+        return part
+    return [
+        {"type": "reply", "data": {"id": str(reply_to_message_id)}},
+        {"type": "text", "data": {"text": part}},
+    ]
 
 
 def _force_split_message(text: str, target_parts: int) -> list[str]:
@@ -102,7 +145,13 @@ def split_outbound_messages(
     return parts
 
 
-def send_private_msg(user_id, msg, quiet: bool = False, force_parts: int | None = None):
+def send_private_msg(
+    user_id,
+    msg,
+    quiet: bool = False,
+    force_parts: int | None = None,
+    reply_to_message_id: int | None = None,
+):
     """Send a private message via NapCat."""
     parts = split_outbound_messages(msg, force_parts=force_parts)
     if not parts:
@@ -119,12 +168,32 @@ def send_private_msg(user_id, msg, quiet: bool = False, force_parts: int | None 
                     f"[SEND_PRIVATE] 准备发消息给 {user_id} "
                     f"part={idx + 1}/{len(parts)}: {part[:120]!r}"
                 )
-            last_resp = _post_json("send_private_msg", {"user_id": user_id, "message": part}, timeout=15)
+            last_resp = _post_json(
+                "send_private_msg",
+                {
+                    "user_id": user_id,
+                    "message": _build_private_message_payload(part, reply_to_message_id=reply_to_message_id),
+                },
+                timeout=15,
+            )
             if not quiet:
                 print(
                     f"[SEND_PRIVATE] NapCat 返回 part={idx + 1}/{len(parts)}: "
                     f"{last_resp.status_code} {last_resp.text}"
                 )
+            _append_outbound_event(
+                {
+                    "type": "private_msg",
+                    "user_id": user_id,
+                    "part_index": idx + 1,
+                    "parts_total": len(parts),
+                    "message_preview": part[:200],
+                    "reply_to_message_id": reply_to_message_id,
+                    "ok": bool(last_resp.ok),
+                    "status_code": getattr(last_resp, "status_code", None),
+                    "response_preview": getattr(last_resp, "text", "")[:300],
+                }
+            )
             sent += 1
             if idx < len(parts) - 1:
                 time.sleep(OUTBOUND_SEND_INTERVAL_SECONDS)
@@ -139,16 +208,17 @@ def send_private_msg(user_id, msg, quiet: bool = False, force_parts: int | None 
         if not quiet:
             print(f"[SEND_PRIVATE] 异常: {e}")
             traceback.print_exc()
+        _append_outbound_event(
+            {
+                "type": "private_msg",
+                "user_id": user_id,
+                "ok": False,
+                "error": str(e),
+                "parts_sent": sent,
+                "parts_total": len(parts),
+            }
+        )
         return {"ok": False, "error": str(e), "parts_sent": sent, "parts_total": len(parts)}
-
-
-def _build_group_message_payload(part: str, reply_to_message_id: int | None = None):
-    if reply_to_message_id:
-        return [
-            {"type": "reply", "data": {"id": str(int(reply_to_message_id))}},
-            {"type": "text", "data": {"text": part}},
-        ]
-    return part
 
 
 def send_group_msg(
@@ -169,19 +239,17 @@ def send_group_msg(
     last_resp = None
     try:
         for idx, part in enumerate(parts):
-            payload_message = _build_group_message_payload(
-                part,
-                reply_to_message_id=reply_to_message_id if idx == 0 else None,
-            )
             if not quiet:
                 print(
                     f"[SEND_GROUP] 准备发群消息到 {group_id} "
                     f"part={idx + 1}/{len(parts)}: {part[:120]!r}"
-                    f" reply_to={reply_to_message_id if idx == 0 else None}"
                 )
             last_resp = _post_json(
                 "send_group_msg",
-                {"group_id": group_id, "message": payload_message},
+                {
+                    "group_id": group_id,
+                    "message": _build_group_message_payload(part, reply_to_message_id=reply_to_message_id),
+                },
                 timeout=15,
             )
             if not quiet:
@@ -189,6 +257,18 @@ def send_group_msg(
                     f"[SEND_GROUP] NapCat 返回 part={idx + 1}/{len(parts)}: "
                     f"{last_resp.status_code} {last_resp.text}"
                 )
+            _append_outbound_event(
+                {
+                    "type": "group_msg",
+                    "group_id": group_id,
+                    "part_index": idx + 1,
+                    "parts_total": len(parts),
+                    "message_preview": part[:200],
+                    "ok": bool(last_resp.ok),
+                    "status_code": getattr(last_resp, "status_code", None),
+                    "response_preview": getattr(last_resp, "text", "")[:300],
+                }
+            )
             sent += 1
             if idx < len(parts) - 1:
                 time.sleep(OUTBOUND_SEND_INTERVAL_SECONDS)
@@ -203,7 +283,57 @@ def send_group_msg(
         if not quiet:
             print(f"[SEND_GROUP] 异常: {e}")
             traceback.print_exc()
+        _append_outbound_event(
+            {
+                "type": "group_msg",
+                "group_id": group_id,
+                "ok": False,
+                "error": str(e),
+                "parts_sent": sent,
+                "parts_total": len(parts),
+            }
+        )
         return {"ok": False, "error": str(e), "parts_sent": sent, "parts_total": len(parts)}
+
+
+def react_message_with_multiple_emojis(
+    message_id,
+    count: int = 2,
+    quiet: bool = False,
+    preferred_order: tuple[str, ...] = ("laugh_cry", "red_button", "lollipop", "lick_screen", "explode_marker"),
+    preserve_order: bool = False,
+):
+    """Apply multiple distinct reactions to one message."""
+    ordered_names = [name for name in preferred_order if name in REACTION_EMOJI_CANDIDATES]
+    if not ordered_names:
+        return {"ok": False, "error": "empty_preferred_order", "applied_count": 0}
+
+    applied: list[str] = []
+    if preserve_order:
+        rotated_names = ordered_names
+    else:
+        try:
+            seed = int(message_id or 0)
+        except Exception:
+            seed = int(time.time())
+        start = abs(seed) % len(ordered_names)
+        rotated_names = ordered_names[start:] + ordered_names[:start]
+
+    for name in rotated_names[: max(1, count)]:
+        candidate_ids = list(REACTION_EMOJI_CANDIDATES.get(name, ()))
+        for emoji_id in candidate_ids:
+            result = set_msg_emoji_like(message_id, emoji_id=emoji_id, quiet=quiet)
+            if result.get("ok"):
+                applied.append(name)
+                break
+        if len(applied) >= max(1, count):
+            break
+
+    return {
+        "ok": bool(applied),
+        "applied_count": len(applied),
+        "emoji_names": applied,
+    }
 
 
 def set_msg_emoji_like(message_id, emoji_id: str, quiet: bool = False):
@@ -211,7 +341,7 @@ def set_msg_emoji_like(message_id, emoji_id: str, quiet: bool = False):
     try:
         resp = _post_json(
             "set_msg_emoji_like",
-            {"message_id": int(message_id), "emoji_id": str(emoji_id)},
+            {"message_id": int(message_id), "emoji_id": str(emoji_id), "set": True},
             timeout=10,
         )
         ok = bool(resp.ok)
@@ -229,6 +359,17 @@ def set_msg_emoji_like(message_id, emoji_id: str, quiet: bool = False):
                 f"[REACTION] set_msg_emoji_like message_id={message_id} "
                 f"emoji_id={emoji_id} ok={ok} status={resp.status_code}"
             )
+        _append_outbound_event(
+            {
+                "type": "reaction",
+                "message_id": int(message_id),
+                "emoji_id": str(emoji_id),
+                "ok": ok,
+                "status_code": getattr(resp, "status_code", None),
+                "retcode": retcode,
+                "response_preview": text[:300],
+            }
+        )
         return {
             "ok": ok,
             "status_code": getattr(resp, "status_code", None),
@@ -239,6 +380,15 @@ def set_msg_emoji_like(message_id, emoji_id: str, quiet: bool = False):
     except Exception as exc:
         if not quiet:
             print(f"[REACTION] set_msg_emoji_like failed message_id={message_id} emoji_id={emoji_id} error={exc}")
+        _append_outbound_event(
+            {
+                "type": "reaction",
+                "message_id": message_id,
+                "emoji_id": str(emoji_id),
+                "ok": False,
+                "error": str(exc),
+            }
+        )
         return {"ok": False, "error": str(exc), "emoji_id": str(emoji_id)}
 
 
@@ -284,7 +434,7 @@ async def send_private_msg_async(user_id, msg, quiet: bool = False):
 
 async def send_group_msg_async(group_id, msg, quiet: bool = False):
     """Async wrapper for sending a group message via NapCat."""
-    return await asyncio.to_thread(send_group_msg, group_id, msg, quiet, None, None)
+    return await asyncio.to_thread(send_group_msg, group_id, msg, quiet, None)
 
 
 def get_forward_msg(forward_id: str):

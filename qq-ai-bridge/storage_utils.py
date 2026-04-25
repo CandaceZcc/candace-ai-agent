@@ -10,6 +10,7 @@ DEFAULT_GROUP_CONFIG = {
         "learn_style": False,
         "reply_all_messages": False,
         "enable_vision": True,
+        "follow_group_reactions": False,
         "ignore": False,
         "mute_log": False
     }
@@ -79,16 +80,19 @@ def get_user_workspace(base_dir: str, user_id) -> dict:
     history_path = os.path.join(user_dir, "history.json")
     memory_path = os.path.join(user_dir, "memory.txt")
     style_path = os.path.join(user_dir, "style_samples.txt")
+    profile_path = os.path.join(user_dir, "profile.json")
 
     ensure_json_file(history_path, [])
     ensure_text_file(memory_path)
     ensure_text_file(style_path)
+    ensure_json_file(profile_path, {})
 
     return {
         "dir": user_dir,
         "history_path": history_path,
         "memory_path": memory_path,
-        "style_samples_path": style_path
+        "style_samples_path": style_path,
+        "profile_path": profile_path,
     }
 
 
@@ -132,7 +136,8 @@ def load_private_context(base_dir: str, user_id) -> dict:
         "workspace": workspace,
         "history": load_json_file(workspace["history_path"], []),
         "memory": read_text_file(workspace["memory_path"]).strip(),
-        "style_samples_path": workspace["style_samples_path"]
+        "style_samples_path": workspace["style_samples_path"],
+        "profile": load_json_file(workspace["profile_path"], {}),
     }
 
 

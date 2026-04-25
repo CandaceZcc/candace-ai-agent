@@ -30,8 +30,10 @@ from apps.qq_ai_bridge.config.settings import (
 from storage_utils import load_private_context
 
 
+# extract_file_info：提取文件信息
 def extract_file_info(event_data):
     """Extract file info from NapCat / OneBot message payloads."""
+    # _first_present：取首个相关逻辑
     def _first_present(payload: dict, *keys: str):
         for key in keys:
             value = payload.get(key)
@@ -39,6 +41,7 @@ def extract_file_info(event_data):
                 return value
         return None
 
+    # _normalize_file_info：规范化文件信息
     def _normalize_file_info(payload: dict) -> dict:
         return {
             "name": _first_present(payload, "fileName", "name", "file_name", "file"),
@@ -50,9 +53,11 @@ def extract_file_info(event_data):
             "raw": payload,
         }
 
+    # _is_meaningful：判断相关逻辑
     def _is_meaningful(info: dict) -> bool:
         return any(info.get(key) for key in ("name", "url", "uuid", "path"))
 
+    # _parse_cq_file：解析文件
     def _parse_cq_file(raw_text: str) -> dict | None:
         # Example: [CQ:file,file=xxx.docx,url=https://...,file_id=...]
         if "[CQ:file" not in raw_text:
@@ -121,6 +126,7 @@ def extract_file_info(event_data):
     return None
 
 
+# resolve_file_download_info：解析文件信息
 def resolve_file_download_info(file_info):
     """Resolve file download URL from event or NapCat file API."""
     direct_url = file_info.get("url")
@@ -138,6 +144,7 @@ def resolve_file_download_info(file_info):
     return None, reason
 
 
+# safe_filename：安全处理相关流程
 def safe_filename(name: str) -> str:
     """Convert a potentially unsafe filename into a safe local filename."""
     if not name:
@@ -145,6 +152,7 @@ def safe_filename(name: str) -> str:
     return name.replace("/", "_").replace("\\", "_").strip()
 
 
+# derive_filename：推导相关逻辑
 def derive_filename(file_info: dict) -> str | None:
     """Derive filename from known metadata when name is missing."""
     name = str(file_info.get("name") or "").strip()
@@ -171,6 +179,7 @@ def derive_filename(file_info: dict) -> str | None:
     return None
 
 
+# describe_fs_entry：描述文件系统条目
 def describe_fs_entry(path):
     """Return a human-readable description of a filesystem entry."""
     try:
@@ -184,6 +193,7 @@ def describe_fs_entry(path):
         return f"path={path!r}, stat_failed={e}"
 
 
+# download_file_if_possible：下载文件
 def download_file_if_possible(file_info, save_dir):
     """Download or copy a file attachment into the target directory."""
     name = safe_filename(derive_filename(file_info))
@@ -239,6 +249,7 @@ def download_file_if_possible(file_info, save_dir):
     return None, reason
 
 
+# read_text_file：读取文本文件
 def read_text_file(path):
     """Read a text file with fallback encodings."""
     for encoding in ("utf-8", "gb18030", "latin-1"):
@@ -254,6 +265,7 @@ def read_text_file(path):
     return ""
 
 
+# extract_pdf_text：提取PDF文本
 def extract_pdf_text(path):
     """Best-effort PDF text extraction with multiple backend fallbacks."""
     tried = []
@@ -307,6 +319,7 @@ def extract_pdf_text(path):
 _DOCX_W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
+# extract_docx_text：提取DOCX文本
 def extract_docx_text(path):
     """Extract text from DOCX files, preferring python-docx when available."""
     try:
@@ -344,6 +357,7 @@ def extract_docx_text(path):
     return None, None
 
 
+# extract_pptx_text：提取PPTX文本
 def extract_pptx_text(path):
     """Extract text from PPTX files."""
     try:
@@ -363,6 +377,7 @@ def extract_pptx_text(path):
     return None, None
 
 
+# extract_xlsx_text：提取XLSX文本
 def extract_xlsx_text(path):
     """Extract text from XLSX shared strings and worksheet XML."""
     try:
@@ -382,6 +397,7 @@ def extract_xlsx_text(path):
     return None, None
 
 
+# extract_zip_summary：提取ZIP摘要
 def extract_zip_summary(path):
     """Summarize a ZIP archive."""
     try:
@@ -398,6 +414,7 @@ def extract_zip_summary(path):
     return None, None
 
 
+# build_binary_file_summary：构建二进制文件摘要
 def build_binary_file_summary(path, filename):
     """Build a metadata-only summary for binary files."""
     mime_type, _ = mimetypes.guess_type(filename or path)
@@ -411,6 +428,7 @@ def build_binary_file_summary(path, filename):
 DOC_LIKE_EXTS = {".pdf", ".docx", ".pptx", ".xlsx"}
 
 
+# extract_file_content_for_ai：提取文件内容AI
 def extract_file_content_for_ai(path, filename):
     """Extract best-effort readable content from an uploaded file."""
     ext = os.path.splitext(filename or path)[1].lower()
@@ -463,6 +481,7 @@ _USER_INTENT_LOOKBACK_TURNS = 3
 _USER_INTENT_MAX_AGE_SECONDS = 20 * 60
 
 
+# _recent_user_intent：近期用户意图处理
 def _recent_user_intent(user_id, now_ts: int | None = None) -> str:
     """Return the most recent non-empty user message prior to the current file.
 
@@ -496,6 +515,7 @@ def _recent_user_intent(user_id, now_ts: int | None = None) -> str:
     return ""
 
 
+# handle_file_message：处理文件消息
 def handle_file_message(message_type, user_id, group_id, file_info):
     """Handle uploaded files for private or group contexts."""
     filename = derive_filename(file_info)
