@@ -76,6 +76,8 @@ class GroupConfigStorageTests(unittest.TestCase):
 
             store = load_group_config_store(config_path)
             self.assertIn("enable_vision", store["default"])
+            self.assertEqual(store["default"]["reaction_follow_probability"], 0.5)
+            self.assertFalse(store["default"]["reaction_notice_log"])
             self.assertFalse(store["default"]["bot_can_reply"])
 
 

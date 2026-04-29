@@ -80,7 +80,7 @@ class ReactionFollowServiceTests(unittest.TestCase):
 
         result = handle_group_reaction_notice(
             {"notice_type": "group_msg_emoji_like", "group_id": 1, "user_id": 2, "message_id": 3, "emoji_id": 339},
-            group_config={"follow_group_reactions": True},
+            group_config={"follow_group_reactions": True, "reaction_follow_probability": 1},
             self_id=999,
             log=None,
         )
@@ -103,7 +103,7 @@ class ReactionFollowServiceTests(unittest.TestCase):
 
         result = handle_group_reaction_notice(
             {"notice_type": "group_msg_emoji_like", "group_id": 1, "user_id": 2, "message_id": 3, "emoji_id": 182},
-            group_config={"follow_group_reactions": True},
+            group_config={"follow_group_reactions": True, "reaction_follow_probability": 1},
             self_id=999,
             log=None,
         )
@@ -133,9 +133,24 @@ class ReactionFollowServiceTests(unittest.TestCase):
     def test_handle_notice_ignores_self_and_duplicates(self, mock_set_like):
         event = {"notice_type": "group_msg_emoji_like", "group_id": 1, "user_id": 2, "message_id": 3, "emoji_id": 339}
 
-        self_notice = handle_group_reaction_notice(event, group_config={"follow_group_reactions": True}, self_id=2, log=None)
-        first = handle_group_reaction_notice(event, group_config={"follow_group_reactions": True}, self_id=999, log=None)
-        duplicate = handle_group_reaction_notice(event, group_config={"follow_group_reactions": True}, self_id=999, log=None)
+        self_notice = handle_group_reaction_notice(
+            event,
+            group_config={"follow_group_reactions": True, "reaction_follow_probability": 1},
+            self_id=2,
+            log=None,
+        )
+        first = handle_group_reaction_notice(
+            event,
+            group_config={"follow_group_reactions": True, "reaction_follow_probability": 1},
+            self_id=999,
+            log=None,
+        )
+        duplicate = handle_group_reaction_notice(
+            event,
+            group_config={"follow_group_reactions": True, "reaction_follow_probability": 1},
+            self_id=999,
+            log=None,
+        )
 
         self.assertEqual(self_notice["reason"], "self_notice")
         self.assertFalse(duplicate["followed"])
@@ -151,6 +166,54 @@ class ReactionFollowServiceTests(unittest.TestCase):
             store = load_group_config_store(config_path)
 
             self.assertFalse(store["default"]["follow_group_reactions"])
+            self.assertEqual(store["default"]["reaction_follow_probability"], 0.5)
+
+    @patch("apps.qq_ai_bridge.services.reaction_follow_service.set_msg_emoji_like")
+    def test_handle_notice_probability_zero_never_follows(self, mock_set_like):
+        result = handle_group_reaction_notice(
+            {"notice_type": "group_msg_emoji_like", "group_id": 1, "user_id": 2, "message_id": 3, "emoji_id": 339},
+            group_config={"follow_group_reactions": True, "reaction_follow_probability": 0},
+            self_id=999,
+            log=None,
+        )
+
+        self.assertTrue(result["handled"])
+        self.assertFalse(result["followed"])
+        self.assertEqual(result["reason"], "probability_skip")
+        mock_set_like.assert_not_called()
+
+    @patch("apps.qq_ai_bridge.services.reaction_follow_service.random.random", return_value=0.73)
+    @patch("apps.qq_ai_bridge.services.reaction_follow_service.set_msg_emoji_like")
+    def test_handle_notice_probability_skip_records_roll(self, mock_set_like, _mock_random):
+        result = handle_group_reaction_notice(
+            {"notice_type": "group_msg_emoji_like", "group_id": 1, "user_id": 2, "message_id": 3, "emoji_id": 339},
+            group_config={"follow_group_reactions": True, "reaction_follow_probability": 0.5},
+            self_id=999,
+            log=None,
+        )
+
+        self.assertFalse(result["followed"])
+        self.assertEqual(result["reason"], "probability_skip")
+        self.assertEqual(result["probability"], 0.5)
+        self.assertEqual(result["roll"], 0.73)
+        mock_set_like.assert_not_called()
+
+    @patch("apps.qq_ai_bridge.services.reaction_follow_service.random.random", return_value=0.49)
+    @patch("apps.qq_ai_bridge.services.reaction_follow_service.set_msg_emoji_like")
+    def test_handle_notice_probability_hit_follows(self, mock_set_like, _mock_random):
+        mock_set_like.return_value = {"ok": True}
+
+        result = handle_group_reaction_notice(
+            {"notice_type": "group_msg_emoji_like", "group_id": 1, "user_id": 2, "message_id": 3, "emoji_id": 339},
+            group_config={"follow_group_reactions": True, "reaction_follow_probability": 0.5},
+            self_id=999,
+            log=None,
+        )
+
+        self.assertTrue(result["followed"])
+        self.assertEqual(result["probability"], 0.5)
+        self.assertEqual(result["roll"], 0.49)
+        mock_set_like.assert_called_once()
 
 
 if __name__ == "__main__":

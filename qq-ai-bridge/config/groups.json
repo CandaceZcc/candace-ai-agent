@@ -6,6 +6,8 @@
     "reply_all_messages": false,
     "enable_vision": true,
     "follow_group_reactions": false,
+    "reaction_follow_probability": 0.65,
+    "reaction_notice_log": false,
     "ignore": false,
     "mute_log": false,
     "persona_intensity": 30
@@ -24,9 +26,9 @@
     "enable_vision": true,
     "mute_log": false,
     "strategy": {
-      "reply_probability": 0.7,
+      "reply_probability": 0.85,
       "silence_probability": 0.1,
-      "reaction_probability": 0.35,
+      "reaction_probability": 0.5,
       "delay_min_ms": 300,
       "delay_max_ms": 2000,
       "context_window_sec": 5,
@@ -38,14 +40,14 @@
     "name": "哈基米音乐作者群（肘击牢大版）",
     "enabled": true,
     "ignore": false,
-    "reply_all_messages": true,
+    "reply_all_messages": false,
     "bot_can_reply": true,
     "reaction_decision_mode": "llm_first",
     "follow_group_reactions": true,
     "reaction_notice_log": true,
-    "capture_all_messages": true,
+    "capture_all_messages": false,
     "learn_style": true,
-    "enable_vision": true,
+    "enable_vision": false,
     "mute_log": false,
     "strategy": {
       "reply_probability": 0.7,
@@ -102,7 +104,9 @@
       "context_window_sec": 5,
       "require_mention_for_reply": false,
       "cooldown_sec": 3
-    }
+    },
+    "follow_group_reactions": false,
+    "reaction_notice_log": false
   },
   "437966130": {
     "name": "群聊",
@@ -110,22 +114,24 @@
     "capture_all_messages": true,
     "bot_can_reply": true,
     "learn_style": true,
-    "reply_all_messages": false,
+    "reply_all_messages": true,
     "persona_intensity": 25,
     "enable_vision": true,
     "ignore": false,
     "mute_log": false,
     "reaction_decision_mode": "llm_first",
     "strategy": {
-      "reply_probability": 0.7,
-      "silence_probability": 0.2,
-      "reaction_probability": 0.1,
+      "reply_probability": 0.85,
+      "silence_probability": 0.1,
+      "reaction_probability": 0.6,
       "delay_min_ms": 300,
       "delay_max_ms": 2000,
       "context_window_sec": 5,
       "require_mention_for_reply": false,
       "cooldown_sec": 3
-    }
+    },
+    "follow_group_reactions": false,
+    "reaction_notice_log": false
   },
   "1065429760": {
     "name": "麦麦の小屋",
@@ -141,14 +147,16 @@
     "reaction_decision_mode": "llm_first",
     "strategy": {
       "reply_probability": 0.7,
-      "silence_probability": 0.2,
-      "reaction_probability": 0.1,
+      "silence_probability": 0.1,
+      "reaction_probability": 0.5,
       "delay_min_ms": 300,
       "delay_max_ms": 2000,
       "context_window_sec": 5,
       "require_mention_for_reply": false,
       "cooldown_sec": 3
-    }
+    },
+    "follow_group_reactions": true,
+    "reaction_notice_log": false
   },
   "674070498": {
     "name": "mute group",
@@ -171,6 +179,8 @@
       "context_window_sec": 5,
       "require_mention_for_reply": false,
       "cooldown_sec": 3
-    }
+    },
+    "follow_group_reactions": false,
+    "reaction_notice_log": false
   }
 }

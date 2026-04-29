@@ -496,6 +496,8 @@ def qq_webhook():
             except Exception as e:
                 print(f"[WEBHOOK] Exception during reaction notice processing: {e}")
                 traceback.print_exc()
+        elif notice_type == "notify" and sub_type == "input_status":
+            pass
         else:
             print(f"[WEBHOOK] notice received: {notice_type} {sub_type}")
 

@@ -477,6 +477,11 @@
         align-items: start;
       }
 
+      .group-sidebar-panels {
+        display: grid;
+        gap: 16px;
+      }
+
       .group-list {
         display: grid;
         gap: 14px;
@@ -671,7 +676,8 @@
           grid-template-columns: 1fr;
         }
 
-        .groups-layout > .panel {
+        .groups-layout > .panel,
+        .groups-layout > .group-sidebar-panels {
           max-width: 430px;
         }
       }
@@ -706,7 +712,8 @@
           grid-template-columns: 1fr;
         }
 
-        .groups-layout > .panel {
+        .groups-layout > .panel,
+        .groups-layout > .group-sidebar-panels {
           max-width: none;
         }
 
@@ -891,27 +898,35 @@
           <section class="view" id="view-groups">
             <div class="metrics" id="groupStats"></div>
             <div class="groups-layout">
-              <article class="panel">
-                <div class="panel-head">
-                  <div class="panel-title">新增群聊</div>
-                </div>
-                <div class="panel-body">
-                  <div class="form-grid">
-                    <div class="field">
-                      <label for="newGroupId">群号</label>
-                      <input class="input" id="newGroupId" type="text" inputmode="numeric" placeholder="437966130">
-                    </div>
-                    <div class="field">
-                      <label for="newGroupName">群名称</label>
-                      <input class="input" id="newGroupName" type="text" placeholder="Candace 测试群">
-                    </div>
-                    <button class="button" id="addGroupButton" type="button">添加群</button>
-                    <button class="button" id="reloadGroupsButton" type="button">重新读取</button>
-                    <button class="button primary" id="saveGroupsButton" type="button">保存配置</button>
-                    <div class="status" id="groupStatus"></div>
+              <div class="group-sidebar-panels">
+                <article class="panel">
+                  <div class="panel-head">
+                    <div class="panel-title">群聊全局默认</div>
                   </div>
-                </div>
-              </article>
+                  <div class="panel-body" id="groupDefaultPanel"></div>
+                </article>
+                <article class="panel">
+                  <div class="panel-head">
+                    <div class="panel-title">新增群聊</div>
+                  </div>
+                  <div class="panel-body">
+                    <div class="form-grid">
+                      <div class="field">
+                        <label for="newGroupId">群号</label>
+                        <input class="input" id="newGroupId" type="text" inputmode="numeric" placeholder="437966130">
+                      </div>
+                      <div class="field">
+                        <label for="newGroupName">群名称</label>
+                        <input class="input" id="newGroupName" type="text" placeholder="Candace 测试群">
+                      </div>
+                      <button class="button" id="addGroupButton" type="button">添加群</button>
+                      <button class="button" id="reloadGroupsButton" type="button">重新读取</button>
+                      <button class="button primary" id="saveGroupsButton" type="button">保存配置</button>
+                      <div class="status" id="groupStatus"></div>
+                    </div>
+                  </div>
+                </article>
+              </div>
               <section class="group-list" id="groupsContainer"></section>
             </div>
           </section>
@@ -973,11 +988,19 @@
         require_mention_for_reply: false,
         cooldown_sec: 3,
       };
+      const DEFAULT_GROUP_CONFIG = {
+        bot_can_reply: true,
+        reply_all_messages: false,
+        follow_group_reactions: false,
+        reaction_notice_log: false,
+        reaction_follow_probability: 0.5,
+      };
       const LOG_CATEGORIES = ["all", "vocat", "group", "private", "scheduler", "skill", "vision", "reaction", "llm", "napcat", "system"];
       const LOG_LEVELS = ["info", "warning", "error"];
       const state = {
         current: "dashboard",
         groups: [],
+        defaultGroup: {...DEFAULT_GROUP_CONFIG},
         summary: null,
         logCategories: new Set(["all"]),
         logLevels: new Set(),
@@ -985,6 +1008,8 @@
         traces: [],
         selectedTraceId: "",
         strategySaveTimers: new Map(),
+        reactionSaveTimers: new Map(),
+        defaultSaveTimer: null,
       };
 
       const $ = (id) => document.getElementById(id);
@@ -1305,6 +1330,8 @@
 
       function normalizeGroup(group) {
         const rawStrategy = group.strategy || group.strategy_config || {};
+        const inherited = group.reaction_follow_probability_inherited === true || !Object.prototype.hasOwnProperty.call(group, "reaction_follow_probability");
+        const reactionProbability = inherited ? state.defaultGroup.reaction_follow_probability : group.reaction_follow_probability;
         return {
           ...group,
           enabled: group.enabled !== false,
@@ -1312,12 +1339,28 @@
           enable_vision: Boolean(group.enable_vision),
           learn_style: Boolean(group.learn_style),
           capture_all_messages: Boolean(group.capture_all_messages),
+          follow_group_reactions: Boolean(group.follow_group_reactions),
+          reaction_notice_log: Boolean(group.reaction_notice_log),
+          reaction_follow_probability: clampNumber(reactionProbability, 0, 1, state.defaultGroup.reaction_follow_probability),
+          reaction_follow_probability_inherited: inherited,
           mute_log: Boolean(group.mute_log),
           trigger_mode: group.trigger_mode === "all" ? "all" : "mention",
           reaction_decision_mode: ["llm_first", "hybrid", "rule_first"].includes(group.reaction_decision_mode)
             ? group.reaction_decision_mode
             : "llm_first",
           strategy: normalizeStrategy(rawStrategy),
+        };
+      }
+
+      function normalizeDefaultGroup(config) {
+        const merged = {...DEFAULT_GROUP_CONFIG, ...(config || {})};
+        return {
+          bot_can_reply: merged.bot_can_reply !== false,
+          reply_all_messages: Boolean(merged.reply_all_messages),
+          trigger_mode: merged.trigger_mode === "all" || merged.reply_all_messages ? "all" : "mention",
+          follow_group_reactions: Boolean(merged.follow_group_reactions),
+          reaction_notice_log: Boolean(merged.reaction_notice_log),
+          reaction_follow_probability: clampNumber(merged.reaction_follow_probability, 0, 1, DEFAULT_GROUP_CONFIG.reaction_follow_probability),
         };
       }
 
@@ -1362,8 +1405,48 @@
         $("navGroupCount").textContent = String(state.groups.length);
       }
 
+      function renderGroupDefaultPanel() {
+        const cfg = state.defaultGroup || normalizeDefaultGroup({});
+        $("groupDefaultPanel").innerHTML = `
+          <div class="form-grid" id="groupDefaultControls">
+            <div>
+              <div class="section-kicker">默认触发模式</div>
+              <div class="segmented" style="margin-top: 8px;">
+                <button type="button" class="${cfg.trigger_mode === "mention" ? "active" : ""}" data-default-trigger="mention">仅艾特</button>
+                <button type="button" class="${cfg.trigger_mode === "all" ? "active" : ""}" data-default-trigger="all">全局</button>
+              </div>
+            </div>
+            <div class="toggle-row">
+              <span>机器人回复</span>
+              <label class="switch">
+                <input type="checkbox" data-default-field="bot_can_reply" ${cfg.bot_can_reply ? "checked" : ""}>
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <span>跟随 reaction</span>
+              <label class="switch">
+                <input type="checkbox" data-default-field="follow_group_reactions" ${cfg.follow_group_reactions ? "checked" : ""}>
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <span>reaction 日志</span>
+              <label class="switch">
+                <input type="checkbox" data-default-field="reaction_notice_log" ${cfg.reaction_notice_log ? "checked" : ""}>
+                <span class="slider"></span>
+              </label>
+            </div>
+            ${reactionProbabilityRange("default", "默认跟随概率", cfg.reaction_follow_probability)}
+            <div class="status" id="groupDefaultStatus"></div>
+          </div>
+        `;
+        bindGroupDefaultEvents();
+      }
+
       function renderGroups() {
         renderGroupStats();
+        renderGroupDefaultPanel();
         if (!state.groups.length) {
           $("groupsContainer").innerHTML = `<div class="empty">还没有群配置。</div>`;
           return;
@@ -1403,6 +1486,7 @@
                   <option value="rule_first" ${group.reaction_decision_mode === "rule_first" ? "selected" : ""}>规则优先</option>
                 </select>
               </div>
+              ${reactionProbabilityRange("group", group.reaction_follow_probability_inherited ? "跟随概率（继承全局）" : "跟随概率", group.reaction_follow_probability)}
               <div class="toggle-row">
                 <span>机器人回复</span>
                 <label class="switch">
@@ -1417,6 +1501,8 @@
                 ${extensionChip("enable_vision", "Vision", group.enable_vision)}
                 ${extensionChip("learn_style", "Learn", group.learn_style)}
                 ${extensionChip("capture_all_messages", "Capture", group.capture_all_messages)}
+                ${extensionChip("follow_group_reactions", "Follow react", group.follow_group_reactions)}
+                ${extensionChip("reaction_notice_log", "React log", group.reaction_notice_log)}
                 ${extensionChip("mute_log", "Mute log", group.mute_log)}
               </div>
             </section>
@@ -1477,6 +1563,44 @@
         `;
       }
 
+      function reactionProbabilityRange(scope, label, value) {
+        const display = Number(value || 0).toFixed(2);
+        const attr = scope === "default" ? "data-default-reaction-probability" : "data-reaction-probability";
+        return `
+          <label class="strategy-field">
+            <span>${escapeHtml(label)} · <span data-reaction-value="${scope}">${display}</span></span>
+            <input type="range" min="0" max="1" step="0.05" value="${escapeHtmlAttr(value)}" ${attr}>
+          </label>
+        `;
+      }
+
+      function bindGroupDefaultEvents() {
+        const panel = $("groupDefaultControls");
+        if (!panel) return;
+        panel.querySelectorAll("[data-default-field]").forEach((input) => {
+          input.addEventListener("change", () => {
+            state.defaultGroup[input.dataset.defaultField] = input.checked;
+            scheduleDefaultGroupSave();
+          });
+        });
+        panel.querySelectorAll("[data-default-trigger]").forEach((button) => {
+          button.addEventListener("click", () => {
+            state.defaultGroup.trigger_mode = button.dataset.defaultTrigger;
+            state.defaultGroup.reply_all_messages = button.dataset.defaultTrigger === "all";
+            renderGroupDefaultPanel();
+            scheduleDefaultGroupSave();
+          });
+        });
+        panel.querySelectorAll("[data-default-reaction-probability]").forEach((input) => {
+          input.addEventListener("input", () => {
+            state.defaultGroup.reaction_follow_probability = clampNumber(input.value, 0, 1, DEFAULT_GROUP_CONFIG.reaction_follow_probability);
+            const valueLabel = panel.querySelector('[data-reaction-value="default"]');
+            if (valueLabel) valueLabel.textContent = Number(state.defaultGroup.reaction_follow_probability).toFixed(2);
+            scheduleDefaultGroupSave();
+          });
+        });
+      }
+
       function bindGroupCardEvents() {
         $("groupsContainer").querySelectorAll(".group-card").forEach((card) => {
           const index = Number(card.dataset.index);
@@ -1514,6 +1638,17 @@
             input.addEventListener("input", syncStrategy);
             input.addEventListener("change", syncStrategy);
           });
+          card.querySelectorAll("[data-reaction-probability]").forEach((input) => {
+            const syncReactionProbability = () => {
+              state.groups[index].reaction_follow_probability = clampNumber(input.value, 0, 1, state.defaultGroup.reaction_follow_probability);
+              state.groups[index].reaction_follow_probability_inherited = false;
+              const valueLabel = card.querySelector('[data-reaction-value="group"]');
+              if (valueLabel) valueLabel.textContent = Number(state.groups[index].reaction_follow_probability).toFixed(2);
+              scheduleReactionProbabilitySave(index, card);
+            };
+            input.addEventListener("input", syncReactionProbability);
+            input.addEventListener("change", syncReactionProbability);
+          });
           card.querySelectorAll("[data-trigger]").forEach((button) => {
             button.addEventListener("click", () => {
               state.groups[index].trigger_mode = button.dataset.trigger;
@@ -1530,19 +1665,27 @@
 
       function collectGroupPayload() {
         return {
-          groups: state.groups.map((group) => ({
-            group_id: group.group_id,
-            name: group.name || "",
-            enabled: Boolean(group.enabled),
-            trigger_mode: group.trigger_mode === "all" ? "all" : "mention",
-            reaction_decision_mode: group.reaction_decision_mode || "llm_first",
-            bot_can_reply: group.bot_can_reply !== false,
-            enable_vision: Boolean(group.enable_vision),
-            learn_style: Boolean(group.learn_style),
-            capture_all_messages: Boolean(group.capture_all_messages),
-            mute_log: Boolean(group.mute_log),
-            strategy: normalizeStrategy(group.strategy),
-          })),
+          groups: state.groups.map((group) => {
+            const item = {
+              group_id: group.group_id,
+              name: group.name || "",
+              enabled: Boolean(group.enabled),
+              trigger_mode: group.trigger_mode === "all" ? "all" : "mention",
+              reaction_decision_mode: group.reaction_decision_mode || "llm_first",
+              bot_can_reply: group.bot_can_reply !== false,
+              enable_vision: Boolean(group.enable_vision),
+              learn_style: Boolean(group.learn_style),
+              capture_all_messages: Boolean(group.capture_all_messages),
+              follow_group_reactions: Boolean(group.follow_group_reactions),
+              reaction_notice_log: Boolean(group.reaction_notice_log),
+              mute_log: Boolean(group.mute_log),
+              strategy: normalizeStrategy(group.strategy),
+            };
+            if (!group.reaction_follow_probability_inherited) {
+              item.reaction_follow_probability = clampNumber(group.reaction_follow_probability, 0, 1, state.defaultGroup.reaction_follow_probability);
+            }
+            return item;
+          }),
         };
       }
 
@@ -1577,9 +1720,71 @@
         if (statusEl) setStatus(statusEl, "策略已保存，下一条消息生效。", "ok");
       }
 
+      function scheduleReactionProbabilitySave(index, card) {
+        const group = state.groups[index];
+        if (!group) return;
+        const groupId = group.group_id;
+        const previous = state.reactionSaveTimers.get(groupId);
+        if (previous) clearTimeout(previous);
+        const statusEl = card.querySelector("[data-strategy-status]");
+        if (statusEl) setStatus(statusEl, "reaction 概率待保存…");
+        const timer = setTimeout(() => {
+          saveGroupReactionProbability(index, card).catch((error) => {
+            if (statusEl) setStatus(statusEl, error.message, "error");
+          });
+        }, 400);
+        state.reactionSaveTimers.set(groupId, timer);
+      }
+
+      async function saveGroupReactionProbability(index, card) {
+        const group = state.groups[index];
+        if (!group) return;
+        const statusEl = card.querySelector("[data-strategy-status]");
+        if (statusEl) setStatus(statusEl, "reaction 概率保存中…");
+        const payload = await fetchJson("/admin/api/group/update", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            group_id: group.group_id,
+            reaction_follow_probability: clampNumber(group.reaction_follow_probability, 0, 1, state.defaultGroup.reaction_follow_probability),
+          }),
+        });
+        state.groups[index].reaction_follow_probability = clampNumber(payload.reaction_follow_probability, 0, 1, state.defaultGroup.reaction_follow_probability);
+        state.groups[index].reaction_follow_probability_inherited = Boolean(payload.reaction_follow_probability_inherited);
+        state.reactionSaveTimers.delete(group.group_id);
+        if (statusEl) setStatus(statusEl, "reaction 概率已保存，下一次 notice 生效。", "ok");
+      }
+
+      function scheduleDefaultGroupSave() {
+        if (state.defaultSaveTimer) clearTimeout(state.defaultSaveTimer);
+        const statusEl = $("groupDefaultStatus");
+        if (statusEl) setStatus(statusEl, "默认配置待保存…");
+        state.defaultSaveTimer = setTimeout(() => {
+          saveDefaultGroupConfig().catch((error) => {
+            if (statusEl) setStatus(statusEl, error.message, "error");
+          });
+        }, 400);
+      }
+
+      async function saveDefaultGroupConfig() {
+        const statusEl = $("groupDefaultStatus");
+        if (statusEl) setStatus(statusEl, "默认配置保存中…");
+        const payload = await fetchJson("/admin/api/group/default/update", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({default: normalizeDefaultGroup(state.defaultGroup)}),
+        });
+        state.defaultGroup = normalizeDefaultGroup(payload.default || {});
+        state.defaultSaveTimer = null;
+        state.groups = state.groups.map((group) => normalizeGroup(group));
+        renderGroups();
+        if ($("groupDefaultStatus")) setStatus($("groupDefaultStatus"), "默认配置已保存，下一次 notice 生效。", "ok");
+      }
+
       async function loadGroups() {
         setGroupStatus("正在读取群配置…");
         const payload = await fetchJson("/api/admin/groups");
+        state.defaultGroup = normalizeDefaultGroup(payload.default || {});
         state.groups = (payload.groups || []).map(normalizeGroup);
         renderGroups();
         setGroupStatus("配置已加载。", "ok");

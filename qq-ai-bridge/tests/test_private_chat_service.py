@@ -6,6 +6,7 @@ from unittest.mock import patch
 sys.path.insert(0, "qq-ai-bridge")
 
 from apps.qq_ai_bridge.services import private_chat_service
+from apps.qq_ai_bridge.services.private_ledger_service import _PRIVATE_LEDGER_ARTIFACTS
 from apps.qq_ai_bridge.services.private_chat_service import _PRIVATE_CHAT_STATES, _handle_private_emoji_request, enqueue_private_text
 
 
@@ -242,6 +243,45 @@ class PrivateChatServiceTests(unittest.TestCase):
         )
         self.assertEqual(mock_prompt.call_args.args[1], "一\n二\n三")
         mock_execute.assert_called_once()
+
+    @patch("apps.qq_ai_bridge.services.private_chat_service.append_private_history")
+    @patch("apps.qq_ai_bridge.services.private_chat_service.append_private_style_sample")
+    @patch("apps.qq_ai_bridge.services.private_chat_service.prepare_private_ai_prompt")
+    @patch("apps.qq_ai_bridge.services.private_chat_service.get_user_workspace")
+    @patch("apps.qq_ai_bridge.services.private_chat_service.execute_private_action")
+    @patch("apps.qq_ai_bridge.services.private_chat_service.call_ai")
+    def test_private_worker_handles_owner_ledger_without_llm(
+        self,
+        mock_call_ai,
+        mock_execute,
+        _mock_workspace,
+        mock_prompt,
+        _mock_style,
+        mock_history,
+    ):
+        old_debounce = private_chat_service.DEBOUNCE_MS
+        old_cooldown = private_chat_service.PRIVATE_REPLY_COOLDOWN_SEC
+        private_chat_service.DEBOUNCE_MS = 0
+        private_chat_service.PRIVATE_REPLY_COOLDOWN_SEC = 0
+        _PRIVATE_CHAT_STATES.clear()
+        _PRIVATE_LEDGER_ARTIFACTS.clear()
+
+        try:
+            result = enqueue_private_text(273007866, "记账4.20-4.30\nKimi API充值: 50\n论文查重：25+30+35+12", timestamp=1)
+            deadline = time.time() + 2
+            while time.time() < deadline and _PRIVATE_CHAT_STATES[str(273007866)].worker_running:
+                time.sleep(0.01)
+        finally:
+            private_chat_service.DEBOUNCE_MS = old_debounce
+            private_chat_service.PRIVATE_REPLY_COOLDOWN_SEC = old_cooldown
+
+        self.assertTrue(result["queued"])
+        mock_call_ai.assert_not_called()
+        mock_prompt.assert_not_called()
+        mock_execute.assert_called_once()
+        sent_action = mock_execute.call_args.args[1]
+        self.assertIn("共 152 元", sent_action.text)
+        self.assertIn("[ledger_artifact]", mock_history.call_args.args[3])
 
 
 if __name__ == "__main__":

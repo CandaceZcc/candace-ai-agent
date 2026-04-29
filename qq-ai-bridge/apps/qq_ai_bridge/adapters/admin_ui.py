@@ -54,8 +54,16 @@ _EDITABLE_GROUP_FIELDS = (
     "learn_style",
     "reply_all_messages",
     "enable_vision",
+    "follow_group_reactions",
+    "reaction_notice_log",
     "ignore",
     "mute_log",
+)
+_EDITABLE_DEFAULT_FIELDS = (
+    "bot_can_reply",
+    "reply_all_messages",
+    "follow_group_reactions",
+    "reaction_notice_log",
 )
 _REACTION_DECISION_MODES = {"llm_first", "hybrid", "rule_first"}
 _STRATEGY_PROBABILITY_FIELDS = ("reply_probability", "silence_probability", "reaction_probability")
@@ -83,6 +91,13 @@ _FIELD_PATTERNS: dict[str, re.Pattern[str]] = {
 
 def _serialize_group_store() -> dict:
     store = load_group_config_store(GROUP_CONFIG_PATH)
+    default_cfg = (store.get("default", {}) if isinstance(store.get("default"), dict) else {}).copy()
+    default_cfg["reaction_follow_probability"] = _normalize_probability_value(
+        default_cfg.get("reaction_follow_probability"),
+        fallback=0.5,
+        field="reaction_follow_probability",
+    )
+    default_cfg["trigger_mode"] = "all" if default_cfg.get("reply_all_messages", False) else "mention"
     groups = []
     for group_id, raw in store.items():
         if group_id == "default" or not isinstance(raw, dict):
@@ -95,12 +110,16 @@ def _serialize_group_store() -> dict:
         item["trigger_mode"] = "all" if item["reply_all_messages"] else "mention"
         mode = str(item.get("reaction_decision_mode", "llm_first") or "llm_first").strip().lower()
         item["reaction_decision_mode"] = mode if mode in _REACTION_DECISION_MODES else "llm_first"
+        item["reaction_follow_probability_inherited"] = "reaction_follow_probability" not in raw
+        item["reaction_follow_probability"] = _normalize_probability_value(
+            raw.get("reaction_follow_probability", default_cfg["reaction_follow_probability"]),
+            fallback=default_cfg["reaction_follow_probability"],
+            field="reaction_follow_probability",
+        )
         item["strategy"] = normalize_group_strategy_config(item)
         groups.append(item)
 
     groups.sort(key=lambda item: (not item.get("enabled", True), item.get("name") or item["group_id"]))
-    default_cfg = (store.get("default", {}) if isinstance(store.get("default"), dict) else {}).copy()
-    default_cfg["trigger_mode"] = "all" if default_cfg.get("reply_all_messages", False) else "mention"
     return {
         "groups": groups,
         "default": default_cfg,
@@ -132,6 +151,12 @@ def _normalize_group_payload(raw: dict, existing: dict) -> tuple[str, dict]:
     reaction_mode = str(raw.get("reaction_decision_mode", merged.get("reaction_decision_mode", "llm_first")) or "llm_first")
     reaction_mode = reaction_mode.strip().lower()
     merged["reaction_decision_mode"] = reaction_mode if reaction_mode in _REACTION_DECISION_MODES else "llm_first"
+    if "reaction_follow_probability" in raw:
+        merged["reaction_follow_probability"] = _normalize_probability_value(
+            raw.get("reaction_follow_probability"),
+            fallback=0.5,
+            field="reaction_follow_probability",
+        )
     merged["strategy"] = _normalize_strategy_payload(raw.get("strategy", raw.get("strategy_config", merged.get("strategy", merged.get("strategy_config", {})))))
     merged.pop("strategy_config", None)
 
@@ -140,6 +165,37 @@ def _normalize_group_payload(raw: dict, existing: dict) -> tuple[str, dict]:
             merged[field] = bool(raw.get(field))
 
     return group_id, merged
+
+
+def _normalize_default_payload(raw: dict, existing: dict) -> dict:
+    if not isinstance(raw, dict):
+        raw = {}
+    merged = existing.copy()
+    trigger_mode = str(raw.get("trigger_mode", "") or "").strip().lower()
+    if trigger_mode in {"all", "mention"}:
+        merged["reply_all_messages"] = trigger_mode == "all"
+    elif "reply_all_messages" in raw:
+        merged["reply_all_messages"] = bool(raw.get("reply_all_messages"))
+    for field in _EDITABLE_DEFAULT_FIELDS:
+        if field in raw and field != "reply_all_messages":
+            merged[field] = bool(raw.get(field))
+    if "reaction_follow_probability" in raw:
+        merged["reaction_follow_probability"] = _normalize_probability_value(
+            raw.get("reaction_follow_probability"),
+            fallback=0.5,
+            field="reaction_follow_probability",
+        )
+    return merged
+
+
+def _normalize_probability_value(raw: Any, *, fallback: float, field: str) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = fallback
+    if value < 0 or value > 1:
+        raise ValueError(f"{field} 必须在 0 到 1 之间")
+    return value
 
 
 def _normalize_strategy_payload(raw: Any) -> dict[str, Any]:
@@ -465,23 +521,58 @@ def update_group_strategy():
     group_id = str(payload.get("group_id") or "").strip()
     if not group_id or not group_id.isdigit():
         return jsonify({"ok": False, "error": "group_id 必须是纯数字"}), 400
-    if "strategy" not in payload:
-        return jsonify({"ok": False, "error": "strategy 必填"}), 400
-    try:
-        strategy = _normalize_strategy_payload(payload.get("strategy"))
-    except ValueError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
+    if "strategy" not in payload and "reaction_follow_probability" not in payload:
+        return jsonify({"ok": False, "error": "strategy 或 reaction_follow_probability 必填"}), 400
 
     store = load_group_config_store(GROUP_CONFIG_PATH)
     existing = store.get(group_id)
     if not isinstance(existing, dict):
         return jsonify({"ok": False, "error": "group not found"}), 404
     merged = existing.copy()
-    merged["strategy"] = strategy
-    merged.pop("strategy_config", None)
+    strategy = None
+    try:
+        if "strategy" in payload:
+            strategy = _normalize_strategy_payload(payload.get("strategy"))
+            merged["strategy"] = strategy
+            merged.pop("strategy_config", None)
+        if "reaction_follow_probability" in payload:
+            merged["reaction_follow_probability"] = _normalize_probability_value(
+                payload.get("reaction_follow_probability"),
+                fallback=0.5,
+                field="reaction_follow_probability",
+            )
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
     store[group_id] = merged
     save_group_config_store(GROUP_CONFIG_PATH, store)
-    return jsonify({"ok": True, "group_id": group_id, "strategy": strategy})
+    default_cfg = store.get("default", {}) if isinstance(store.get("default"), dict) else {}
+    return jsonify(
+        {
+            "ok": True,
+            "group_id": group_id,
+            "strategy": strategy if strategy is not None else normalize_group_strategy_config(merged),
+            "reaction_follow_probability": _normalize_probability_value(
+                merged.get("reaction_follow_probability", default_cfg.get("reaction_follow_probability", 0.5)),
+                fallback=0.5,
+                field="reaction_follow_probability",
+            ),
+            "reaction_follow_probability_inherited": "reaction_follow_probability" not in merged,
+        }
+    )
+
+
+@admin_ui_bp.post("/admin/api/group/default/update")
+def update_group_default_config():
+    payload = request.get_json(silent=True) or {}
+    store = load_group_config_store(GROUP_CONFIG_PATH)
+    existing = store.get("default", {}) if isinstance(store.get("default"), dict) else {}
+    try:
+        store["default"] = _normalize_default_payload(payload.get("default", payload), existing)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    save_group_config_store(GROUP_CONFIG_PATH, store)
+    serialized = _serialize_group_store()
+    return jsonify({"ok": True, "default": serialized["default"]})
 
 
 @admin_ui_bp.get("/admin/api/summary")

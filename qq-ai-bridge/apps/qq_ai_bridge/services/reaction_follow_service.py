@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import time
 from collections import OrderedDict
 
@@ -15,6 +16,7 @@ _RECENT_NOTICE_LIMIT = 512
 _RECENT_GROUP_MESSAGES: OrderedDict[str, dict] = OrderedDict()
 _RECENT_GROUP_MESSAGE_LIMIT = 2048
 _RECENT_GROUP_MESSAGE_TTL_SECONDS = 6 * 60 * 60
+DEFAULT_REACTION_FOLLOW_PROBABILITY = 0.5
 
 
 # handle_group_reaction_notice：处理群表情通知
@@ -43,14 +45,48 @@ def handle_group_reaction_notice(data: dict, group_config: dict | None = None, s
     if _is_duplicate_notice(parsed):
         return {"handled": True, "followed": False, "reason": "duplicate", **parsed}
 
+    probability = _reaction_follow_probability(cfg)
+    roll = random.random()
+    if roll >= probability:
+        if log and bool(cfg.get("reaction_notice_log", True)):
+            log(
+                f"[REACTION_FOLLOW] group_id={parsed.get('group_id')} message_id={parsed.get('message_id')} "
+                f"emoji_id={parsed.get('emoji_id')} user_id={parsed.get('user_id')} followed=False "
+                f"reason=probability_skip probability={probability:.2f} roll={roll:.2f}"
+            )
+        return {
+            "handled": True,
+            "followed": False,
+            "reason": "probability_skip",
+            "probability": probability,
+            "roll": roll,
+            **parsed,
+        }
+
     result = set_msg_emoji_like(parsed["message_id"], emoji_id=parsed["emoji_id"], quiet=not bool(cfg.get("reaction_notice_log", False)))
     followed = bool(result.get("ok"))
     if log and bool(cfg.get("reaction_notice_log", True)):
         log(
             f"[REACTION_FOLLOW] group_id={parsed.get('group_id')} message_id={parsed.get('message_id')} "
-            f"emoji_id={parsed.get('emoji_id')} user_id={parsed.get('user_id')} followed={followed}"
+            f"emoji_id={parsed.get('emoji_id')} user_id={parsed.get('user_id')} followed={followed} "
+            f"config=follow_group_reactions probability={probability:.2f} roll={roll:.2f}"
         )
-    return {"handled": True, "followed": followed, "result": result, **parsed}
+    return {
+        "handled": True,
+        "followed": followed,
+        "result": result,
+        "probability": probability,
+        "roll": roll,
+        **parsed,
+    }
+
+
+def _reaction_follow_probability(group_config: dict) -> float:
+    try:
+        value = float(group_config.get("reaction_follow_probability", DEFAULT_REACTION_FOLLOW_PROBABILITY))
+    except (TypeError, ValueError):
+        value = DEFAULT_REACTION_FOLLOW_PROBABILITY
+    return min(1.0, max(0.0, value))
 
 
 # record_group_message_for_reaction_learning：记录表情学习上下文

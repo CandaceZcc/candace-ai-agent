@@ -3,7 +3,13 @@ import unittest
 
 sys.path.insert(0, "qq-ai-bridge")
 
-from apps.qq_ai_bridge.services.response_action import ActionKind, ResponseAction, execute_group_action, parse_llm_response_action
+from apps.qq_ai_bridge.services.response_action import (
+    ActionKind,
+    ResponseAction,
+    execute_group_action,
+    execute_private_action,
+    parse_llm_response_action,
+)
 
 
 class ResponseActionTests(unittest.TestCase):
@@ -32,6 +38,23 @@ class ResponseActionTests(unittest.TestCase):
         self.assertEqual(action.kind, ActionKind.TEXT)
         self.assertNotIn("**", action.text)
         self.assertNotIn("\n\n", action.text)
+
+    def test_private_markdown_table_becomes_readable_lines(self):
+        action = parse_llm_response_action(
+            "**账单**\n\n| 项目 | 金额 |\n|------|------|\n| Kimi | 50 |\n| 查重 | 102 |",
+            surface="private",
+        )
+
+        self.assertEqual(action.kind, ActionKind.TEXT)
+        self.assertIn("项目 金额", action.text)
+        self.assertIn("Kimi 50", action.text)
+        self.assertIn("\n", action.text)
+
+    def test_private_plain_text_keeps_date_like_expense_names(self):
+        action = parse_llm_response_action("4.26火锅 122\n4.24外食 80", surface="private")
+
+        self.assertEqual(action.kind, ActionKind.TEXT)
+        self.assertIn("4.26火锅", action.text)
 
     def test_unknown_json_is_not_user_visible_text(self):
         action = parse_llm_response_action('{"foo":"bar"}')
@@ -66,6 +89,21 @@ class ResponseActionTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "empty_message")
+
+    def test_execute_private_text_passes_force_parts(self):
+        from unittest.mock import patch
+
+        with patch("apps.qq_ai_bridge.services.response_action.send_private_msg", return_value={"ok": True}) as mock_send:
+            result = execute_private_action(
+                12345,
+                ResponseAction(kind=ActionKind.TEXT, text="完整账单"),
+                target_message_id=None,
+                quiet=True,
+                force_parts=3,
+            )
+
+        self.assertTrue(result["ok"])
+        mock_send.assert_called_once_with(12345, "完整账单", quiet=True, force_parts=3)
 
 
 if __name__ == "__main__":

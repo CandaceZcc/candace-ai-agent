@@ -7,6 +7,8 @@ sys.path.insert(0, "qq-ai-bridge")
 
 from apps.qq_ai_bridge.adapters.admin_ui import (
     _log_file_meta,
+    _normalize_default_payload,
+    _normalize_group_payload,
     _normalize_strategy_payload,
     BRIDGE_LOG_PATH,
     mask_sensitive,
@@ -103,6 +105,36 @@ class AdminConsoleHelpersTest(unittest.TestCase):
         self.assertEqual(strategy["reply_probability"], 0.6)
         self.assertEqual(strategy["delay_max_ms"], 4000)
         self.assertTrue(strategy["require_mention_for_reply"])
+
+    def test_normalize_default_payload_accepts_reaction_probability(self):
+        default = _normalize_default_payload(
+            {
+                "trigger_mode": "all",
+                "follow_group_reactions": True,
+                "reaction_notice_log": True,
+                "reaction_follow_probability": 0.35,
+            },
+            {},
+        )
+
+        self.assertTrue(default["reply_all_messages"])
+        self.assertTrue(default["follow_group_reactions"])
+        self.assertTrue(default["reaction_notice_log"])
+        self.assertEqual(default["reaction_follow_probability"], 0.35)
+
+    def test_normalize_group_payload_preserves_existing_when_probability_absent(self):
+        group_id, group = _normalize_group_payload(
+            {"group_id": "123456", "name": "测试群", "strategy": {"reply_probability": 1, "silence_probability": 0, "reaction_probability": 0}},
+            {"reaction_follow_probability": 0.2, "enable_vision": True},
+        )
+
+        self.assertEqual(group_id, "123456")
+        self.assertEqual(group["reaction_follow_probability"], 0.2)
+        self.assertTrue(group["enable_vision"])
+
+    def test_normalize_group_payload_rejects_invalid_reaction_probability(self):
+        with self.assertRaises(ValueError):
+            _normalize_group_payload({"group_id": "123456", "reaction_follow_probability": 2}, {})
 
 
 if __name__ == "__main__":

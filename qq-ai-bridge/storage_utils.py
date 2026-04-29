@@ -11,6 +11,8 @@ DEFAULT_GROUP_CONFIG = {
         "reply_all_messages": False,
         "enable_vision": True,
         "follow_group_reactions": False,
+        "reaction_follow_probability": 0.5,
+        "reaction_notice_log": False,
         "ignore": False,
         "mute_log": False
     }

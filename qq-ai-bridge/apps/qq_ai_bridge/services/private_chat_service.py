@@ -37,6 +37,7 @@ from apps.qq_ai_bridge.services.prompt_service import (
     build_private_ai_prompt,
     prepare_private_ai_prompt,
 )
+from apps.qq_ai_bridge.services.private_ledger_service import maybe_handle_private_ledger_command
 from apps.qq_ai_bridge.services.response_action import (
     ActionKind,
     ResponseAction,
@@ -221,6 +222,33 @@ def _run_private_chat_worker(user_id) -> None:
         current_message_ts = int(batch[-1].timestamp or 0)
         current_message_id = batch[-1].message_id
         append_private_style_sample(BASE_DATA_DIR, user_id, merged_text, timestamp=current_message_ts or None)
+        ledger_result = maybe_handle_private_ledger_command(user_id, merged_text)
+        if ledger_result and ledger_result.get("handled"):
+            reply = str(ledger_result.get("reply") or "").strip()
+            history_reply = str(ledger_result.get("history_reply") or reply)
+            append_private_history(
+                BASE_DATA_DIR,
+                user_id,
+                merged_text,
+                history_reply,
+                limit=20,
+                user_timestamp=current_message_ts or None,
+            )
+            execute_private_action(
+                user_id,
+                ResponseAction(kind=ActionKind.TEXT, text=reply, reason="private_ledger"),
+                target_message_id=None,
+                quiet=False,
+                force_parts=ledger_result.get("force_parts"),
+            )
+            _record_private_reply_sent(state)
+            print(
+                f"[PRIVATE_LEDGER] {ledger_result.get('mode', 'handled')}"
+                f" user_id={user_id}"
+                f" parts_total={ledger_result.get('parts_total', 1)}"
+                f" summary={ledger_result.get('summary', '')!r}"
+            )
+            continue
         prompt_payload = prepare_private_ai_prompt(user_id, merged_text, current_timestamp=current_message_ts)
         print(
             f"[PRIVATE_CHAT] context_gap_seconds={prompt_payload['context_gap_seconds']}"
@@ -289,7 +317,7 @@ def _run_private_chat_worker(user_id) -> None:
                 "prompt_chars": prompt_payload["prompt_chars"],
             },
         )
-        llm_action = parse_llm_response_action(llm_raw_reply)
+        llm_action = parse_llm_response_action(llm_raw_reply, surface="private")
         if llm_action.kind == ActionKind.NO_REPLY:
             execute_private_action(
                 user_id,

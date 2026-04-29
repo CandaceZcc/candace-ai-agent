@@ -31,11 +31,11 @@ class ResponseAction:
 
 
 _LEGACY_EMOJI_TAG_PATTERN = re.compile(r"\[emoji:[^\]]+\]", re.IGNORECASE)
-_MARKDOWN_BULLET_PATTERN = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)、]\s*)")
+_MARKDOWN_BULLET_PATTERN = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)、]\s+)")
 
 
 # parse_llm_response_action：解析模型动作协议
-def parse_llm_response_action(raw_text: str) -> ResponseAction:
+def parse_llm_response_action(raw_text: str, *, surface: str = "group") -> ResponseAction:
     """Parse LLM output into strict action protocol.
 
     Accepts only JSON action protocol or plain text.
@@ -52,7 +52,7 @@ def parse_llm_response_action(raw_text: str) -> ResponseAction:
 
     obj = _parse_json_object(text)
     if obj is None:
-        cleaned = sanitize_model_visible_text(text)
+        cleaned = sanitize_model_visible_text(text, surface=surface)
         if not cleaned:
             return ResponseAction(kind=ActionKind.NO_REPLY, reason="empty_plain_text")
         return ResponseAction(kind=ActionKind.TEXT, text=cleaned, reason="plain_text")
@@ -75,7 +75,7 @@ def parse_llm_response_action(raw_text: str) -> ResponseAction:
             reason=str(obj.get("reason", ""))[:40],
         )
     if action_name == "text":
-        message = sanitize_model_visible_text(str(obj.get("text") or obj.get("message") or "").strip())
+        message = sanitize_model_visible_text(str(obj.get("text") or obj.get("message") or "").strip(), surface=surface)
         if not message:
             return ResponseAction(kind=ActionKind.NO_REPLY, reason="empty_text_action")
         return ResponseAction(kind=ActionKind.TEXT, text=message, reason=str(obj.get("reason", ""))[:40])
@@ -85,7 +85,7 @@ def parse_llm_response_action(raw_text: str) -> ResponseAction:
     return ResponseAction(kind=ActionKind.NO_REPLY, reason="unknown_json_action")
 
 
-def sanitize_model_visible_text(text: str) -> str:
+def sanitize_model_visible_text(text: str, *, surface: str = "group") -> str:
     """Collapse model protocol/markdown-ish output into a QQ-safe plain reply."""
     raw = str(text or "").strip()
     if not raw:
@@ -96,15 +96,31 @@ def sanitize_model_visible_text(text: str) -> str:
     raw = re.sub(r"^#{1,6}\s*", "", raw, flags=re.MULTILINE)
     lines: list[str] = []
     for line in raw.splitlines():
-        cleaned = _MARKDOWN_BULLET_PATTERN.sub("", line).strip()
+        cleaned = _clean_visible_line(line, surface=surface)
         if cleaned:
             lines.append(cleaned)
     if not lines:
         return ""
+    if surface == "private":
+        return "\n".join(lines).strip()
     if len(lines) == 1:
         return lines[0]
     compact = "；".join(lines[:4])
     return re.sub(r"\s+", " ", compact).strip()
+
+
+def _clean_visible_line(line: str, *, surface: str) -> str:
+    cleaned = str(line or "").strip()
+    if not cleaned:
+        return ""
+    if surface == "private" and re.fullmatch(r"\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?", cleaned):
+        return ""
+    if surface == "private" and cleaned.startswith("|") and cleaned.endswith("|"):
+        cells = [cell.strip() for cell in cleaned.strip("|").split("|")]
+        cells = [cell for cell in cells if cell]
+        return " ".join(cells)
+    cleaned = _MARKDOWN_BULLET_PATTERN.sub("", cleaned).strip()
+    return cleaned
 
 
 # _parse_json_object：解析JSON对象
@@ -177,6 +193,7 @@ def execute_private_action(
     target_message_id: int | None,
     quiet: bool,
     reaction_fallback_reply_face: bool = True,
+    force_parts: int | None = None,
 ) -> dict:
     if action.kind == ActionKind.NO_REPLY:
         return {"ok": True, "mode": ActionKind.NO_REPLY.value}
@@ -208,7 +225,7 @@ def execute_private_action(
             "applied_count": applied_count,
             "emoji_names": result.get("emoji_names", []),
         }
-    result = send_private_msg(user_id, action.text, quiet=quiet)
+    result = send_private_msg(user_id, action.text, quiet=quiet, force_parts=force_parts)
     if isinstance(result, dict):
         return {"mode": ActionKind.TEXT.value, **result}
     return {"ok": True, "mode": ActionKind.TEXT.value}
