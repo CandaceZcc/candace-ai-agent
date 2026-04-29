@@ -7,14 +7,13 @@ import hashlib
 from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
 
 _PLAIN_REPLY_TEMPLATES = {
-    "ack": ("收到", "行", "是有点", "有点东西"),
+    "ack": ("ok", "行", "是有点", "何意味"),
     "question": ("这就有点怪了", "有点那个", "这得看情况", "像那么回事"),
-    "image": ("我看到了", "这图有点东西", "有点抽象", "这张行"),
+    "image": ("何意味", "懂你意思", "顺", "？"),
     "meme": ("典", "绷", "有点典", "经典皮肤"),
 }
 
 
-# select_group_expression：选择群聊表情
 def select_group_expression(reply: str, merged_text: str, group_config: dict | None = None) -> str:
     """Gently rewrite flat short replies into more natural chat expressions."""
     normalized_reply = normalize_query_text(reply)
@@ -40,7 +39,6 @@ def select_group_expression(reply: str, merged_text: str, group_config: dict | N
     return templates[idx]
 
 
-# _infer_scene：推断场景
 def _infer_scene(merged_text: str) -> str:
     text = normalize_query_text(merged_text)
     if any(token in text for token in ("图", "图片", "截图", "表情", "梗图")):
@@ -52,13 +50,11 @@ def _infer_scene(merged_text: str) -> str:
     return "ack"
 
 
-# _stable_index：相关逻辑处理
 def _stable_index(seed: str, size: int) -> int:
     digest = hashlib.md5(seed.encode("utf-8")).hexdigest()
     return int(digest[:8], 16) % max(size, 1)
 
 
-# _parse_persona_intensity：解析人格强度
 def _parse_persona_intensity(group_config: dict) -> int:
     try:
         return max(0, min(100, int(group_config.get("persona_intensity", 35))))

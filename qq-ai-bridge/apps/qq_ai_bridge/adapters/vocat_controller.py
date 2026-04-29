@@ -17,6 +17,10 @@ from apps.qq_ai_bridge.config.settings import (
     VOCAT_PRODUCT_KEY,
     VOCAT_TTS_API_URL,
 )
+from apps.qq_ai_bridge.services.vocat_command_queue import (
+    enqueue_vocat_expression,
+    enqueue_vocat_tts,
+)
 
 
 class VocatControllerError(RuntimeError):
@@ -65,18 +69,31 @@ def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 async def send_expression(expression_id: str | int) -> dict[str, Any]:
     """Ask the hardware to display a specific expression."""
+    return await asyncio.to_thread(send_expression_sync, expression_id)
+
+
+def send_expression_sync(expression_id: str | int) -> dict[str, Any]:
+    """Ask the hardware to display a specific expression from sync contexts."""
+    if not VOCAT_EXPRESSION_API_URL:
+        return enqueue_vocat_expression(expression_id, source="bridge_expression_fallback")
     payload = {
         **_build_device_payload(),
         "expression_id": str(expression_id),
     }
-    return await asyncio.to_thread(_post_json, VOCAT_EXPRESSION_API_URL, payload)
+    return _post_json(VOCAT_EXPRESSION_API_URL, payload)
 
 
 async def send_tts_vocal(text: str) -> dict[str, Any]:
     """Ask the hardware to actively speak a text string."""
+    return await asyncio.to_thread(send_tts_vocal_sync, text)
+
+
+def send_tts_vocal_sync(text: str) -> dict[str, Any]:
+    """Ask the hardware to actively speak a text string from sync contexts."""
+    if not VOCAT_TTS_API_URL:
+        return enqueue_vocat_tts(text, source="bridge_tts_fallback")
     payload = {
         **_build_device_payload(),
         "text": text.strip(),
     }
-    return await asyncio.to_thread(_post_json, VOCAT_TTS_API_URL, payload)
-
+    return _post_json(VOCAT_TTS_API_URL, payload)

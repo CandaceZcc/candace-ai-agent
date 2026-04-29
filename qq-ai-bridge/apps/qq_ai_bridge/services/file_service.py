@@ -530,8 +530,8 @@ def handle_file_message(message_type, user_id, group_id, file_info):
         return "ignore"
 
     if message_type == "group":
-        send_group_msg(group_id, "为保护隐私，群聊模式下不会直接解析或输出文件内容，请改为私聊发送。")
-        return {"status": "file_blocked_in_group"}
+        print(f"[FILE] 群聊文件忽略，仅私聊读取 group_id={group_id}")
+        return {"status": "ignore", "reason": "group_file_disabled"}
 
     if not filename:
         message_id = file_info.get("message_id")

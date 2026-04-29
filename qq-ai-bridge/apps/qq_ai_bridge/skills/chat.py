@@ -95,7 +95,7 @@ def _is_bot_alias_triggered(text: str, group_config: dict | None) -> bool:
     normalized = str(text or "").strip().lower()
     if not normalized:
         return False
-    aliases = ["机盖宁"]
+    aliases = ["机盖宁", "_candace_二号机", "candace二号机", "二号机"]
     configured = (group_config or {}).get("bot_aliases") or []
     if isinstance(configured, str):
         aliases.extend(item.strip() for item in configured.split(",") if item.strip())

@@ -45,17 +45,15 @@ QQ_EMOJI_NAME_TO_ID: dict[str, int] = {
 
 DEFAULT_EMOJI_SEQUENCE: tuple[str, ...] = ("笑哭", "棒棒糖", "西瓜", "尴尬", "惊讶", "舔屏", "续标识")
 DEFAULT_REACTION_ORDER: tuple[str, ...] = (
-    "button_marker",
     "laugh_cry",
+    "button_marker",
     "lollipop",
     "watermelon",
     "awkward",
     "surprised",
     "lick_screen",
 )
-_EMOJI_REQUEST_PATTERN = re.compile(
-    r"(贴|发|来个|来一个|给我).{0,4}([\w/\u4e00-\u9fff]{1,8})?(表情|emoji|face)"
-)
+_EMOJI_REQUEST_PATTERN = re.compile(r"(贴|发|来个|来一个|给我).{0,4}(表情|emoji|face)")
 _MESSAGE_REACTION_REQUEST_PATTERN = re.compile(r"(消息|这条|上面).{0,6}(贴|点|react).{0,6}(表情|emoji|face)")
 _EMOJI_COUNT_PATTERN = re.compile(r"(几|[0-9]{1,2}|[一二两三四五六])\s*(个|次|条)?")
 _ZH_NUM_MAP = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6}
@@ -63,31 +61,26 @@ _POLITICAL_SENSITIVE_PATTERN = re.compile(
     r"(8964|64学运|坦克人|天安门|维尼|包包|庆丰|乳包|乳化|习近平|共产党|中共|毛左|文革|六四|"
     r"李老师|冲塔|反贼|政治|敏感词|政治敏感|维权|上访|言论自由|翻墙|晶哥|建政|键政|赢麻|"
     r"粉红|神友|浪人|支黑|兔友|境外势力|塔|老大哥|铁拳|献忠|张献忠|图纸|屠支|恨国|爱国大V|"
-    r"台湾|台独|港独|疆独|藏独|香港|新疆|西藏|法轮功|轮子|民主|自由派|左派|右派|纳粹|法西斯)",
-    re.IGNORECASE,
+    r"台湾|台独|港独|疆独|藏独|香港|新疆|西藏|法轮功|轮子|民主|自由派|左派|右派|纳粹|法西斯)"
 )
 _CONTROVERSIAL_PATTERN = re.compile(
     r"(女权|男权|彩礼|婚驴|LGBT|lgbt|跨性别|同性恋|巴以|巴勒斯坦|以色列|哈马斯|乌克兰|俄罗斯|台海|"
     r"民粹|地域黑|厌女|厌男|饭圈|极端|争议|吵翻|站队|对线|开团|炎上|挂人|网暴|盒武器|开盒|"
     r"男女对立|娇妻|龟男|田园女权|拳师|仙女|小仙女|incel|性别对立|学历歧视|地域歧视|"
-    r"黑命贵|白左|移民|难民|宗教|穆斯林|基督教|犹太|印度|日本|韩国|仇日|仇韩|歧视)",
-    re.IGNORECASE,
+    r"黑命贵|白左|移民|难民|宗教|穆斯林|基督教|犹太|印度|日本|韩国|仇日|仇韩|歧视)"
 )
 _SEXUAL_PATTERN = re.compile(
     r"(色|涩|性|骚|烧|想冲|冲了|发情|发骚|做爱|操|口|乳|胸|屁股|腿玩年|好顶|好想舔|舔一口|"
     r"舔屏|老公|老婆|斯哈|想日|精液|射了|性癖|媚|想透|想草|鸡巴|几把|屌|牛子|跳蛋|自慰|手冲|"
     r"黄图|涩图|擦边|瑟瑟|色色|开车|车牌|本子|裸|裸体|裸照|奶子|欧派|内裤|黑丝|白丝|足控|"
-    r"榨精|高潮|插入|透批|约炮|炮友|性骚扰|想妈妈了)",
-    re.IGNORECASE,
+    r"榨精|高潮|插入|透批|约炮|炮友|性骚扰|想妈妈了)"
 )
 _LLM_REACTION_HINT_PATTERN = re.compile(
     r"(政治|敏感|争议|吵|逆天|抽象|恶心|爆了|炎上|开团|对线|离谱|绷不住|麻了|典|典中典|"
-    r"地狱笑话|暴论|锐评|节奏|挂人|开盒|盒武器|色|涩|骚|烧|舔|擦边|开车)",
-    re.IGNORECASE,
+    r"地狱笑话|暴论|锐评|节奏|挂人|开盒|盒武器|色|涩|骚|烧|舔|擦边|开车)"
 )
 
 
-# _normalize_reaction_name：规范化reaction
 def _normalize_reaction_name(name: str) -> str:
     normalized = str(name or "").strip().lower()
     alias_map = {
@@ -121,7 +114,6 @@ def _normalize_reaction_name(name: str) -> str:
     return alias_map.get(normalized, "")
 
 
-# infer_reaction_preferred_order：推断表情优先顺序
 def infer_reaction_preferred_order(text: str, default_order: tuple[str, ...] = DEFAULT_REACTION_ORDER) -> tuple[str, ...]:
     normalized = str(text or "").strip()
     if not normalized:
@@ -136,6 +128,8 @@ def infer_reaction_preferred_order(text: str, default_order: tuple[str, ...] = D
         explicit_choice = _infer_explicit_reaction_name(normalized)
         if explicit_choice:
             first_choice = explicit_choice
+        elif is_message_reaction_request(normalized):
+            first_choice = "button_marker"
         elif _LLM_REACTION_HINT_PATTERN.search(normalized):
             first_choice = _infer_reaction_with_llm(normalized)
 
@@ -144,7 +138,6 @@ def infer_reaction_preferred_order(text: str, default_order: tuple[str, ...] = D
     return tuple(dict.fromkeys((first_choice,) + tuple(default_order)))
 
 
-# _infer_explicit_reaction_name：推断reaction
 def _infer_explicit_reaction_name(text: str) -> str:
     explicit_aliases = {
         "button_marker": ("button_marker", "红按钮", "按按钮", "按钮", "续标识"),
@@ -165,7 +158,6 @@ def _infer_explicit_reaction_name(text: str) -> str:
     return ""
 
 
-# _infer_reaction_with_llm：推断reaction大模型
 def _infer_reaction_with_llm(text: str) -> str:
     if _POLITICAL_SENSITIVE_PATTERN.search(text) or _CONTROVERSIAL_PATTERN.search(text):
         return "button_marker"
@@ -224,27 +216,15 @@ def _infer_reaction_with_llm(text: str) -> str:
     return ""
 
 
-# is_emoji_request：判断表情请求
 def is_emoji_request(text: str) -> bool:
     normalized = str(text or "").strip().lower()
     if not normalized:
         return False
-    if is_message_reaction_request(normalized):
+    if "贴表情" in normalized or "给我贴个表情" in normalized:
         return True
-    if extract_emoji_name(normalized):
-        return bool(re.search(r"(贴|发|来个|来一个|给我)", normalized))
     return bool(_EMOJI_REQUEST_PATTERN.search(normalized))
 
 
-# is_face_fallback_request：判断表情兜底请求
-def is_face_fallback_request(text: str) -> bool:
-    normalized = str(text or "").strip().lower()
-    if not normalized or is_message_reaction_request(normalized):
-        return False
-    return bool(extract_emoji_name(normalized))
-
-
-# is_message_reaction_request：判断消息reaction请求
 def is_message_reaction_request(text: str) -> bool:
     normalized = str(text or "").strip().lower()
     if not normalized:
@@ -252,7 +232,15 @@ def is_message_reaction_request(text: str) -> bool:
     return bool(_MESSAGE_REACTION_REQUEST_PATTERN.search(normalized))
 
 
-# extract_emoji_name：提取表情
+def is_face_fallback_request(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    if not extract_emoji_name(normalized):
+        return False
+    return any(token in normalized for token in ("贴", "发", "来个", "来一个", "给我", "整", "要"))
+
+
 def extract_emoji_name(text: str) -> str | None:
     normalized = str(text or "")
     for name in QQ_EMOJI_NAME_TO_ID:
@@ -261,7 +249,6 @@ def extract_emoji_name(text: str) -> str | None:
     return None
 
 
-# build_face_cq：构建表情
 def build_face_cq(emoji_name: str) -> str | None:
     face_id = QQ_EMOJI_NAME_TO_ID.get(emoji_name)
     if face_id is None:
@@ -269,7 +256,6 @@ def build_face_cq(emoji_name: str) -> str | None:
     return f"[CQ:face,id={face_id}]"
 
 
-# pick_face_cq：选择表情
 def pick_face_cq(seed: str = "", preferred: tuple[str, ...] = DEFAULT_EMOJI_SEQUENCE) -> tuple[str, str]:
     names = [name for name in preferred if name in QQ_EMOJI_NAME_TO_ID]
     if not names:
@@ -281,7 +267,6 @@ def pick_face_cq(seed: str = "", preferred: tuple[str, ...] = DEFAULT_EMOJI_SEQU
     return name, build_face_cq(name) or "[CQ:face,id=182]"
 
 
-# detect_emoji_request_count：检测表情请求
 def detect_emoji_request_count(text: str, default_count: int = 1, max_count: int = 4) -> int:
     normalized = str(text or "").strip()
     if not normalized:
@@ -298,7 +283,6 @@ def detect_emoji_request_count(text: str, default_count: int = 1, max_count: int
     return min(max(value, 1), max_count)
 
 
-# build_face_sequence：构建CQ表情序列
 def build_face_sequence(seed: str, count: int, preferred: tuple[str, ...] = DEFAULT_EMOJI_SEQUENCE) -> list[str]:
     names = [name for name in preferred if name in QQ_EMOJI_NAME_TO_ID]
     if not names:
@@ -315,7 +299,6 @@ def build_face_sequence(seed: str, count: int, preferred: tuple[str, ...] = DEFA
     return result
 
 
-# build_emoji_id_sequence：构建表情ID序列
 def build_emoji_id_sequence(seed: str, count: int, preferred: tuple[str, ...] = DEFAULT_EMOJI_SEQUENCE) -> list[str]:
     names = [name for name in preferred if name in QQ_EMOJI_NAME_TO_ID]
     if not names:
@@ -339,6 +322,7 @@ __all__ = [
     "build_face_cq",
     "detect_emoji_request_count",
     "extract_emoji_name",
+    "is_face_fallback_request",
     "is_emoji_request",
     "is_message_reaction_request",
     "pick_face_cq",

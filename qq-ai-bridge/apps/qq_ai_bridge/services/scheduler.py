@@ -20,6 +20,7 @@ from apps.qq_ai_bridge.config.settings import (
     SLEEP_REMINDER_TIME,
     TOMORROW_SCHEDULE_TEST_DELAY_MINUTES,
     TOMORROW_SCHEDULE_TIME,
+    VOCAT_DAILY_BROADCAST_TO_DEVICE,
 )
 from apps.qq_ai_bridge.logging.bridge_log import log_change, log_debug, log_event, log_warn
 from apps.qq_ai_bridge.services.reminder_store import ReminderStore, SchedulerStateStore
@@ -28,6 +29,7 @@ from apps.qq_ai_bridge.services.schedule_service import (
     ensure_schedule_file,
 )
 from apps.qq_ai_bridge.services.time_utils import get_now_local
+from apps.qq_ai_bridge.services.vocat_command_queue import enqueue_vocat_tts
 
 _START_LOCK = threading.Lock()
 _STARTED = False
@@ -95,6 +97,7 @@ def _fire_due_reminders(now: datetime) -> int | None:
             result = send_private_msg(item["user_id"], f"提醒你：{item['text']}", quiet=True)
             if result.get("ok"):
                 REMINDER_STORE.mark_fired(reminder_id, now)
+                _queue_vocat_daily_broadcast(f"提醒你：{item['text']}", source="reminder")
             print(f"[REMINDER] sent id={reminder_id} ret={result}")
         except Exception:
             print(f"[REMINDER] send failed id={reminder_id}")
@@ -147,6 +150,7 @@ def _run_daily_job(
         result = send_private_msg(OWNER_QQ, schedule_text, quiet=True)
         if result.get("ok"):
             STATE_STORE.mark_daily_sent(task_key, token, now)
+            _queue_vocat_daily_broadcast(schedule_text, source=task_key)
             print(f"{success_log_prefix} fired date={token}")
         else:
             print(f"[DAILY] send failed task={task_key} token={token} ret={result}")
@@ -196,3 +200,13 @@ def _compute_sleep_seconds(now: datetime, next_reminder_wait: int | None) -> int
             waits.append(max(1, ceil((scheduled_at - now).total_seconds())))
 
     return max(1, min(waits))
+
+
+def _queue_vocat_daily_broadcast(text: str, *, source: str) -> None:
+    if not VOCAT_DAILY_BROADCAST_TO_DEVICE:
+        return
+    result = enqueue_vocat_tts(text, source=f"scheduler_{source}")
+    if result.get("ok"):
+        print(f"[VOCAT] queued scheduler broadcast command_id={result.get('command_id')} source={source}")
+    else:
+        print(f"[VOCAT] failed to queue scheduler broadcast source={source} ret={result}")

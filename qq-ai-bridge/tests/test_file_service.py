@@ -1,9 +1,10 @@
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, "qq-ai-bridge")
 
-from apps.qq_ai_bridge.services.file_service import derive_filename, extract_file_info
+from apps.qq_ai_bridge.services.file_service import derive_filename, extract_file_info, handle_file_message
 
 
 class FileServiceExtractFileInfoTests(unittest.TestCase):
@@ -135,6 +136,20 @@ class FileServiceExtractFileInfoTests(unittest.TestCase):
         result = derive_filename(file_info)
 
         self.assertEqual(result, "file-only-id")
+
+    @patch("apps.qq_ai_bridge.services.file_service.send_group_msg")
+    @patch("apps.qq_ai_bridge.services.file_service.download_file_if_possible")
+    def test_group_file_message_does_not_send_or_download(self, mock_download, mock_send_group_msg):
+        result = handle_file_message(
+            "group",
+            user_id=1,
+            group_id=123,
+            file_info={"name": "demo.txt", "url": "https://example.com/demo.txt"},
+        )
+
+        self.assertEqual(result, {"status": "ignore", "reason": "group_file_disabled"})
+        mock_send_group_msg.assert_not_called()
+        mock_download.assert_not_called()
 
 
 if __name__ == "__main__":

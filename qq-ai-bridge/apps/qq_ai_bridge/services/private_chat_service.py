@@ -18,11 +18,11 @@ from storage_utils import (
 from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
 from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
 from apps.qq_ai_bridge.services.emoji_service import (
-    DEFAULT_REACTION_ORDER,
     build_face_cq,
     build_face_sequence,
     detect_emoji_request_count,
     extract_emoji_name,
+    infer_reaction_preferred_order,
     is_face_fallback_request,
     is_message_reaction_request,
     is_emoji_request,
@@ -87,7 +87,7 @@ def _handle_private_emoji_request(user_id, merged_text: str, current_message_ts:
             ResponseAction(
                 kind=ActionKind.REACTION,
                 reaction_count=count,
-                preferred_order=DEFAULT_REACTION_ORDER,
+                preferred_order=infer_reaction_preferred_order(merged_text),
                 reason="private_emoji_request",
             ),
             target_message_id=message_id,

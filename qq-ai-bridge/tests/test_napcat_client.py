@@ -1,4 +1,6 @@
+import os
 import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -8,6 +10,7 @@ sys.path.insert(0, "qq-ai-bridge")
 from apps.qq_ai_bridge.adapters.napcat_client import (
     react_message_with_multiple_emojis,
     react_message_with_preferred_emojis,
+    send_group_file,
     send_group_msg,
     send_private_msg,
     split_outbound_messages,
@@ -46,6 +49,24 @@ class NapcatClientTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["parts_sent"], 2)
         self.assertEqual(result["parts_total"], 2)
+
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_send_group_file_uploads_local_file(self, mock_post):
+        mock_post.return_value = SimpleNamespace(ok=True, status_code=200, text='{ "retcode": 0 }')
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as file_obj:
+            file_obj.write("print('hi')\n")
+            file_path = file_obj.name
+        try:
+            result = send_group_file(12345, file_path, name="demo.py", quiet=True)
+        finally:
+            os.unlink(file_path)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(mock_post.call_args.args[0], "upload_group_file")
+        payload = mock_post.call_args.args[1]
+        self.assertEqual(payload["group_id"], 12345)
+        self.assertEqual(payload["file"], file_path)
+        self.assertEqual(payload["name"], "demo.py")
 
     @patch("apps.qq_ai_bridge.adapters.napcat_client.time.sleep", return_value=None)
     @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")

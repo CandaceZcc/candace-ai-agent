@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from storage_utils import append_group_chat_log
 from storage_utils import load_group_config as load_group_config_from_file
 
 from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
+from apps.qq_ai_bridge.adapters.napcat_client import send_group_file
 from apps.qq_ai_bridge.config.settings import GROUP_CONFIG_PATH
 from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
 from apps.qq_ai_bridge.config.settings import GLOBAL_LISTEN_GROUP_IDS
@@ -27,6 +29,25 @@ from apps.qq_ai_bridge.services.response_action import (
 )
 
 GROUP_DEBOUNCE_MS = 5000
+GENERATED_GROUP_FILE_DIR = os.path.join(BASE_DATA_DIR, "generated_files", "group")
+_CODE_BLOCK_PATTERN = re.compile(r"```([a-zA-Z0-9_+.-]*)\n(.*?)```", re.DOTALL)
+_CODE_REQUEST_PATTERN = re.compile(
+    r"(写|生成|做|来|整|给).*?(程序|代码|脚本|网页|html|python|py|js|javascript|typescript|ts|css|爬虫|bot)|"
+    r"(程序|代码|脚本|网页|html|python|py|js|javascript|typescript|ts|css|爬虫|bot).*?(写|生成|做|来|整|给)",
+    re.IGNORECASE,
+)
+_CODE_LIKE_PATTERN = re.compile(r"(def |class |function |import |from |const |let |var |<!DOCTYPE|<html|#include|public class |package )")
+_DANGEROUS_FILE_REQUEST_PATTERN = re.compile(
+    r"(rm\s+-rf\s+/|/下的都删|删掉\s*/|删除\s*/|格式化|清空磁盘|"
+    r"api[_-]?key|secret|token|密码|密钥|配置文件.*发|env|\.env|"
+    r"关机|shutdown\s+/s|重启|reboot|按\s*win\s*\+\s*r|输入\s*cmd|"
+    r"列出.*文件|文件.*发过来|发过来.*文件|发送.*文件夹|所有文件|"
+    r"/home/[^\s`'\"]+|~/.openclaw|openclaw|workspace)",
+    re.IGNORECASE,
+)
+_HEAVY_CODE_REQUEST_PATTERN = re.compile(r"(\d+)\s*(行|lines?|代码)", re.IGNORECASE)
+_REPLY_FILLER_PATTERN = re.compile(r"(?:^|\s)(确实|草|牛逼|典|寄了?|救命|贴贴)(?:\s+\1)+", re.IGNORECASE)
+_REPLY_LOOP_PATTERN = re.compile(r"^(确实|草|牛逼|典|寄了?|救命|贴贴)(\s+(确实|草|牛逼|典|寄了?|救命|贴贴))*$", re.IGNORECASE)
 
 
 @dataclass
@@ -55,12 +76,15 @@ class GroupChatState:
 
 _GROUP_CHAT_STATES: dict[str, GroupChatState] = {}
 _GROUP_CHAT_STATES_LOCK = threading.Lock()
+_RECENT_REPEAT_MESSAGES: dict[str, list[tuple[float, str]]] = {}
 _RECENT_REPEAT_FOLLOWS: dict[str, float] = {}
 _REPEAT_FOLLOW_COOLDOWN_SECONDS = 60
+_REPEAT_FOLLOW_WINDOW_SECONDS = 45
 _REPEAT_FOLLOW_MIN_COUNT = 3
 _REPEAT_FOLLOW_MAX_CHARS = 80
 _TURN_EXTENSION_SECONDS = 2.0
 _TURN_EXTENSION_MAX_WINDOW_SECONDS = 8.0
+_AMBIENT_CHATTER_REPLY_THRESHOLD = 20
 _ZH_NUM_MAP = {
     "一": 1,
     "二": 2,
@@ -74,24 +98,18 @@ _ZH_NUM_MAP = {
     "九": 9,
     "十": 10,
 }
-_REPLY_FILLER_PATTERN = re.compile(r"(?:^|\s)(确实|草|牛逼|典|寄了?|救命|贴贴)(?:\s+\1)+", re.IGNORECASE)
-_REPLY_LOOP_PATTERN = re.compile(r"^(确实|草|牛逼|典|寄了?|救命|贴贴)(\s+(确实|草|牛逼|典|寄了?|救命|贴贴))*$", re.IGNORECASE)
 
-
-# load_group_config：加载群聊配置
 def load_group_config(group_id) -> dict:
     """Load merged group config for a specific QQ group."""
     return load_group_config_from_file(GROUP_CONFIG_PATH, group_id)
 
 
-# should_log_group：判断群聊日志开关
 def should_log_group(group_id) -> bool:
     """Return whether logs should be printed for a group."""
     cfg = load_group_config(group_id)
     return not cfg.get("ignore", False) and not cfg.get("mute_log", False)
 
 
-# enqueue_group_text：群聊文本入队合并
 def enqueue_group_text(
     group_id,
     user_id,
@@ -155,7 +173,6 @@ def enqueue_group_text(
     }
 
 
-# _get_group_chat_state：获取群聊队列状态
 def _get_group_chat_state(group_id) -> GroupChatState:
     key = str(group_id)
     with _GROUP_CHAT_STATES_LOCK:
@@ -166,7 +183,6 @@ def _get_group_chat_state(group_id) -> GroupChatState:
         return state
 
 
-# _run_group_chat_worker：运行群聊消费线程
 def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
     state = _get_group_chat_state(group_id)
     while True:
@@ -175,7 +191,10 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                 state.worker_running = False
                 log(f"[GROUP_CHAT] idle group_id={group_id}")
                 return
-            wait_ms = max(0, int(GROUP_DEBOUNCE_MS - (time.monotonic() - state.last_enqueue_monotonic) * 1000))
+            if _should_flush_head_message_now(state.pending):
+                wait_ms = 0
+            else:
+                wait_ms = max(0, int(GROUP_DEBOUNCE_MS - (time.monotonic() - state.last_enqueue_monotonic) * 1000))
 
         if wait_ms > 0:
             time.sleep(wait_ms / 1000.0)
@@ -188,10 +207,19 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             continue
 
         with state.lock:
-            batch = state.pending[:]
-            state.pending.clear()
+            if _should_flush_head_message_now(state.pending):
+                batch = state.pending[:1]
+                state.pending = state.pending[1:]
+            else:
+                batch_size = _select_group_batch_size(state.pending)
+                batch = state.pending[:batch_size]
+                state.pending = state.pending[batch_size:]
+            if state.pending:
+                state.debounce_started_monotonic = time.monotonic()
+                state.last_enqueue_monotonic = time.monotonic()
             debounce_started_monotonic = state.debounce_started_monotonic
-            state.debounce_started_monotonic = 0.0
+            if not state.pending:
+                state.debounce_started_monotonic = 0.0
 
         merged_batch = _merge_pending_group_messages(batch)
         merged_text = merged_batch["prompt_text"]
@@ -213,7 +241,23 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             f" debounce_window_ms={debounce_window_ms}"
         )
 
-        repeat_text, repeat_count = _detect_repeat_follow_text(batch)
+        safety_action = _build_group_safety_action(merged_text)
+        if safety_action:
+            reply_to_message_id = _pick_text_reply_target_message_id(batch, safety_action.text)
+            execute_group_action(
+                group_id,
+                safety_action,
+                target_message_id=None,
+                quiet=not should_log_group(group_id),
+                reply_to_message_id=reply_to_message_id,
+            )
+            log(
+                f"[GROUP_CHAT] safety_blocked group_id={group_id}"
+                f" reason={safety_action.reason!r} reply_to_message_id={reply_to_message_id or '-'}"
+            )
+            continue
+
+        repeat_text, repeat_count = _detect_repeat_follow_text(group_id, batch)
         if repeat_text and _claim_repeat_follow(group_id, repeat_text):
             action_result = execute_group_action(
                 group_id,
@@ -369,6 +413,29 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                     f" message_id={target_message_id} applied_count={action_result.get('applied_count', 0)}"
                 )
                 continue
+        code_file_result = _maybe_send_generated_code_file(
+            group_id,
+            merged_text,
+            llm_action.text,
+            reply_to_message_id=_pick_text_reply_target_message_id(batch, llm_action.text),
+            quiet=not should_log_group(group_id),
+            log=log,
+        )
+        if code_file_result.get("handled"):
+            append_group_chat_log(
+                BASE_DATA_DIR,
+                group_id,
+                {
+                    "timestamp": int(batch[-1].timestamp or 0) if batch else 0,
+                    "sender_name": "群聊汇总",
+                    "user_id": batch[-1].user_id if batch else None,
+                    "message": merged_text,
+                    "assistant": code_file_result.get("reply", ""),
+                    "source": "group_chat:generated_file",
+                },
+                limit=500,
+            )
+            continue
         llm_action.text = _humanize_group_reply(llm_action.text, merged_text)
         requested_parts = _detect_requested_parts(batch[-1].text if batch else "")
         reply_to_message_id = _pick_text_reply_target_message_id(batch, llm_action.text)
@@ -409,7 +476,6 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
         )
 
 
-# _merge_pending_group_messages：合并待处理群消息
 def _merge_pending_group_messages(messages: list[PendingGroupMessage]) -> dict:
     merged_blocks: list[dict] = []
     raw_messages = 0
@@ -446,7 +512,74 @@ def _merge_pending_group_messages(messages: list[PendingGroupMessage]) -> dict:
     }
 
 
-# _compute_turn_extension_ms：计算补话等待时长
+def _should_flush_head_message_now(messages: list[PendingGroupMessage]) -> bool:
+    if not messages:
+        return False
+    return _looks_like_forwarded_chat_record(messages[0].text)
+
+
+def _select_group_batch_size(messages: list[PendingGroupMessage]) -> int:
+    if not messages:
+        return 0
+    if _looks_like_multi_user_request_batch(messages):
+        return 1
+    first = messages[0]
+    size = 1
+    for item in messages[1:]:
+        if _should_split_before_message(first, item):
+            break
+        size += 1
+    return size
+
+
+def _looks_like_multi_user_request_batch(messages: list[PendingGroupMessage]) -> bool:
+    if len(messages) < 2:
+        return False
+    request_count = 0
+    request_user_ids: set[str] = set()
+    for item in messages:
+        if item.explicit_trigger or _looks_like_action_or_question_request(item.text):
+            request_count += 1
+            request_user_ids.add(str(item.user_id))
+    return request_count >= 2 and len(request_user_ids) >= 2
+
+
+def _should_split_before_message(first: PendingGroupMessage, item: PendingGroupMessage) -> bool:
+    if item.user_id == first.user_id:
+        return False
+    if item.explicit_trigger or first.explicit_trigger:
+        return True
+    if _looks_like_action_or_question_request(item.text) or _looks_like_action_or_question_request(first.text):
+        return True
+    return False
+
+
+def _looks_like_action_or_question_request(text: str) -> bool:
+    normalized = normalize_query_text(text)
+    if not normalized:
+        return False
+    if any(token in normalized for token in ("?", "？", "吗", "怎么", "为什么", "咋")):
+        return True
+    return any(
+        token in normalized
+        for token in (
+            "帮我",
+            "发过来",
+            "列出",
+            "发送",
+            "关闭",
+            "删除",
+            "删掉",
+            "格式化",
+            "写个",
+            "写一个",
+            "生成",
+            "打开",
+            "下载",
+        )
+    )
+
+
 def _compute_turn_extension_ms(messages: list[PendingGroupMessage], debounce_started_monotonic: float) -> int:
     if len(messages) < 2 or not debounce_started_monotonic:
         return 0
@@ -466,7 +599,6 @@ def _compute_turn_extension_ms(messages: list[PendingGroupMessage], debounce_sta
     return 0
 
 
-# _looks_like_followup_text：判断是否补充发言
 def _looks_like_followup_text(text: str) -> bool:
     normalized = normalize_query_text(text)
     if not normalized:
@@ -476,10 +608,152 @@ def _looks_like_followup_text(text: str) -> bool:
     return any(token in normalized for token in ("还有", "然后", "补充", "刚才", "上面", "这个", "那个", "的话", "所以"))
 
 
-# _detect_repeat_follow_text：检测复读跟刷文本
-def _detect_repeat_follow_text(messages: list[PendingGroupMessage]) -> tuple[str, int]:
+def _build_group_safety_action(merged_text: str) -> ResponseAction | None:
+    text = normalize_query_text(merged_text)
+    if not text:
+        return None
+    if _is_dangerous_file_or_secret_request(text):
+        return ResponseAction(kind=ActionKind.TEXT, text="不行，这个会碰本机文件/密钥。", reason="dangerous_file_request")
+    if _is_heavy_code_request(text):
+        return ResponseAction(kind=ActionKind.TEXT, text="这个量太大了，群里不接重活。拆小点再说。", reason="heavy_code_request")
+    return None
+
+
+def _is_dangerous_file_or_secret_request(text: str) -> bool:
+    normalized = normalize_query_text(text)
+    if not normalized:
+        return False
+    if _DANGEROUS_FILE_REQUEST_PATTERN.search(normalized):
+        return True
+    return any(token in normalized.lower() for token in ("api_key", "apikey", "access_token", "secret_key"))
+
+
+def _is_heavy_code_request(text: str) -> bool:
+    normalized = normalize_query_text(text)
+    if not _CODE_REQUEST_PATTERN.search(normalized):
+        return False
+    for match in _HEAVY_CODE_REQUEST_PATTERN.finditer(normalized):
+        try:
+            if int(match.group(1)) >= 100:
+                return True
+        except Exception:
+            continue
+    return any(token in normalized for token in ("大型项目", "完整项目", "全套", "一整个项目", "100行以上", "上百行"))
+
+
+def _maybe_send_generated_code_file(
+    group_id,
+    user_text: str,
+    reply_text: str,
+    *,
+    reply_to_message_id: int | None,
+    quiet: bool,
+    log,
+) -> dict:
+    if not _should_send_reply_as_code_file(user_text, reply_text):
+        return {"handled": False}
+    artifact = _build_generated_code_artifact(group_id, user_text, reply_text)
+    if not artifact:
+        return {"handled": False}
+    file_result = send_group_file(group_id, artifact["path"], name=artifact["name"], quiet=quiet)
+    if not file_result.get("ok"):
+        log(
+            f"[GROUP_CHAT] generated_file_failed group_id={group_id}"
+            f" file={artifact['path']!r} reason={file_result.get('reason') or file_result.get('error')}"
+        )
+        return {"handled": False}
+    notice = f"写好了，直接发文件了：{artifact['name']}"
+    execute_group_action(
+        group_id,
+        ResponseAction(kind=ActionKind.TEXT, text=notice, reason="generated_code_file"),
+        target_message_id=None,
+        quiet=quiet,
+        reply_to_message_id=reply_to_message_id,
+    )
+    log(f"[GROUP_CHAT] generated_file_sent group_id={group_id} file={artifact['path']!r}")
+    return {"handled": True, "reply": notice, "file": artifact["path"], "name": artifact["name"]}
+
+
+def _should_send_reply_as_code_file(user_text: str, reply_text: str) -> bool:
+    request_text = normalize_query_text(user_text)
+    reply = str(reply_text or "")
+    if not request_text or not reply:
+        return False
+    if not _CODE_REQUEST_PATTERN.search(request_text):
+        return False
+    return bool(_CODE_BLOCK_PATTERN.search(reply) or _CODE_LIKE_PATTERN.search(reply) or len(reply) >= 500)
+
+
+def _build_generated_code_artifact(group_id, user_text: str, reply_text: str) -> dict | None:
+    content, language = _extract_generated_code_content(reply_text)
+    content = content.strip()
+    if not content:
+        return None
+    os.makedirs(GENERATED_GROUP_FILE_DIR, exist_ok=True)
+    extension = _code_language_extension(language, user_text, content)
+    timestamp = int(time.time())
+    name = f"qq_generated_{group_id}_{timestamp}{extension}"
+    path = os.path.abspath(os.path.join(GENERATED_GROUP_FILE_DIR, name))
+    safe_root = os.path.abspath(GENERATED_GROUP_FILE_DIR)
+    if os.path.commonpath([safe_root, path]) != safe_root:
+        return None
+    with open(path, "w", encoding="utf-8") as file_obj:
+        file_obj.write(content)
+        if not content.endswith("\n"):
+            file_obj.write("\n")
+    return {"path": path, "name": name}
+
+
+def _extract_generated_code_content(reply_text: str) -> tuple[str, str]:
+    blocks = _CODE_BLOCK_PATTERN.findall(str(reply_text or ""))
+    if not blocks:
+        return str(reply_text or ""), ""
+    language, code = max(blocks, key=lambda item: len(item[1]))
+    return code, str(language or "").strip().lower()
+
+
+def _code_language_extension(language: str, user_text: str, content: str) -> str:
+    lang = (language or "").lower()
+    text = f"{user_text}\n{content}".lower()
+    mapping = {
+        "python": ".py",
+        "py": ".py",
+        "javascript": ".js",
+        "js": ".js",
+        "typescript": ".ts",
+        "ts": ".ts",
+        "html": ".html",
+        "css": ".css",
+        "java": ".java",
+        "c": ".c",
+        "cpp": ".cpp",
+        "c++": ".cpp",
+        "go": ".go",
+        "rust": ".rs",
+        "rs": ".rs",
+        "bash": ".sh",
+        "shell": ".sh",
+        "sh": ".sh",
+    }
+    if lang in mapping:
+        return mapping[lang]
+    if "<!doctype" in text or "<html" in text:
+        return ".html"
+    if "python" in text or "def " in text or "import " in text:
+        return ".py"
+    if "javascript" in text or "function " in text or "const " in text:
+        return ".js"
+    return ".txt"
+
+
+def _detect_repeat_follow_text(group_id, messages: list[PendingGroupMessage]) -> tuple[str, int]:
     counts: dict[str, int] = {}
     first_seen_order: list[str] = []
+    for _timestamp, text in _recent_repeat_messages_for_group(group_id):
+        if text not in counts:
+            first_seen_order.append(text)
+            counts[text] = 0
+        counts[text] += 1
     for item in messages:
         text = normalize_query_text(item.text)
         if not _is_safe_repeat_follow_text(text):
@@ -489,16 +763,41 @@ def _detect_repeat_follow_text(messages: list[PendingGroupMessage]) -> tuple[str
             counts[text] = 0
         counts[text] += 1
         if counts[text] >= _REPEAT_FOLLOW_MIN_COUNT:
+            _record_repeat_messages(group_id, messages)
             return text, counts[text]
 
     for text in first_seen_order:
         count = counts.get(text, 0)
         if count >= _REPEAT_FOLLOW_MIN_COUNT:
+            _record_repeat_messages(group_id, messages)
             return text, count
+    _record_repeat_messages(group_id, messages)
     return "", 0
 
 
-# _is_safe_repeat_follow_text：校验复读文本安全
+def _recent_repeat_messages_for_group(group_id, *, now: float | None = None) -> list[tuple[float, str]]:
+    current = time.monotonic() if now is None else now
+    key = str(group_id)
+    recent = [
+        (timestamp, text)
+        for timestamp, text in _RECENT_REPEAT_MESSAGES.get(key, [])
+        if current - timestamp <= _REPEAT_FOLLOW_WINDOW_SECONDS
+    ]
+    _RECENT_REPEAT_MESSAGES[key] = recent
+    return recent
+
+
+def _record_repeat_messages(group_id, messages: list[PendingGroupMessage], *, now: float | None = None) -> None:
+    current = time.monotonic() if now is None else now
+    key = str(group_id)
+    recent = _recent_repeat_messages_for_group(group_id, now=current)
+    for item in messages:
+        text = normalize_query_text(item.text)
+        if _is_safe_repeat_follow_text(text):
+            recent.append((current, text))
+    _RECENT_REPEAT_MESSAGES[key] = recent[-50:]
+
+
 def _is_safe_repeat_follow_text(text: str) -> bool:
     normalized = normalize_query_text(text)
     if not normalized:
@@ -512,7 +811,6 @@ def _is_safe_repeat_follow_text(text: str) -> bool:
     return True
 
 
-# _claim_repeat_follow：领取复读冷却名额
 def _claim_repeat_follow(group_id, text: str, *, now: float | None = None) -> bool:
     normalized = normalize_query_text(text)
     if not _is_safe_repeat_follow_text(normalized):
@@ -527,7 +825,6 @@ def _claim_repeat_follow(group_id, text: str, *, now: float | None = None) -> bo
     return True
 
 
-# _prune_repeat_follow_cache：清理复读冷却缓存
 def _prune_repeat_follow_cache(now: float) -> None:
     expired = [
         key
@@ -538,7 +835,6 @@ def _prune_repeat_follow_cache(now: float) -> None:
         _RECENT_REPEAT_FOLLOWS.pop(key, None)
 
 
-# _detect_requested_parts：检测分条发送数量
 def _detect_requested_parts(text: str) -> int | None:
     normalized = normalize_query_text(text)
     if not normalized:
@@ -563,7 +859,6 @@ def _detect_requested_parts(text: str) -> int | None:
     return min(value, 5)
 
 
-# _detect_direct_reaction_request_count：检测直接贴表情请求
 def _detect_direct_reaction_request_count(text: str) -> int:
     normalized = normalize_query_text(text)
     if not normalized:
@@ -597,7 +892,6 @@ def _detect_direct_reaction_request_count(text: str) -> int:
     return min(max(value, 1), 3)
 
 
-# _get_reaction_decision_mode：读取表情决策模式
 def _get_reaction_decision_mode(group_config: dict | None) -> str:
     cfg = group_config or {}
     mode = str(cfg.get("reaction_decision_mode", "llm_first") or "llm_first").strip().lower()
@@ -606,7 +900,6 @@ def _get_reaction_decision_mode(group_config: dict | None) -> str:
     return mode
 
 
-# _humanize_group_reply：润色群聊回复语气
 def _humanize_group_reply(reply: str, merged_text: str) -> str:
     """Reduce repetitive meme fillers so replies sound less mechanical."""
     normalized = normalize_query_text(reply)
@@ -632,7 +925,6 @@ def _humanize_group_reply(reply: str, merged_text: str) -> str:
     return normalized
 
 
-# _soften_plain_group_answer：群聊处理
 def _soften_plain_group_answer(reply: str, merged_text: str) -> str:
     normalized = normalize_query_text(reply)
     if not _looks_like_plain_answer(normalized, merged_text):
@@ -644,7 +936,6 @@ def _soften_plain_group_answer(reply: str, merged_text: str) -> str:
     return normalized.rstrip("。！？!? ") + "，大概是这样喵。"
 
 
-# _humanize_friendly_greeting_reply：回复处理
 def _humanize_friendly_greeting_reply(reply: str, merged_text: str) -> str | None:
     text = normalize_query_text(merged_text)
     if reply not in {"在", "嗯", "哦", "啊", "来了", "在呢"}:
@@ -653,12 +944,11 @@ def _humanize_friendly_greeting_reply(reply: str, merged_text: str) -> str | Non
         for token in ("宝宝", "宝贝", "亲亲", "老婆", "猫猫", "喵喵"):
             if token in text:
                 return token
-    if any(token in text for token in ("在吗", "在嘛", "在不", "喂", "醒醒", "麦麦")):
+    if any(token in text for token in ("在吗", "在嘛", "在不", "喂", "醒醒")):
         return "在喵"
     return None
 
 
-# _looks_like_plain_answer：相关逻辑处理
 def _looks_like_plain_answer(reply: str, merged_text: str) -> bool:
     normalized_reply = normalize_query_text(reply)
     normalized_query = normalize_query_text(merged_text)
@@ -673,7 +963,6 @@ def _looks_like_plain_answer(reply: str, merged_text: str) -> bool:
     return False
 
 
-# _looks_like_clarifying_type_question：相关逻辑处理
 def _looks_like_clarifying_type_question(reply: str) -> bool:
     normalized = normalize_query_text(reply)
     return bool(
@@ -683,23 +972,20 @@ def _looks_like_clarifying_type_question(reply: str) -> bool:
     )
 
 
-# _looks_like_user_asked_type_choice：用户处理
 def _looks_like_user_asked_type_choice(text: str) -> bool:
     normalized = normalize_query_text(text)
-    return any(token in normalized for token in ("什么类型", "哪种", "文字还是图片", "图片还是文字"))
+    return any(token in normalized for token in ("何类型", "何意味", "何类型喵"))
 
 
-# _build_context_fallback：构建上下文兜底
 def _build_context_fallback(merged_text: str) -> str:
     text = normalize_query_text(merged_text)
     if any(token in text for token in ("?", "？", "吗", "咋", "怎么")):
-        return "有点离谱"
+        return "何意味"
     if any(token in text for token in ("图", "图片", "截图", "看这个")):
         return "我看到了"
     return "收到"
 
 
-# _build_explicit_trigger_no_reply_fallback：构建回复兜底
 def _build_explicit_trigger_no_reply_fallback(
     merged_text: str,
     batch: list[PendingGroupMessage],
@@ -715,11 +1001,10 @@ def _build_explicit_trigger_no_reply_fallback(
     if any(token in text for token in ("宝宝", "在吗", "在不", "醒醒", "喂")):
         return "在呢喵"
     if any(token in text for token in ("?", "？", "吗", "怎么", "咋", "为什么")):
-        return "咋了"
+        return "喵"
     return _build_context_fallback(text)
 
 
-# _pick_reaction_target_message_id：选择贴表情目标消息
 def _pick_reaction_target_message_id(messages: list[PendingGroupMessage]) -> int | None:
     for item in reversed(messages):
         if item.message_id:
@@ -730,7 +1015,6 @@ def _pick_reaction_target_message_id(messages: list[PendingGroupMessage]) -> int
     return None
 
 
-# _pick_text_reply_target_message_id：选择文本回复引用目标
 def _pick_text_reply_target_message_id(messages: list[PendingGroupMessage], reply_text: str = "") -> int | None:
     if not messages:
         return None
@@ -740,24 +1024,22 @@ def _pick_text_reply_target_message_id(messages: list[PendingGroupMessage], repl
         if not item.message_id:
             continue
         text = normalize_query_text(item.text)
-        if not text:
-            continue
         score = index
-        if item.explicit_trigger:
+        if "?" in text or "？" in text or any(token in text for token in ("吗", "怎么", "为什么", "啥", "什么")):
             score += 1000
-        if any(token in text for token in ("?", "？", "吗", "怎么", "为什么", "咋", "什么", "哪", "谁")):
-            score += 200
-        if any(token in text for token in ("图", "图片", "截图", "聊天记录", "这个", "上面", "刚才")):
-            score += 120
-        if reply and _reply_mentions_message_topic(reply, text):
-            score += 80
-        scored.append((score, index, int(item.message_id)))
+        if item.explicit_trigger:
+            score += 500
+        if _reply_mentions_message_topic(reply, text):
+            score += 800
+        try:
+            scored.append((score, index, int(item.message_id)))
+        except (TypeError, ValueError):
+            continue
     if not scored:
         return None
     return max(scored)[2]
 
 
-# _reply_mentions_message_topic：回复消息处理
 def _reply_mentions_message_topic(reply_text: str, message_text: str) -> bool:
     reply = normalize_query_text(reply_text).lower()
     message = normalize_query_text(message_text).lower()
@@ -771,13 +1053,11 @@ def _reply_mentions_message_topic(reply_text: str, message_text: str) -> bool:
     return any(token in reply for token in keywords[:8])
 
 
-# _is_global_listen_group：判断是否全局监听群
 def _is_global_listen_group(group_id, group_config: dict | None) -> bool:
     cfg = group_config or {}
     return bool(cfg.get("reply_all_messages", False)) or int(group_id or 0) in GLOBAL_LISTEN_GROUP_IDS
 
 
-# _decide_group_response_mode_with_llm：调用模型决定回复模式
 def _decide_group_response_mode_with_llm(
     merged_text: str,
     batch: list[PendingGroupMessage],
@@ -791,6 +1071,8 @@ def _decide_group_response_mode_with_llm(
     mentions_bot = any(bool(item.explicit_trigger) for item in batch)
     has_question = any(token in normalized_text for token in ("?", "？", "怎么", "为什么", "吗", "咋"))
     message_count = len(batch)
+    if _should_allow_ambient_chatter_interjection(batch, normalized_text, mentions_bot=mentions_bot):
+        return {"mode": "text", "reason": "ambient_chatter_interjection"}
     if _looks_like_forwarded_chat_record(normalized_text):
         return {"mode": "text", "reason": "forwarded_chat_record"}
     local_reaction_reason = _local_global_reaction_reason(normalized_text, mentions_bot=mentions_bot)
@@ -841,19 +1123,34 @@ def _decide_group_response_mode_with_llm(
     return decision
 
 
-# _looks_like_stop_talking_request：请求相关逻辑
 def _looks_like_stop_talking_request(text: str) -> bool:
     normalized = normalize_query_text(text)
     return any(token in normalized for token in ("别多嘴", "闭嘴", "别说话", "别回", "不要回", "少说", "安静", "别插嘴"))
 
 
-# _looks_like_forwarded_chat_record：聊天处理
 def _looks_like_forwarded_chat_record(text: str) -> bool:
     normalized = normalize_query_text(text)
     return "[聊天记录]" in normalized or "聊天记录" in normalized or "合并转发" in normalized
 
 
-# _local_global_reaction_reason：本地reaction原因处理
+def _should_allow_ambient_chatter_interjection(
+    batch: list[PendingGroupMessage],
+    merged_text: str,
+    *,
+    mentions_bot: bool,
+) -> bool:
+    if mentions_bot:
+        return False
+    if len(batch) < _AMBIENT_CHATTER_REPLY_THRESHOLD:
+        return False
+    text = normalize_query_text(merged_text)
+    if not text:
+        return False
+    if _should_silence_trivial_global_message(text, mentions_bot=False):
+        return False
+    return True
+
+
 def _local_global_reaction_reason(text: str, *, mentions_bot: bool) -> str:
     normalized = normalize_query_text(text)
     if not normalized or mentions_bot:
@@ -865,7 +1162,6 @@ def _local_global_reaction_reason(text: str, *, mentions_bot: bool) -> str:
     return ""
 
 
-# _should_silence_trivial_global_message：消息处理
 def _should_silence_trivial_global_message(text: str, *, mentions_bot: bool) -> bool:
     normalized = normalize_query_text(text)
     if not normalized or mentions_bot:
@@ -880,7 +1176,6 @@ def _should_silence_trivial_global_message(text: str, *, mentions_bot: bool) -> 
     return any(token in normalized for token in trivial_tokens) and len(normalized) <= 14
 
 
-# _parse_group_response_mode：解析群聊模式JSON
 def _parse_group_response_mode(raw) -> dict:
     text = str(raw or "").strip()
     if not text:
@@ -910,7 +1205,6 @@ def _parse_group_response_mode(raw) -> dict:
     return {"mode": mode, "reason": reason[:20]}
 
 
-# _extract_emoji_tag：提取表情
 def _extract_emoji_tag(reply: str) -> str | None:
     normalized = normalize_query_text(reply)
     if not normalized:
@@ -921,7 +1215,6 @@ def _extract_emoji_tag(reply: str) -> str | None:
     return str(m.group(1)).strip().lower()
 
 
-# _should_use_reaction_instead：reaction处理
 def _should_use_reaction_instead(merged_text: str, reply: str, group_config: dict | None = None) -> bool:
     text = normalize_query_text(merged_text)
     generated = normalize_query_text(reply)
@@ -935,7 +1228,7 @@ def _should_use_reaction_instead(merged_text: str, reply: str, group_config: dic
     if len(text) >= 40:
         return False
     low_value_text = bool(re.fullmatch(r"[\W_]*", text)) or text in {"6", "66", "666", "草", "?", "？", "哈哈", "ok", "收到"}
-    low_value_reply = generated in {"收到", "行", "嗯", "哈哈", "有点离谱", "我看到了"}
+    low_value_reply = generated in {"收到", "懂你意思", "爸爸", "神了", "666", "何意味"}
     if low_value_text or low_value_reply:
         return True
 

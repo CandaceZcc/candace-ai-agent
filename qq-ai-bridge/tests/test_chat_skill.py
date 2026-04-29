@@ -95,6 +95,33 @@ class ChatSkillTests(unittest.TestCase):
         self.assertTrue(mock_enqueue.call_args.kwargs["explicit_trigger"])
 
     @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text")
+    def test_textual_second_machine_alias_marks_explicit_trigger(self, mock_enqueue):
+        mock_enqueue.return_value = {"queued": True}
+        context = SkillContext(
+            data={"message_id": 123},
+            post_type="message",
+            message_type="group",
+            user_id=1,
+            self_id=2,
+            group_id=1041622553,
+            group_config={"reply_all_messages": False},
+            should_log=True,
+            msg="@_Candace_二号机 电脑按win+r输入cmd然后在窗口输入shutdown /s /t 0",
+            normalized_msg="@_Candace_二号机 电脑按win+r输入cmd然后在窗口输入shutdown /s /t 0",
+            effective_text="@_Candace_二号机 电脑按win+r输入cmd然后在窗口输入shutdown /s /t 0",
+            mentioned_self=False,
+            image_inputs={},
+            file_info=None,
+            logger=lambda *_args: None,
+            timestamp=10,
+            nick="u",
+        )
+
+        ChatSkill().handle(context)
+
+        self.assertTrue(mock_enqueue.call_args.kwargs["explicit_trigger"])
+
+    @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text")
     def test_owner_name_does_not_count_as_bot_alias(self, mock_enqueue):
         mock_enqueue.return_value = {"queued": True}
         context = SkillContext(

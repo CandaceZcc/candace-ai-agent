@@ -296,6 +296,73 @@ def send_group_msg(
         return {"ok": False, "error": str(e), "parts_sent": sent, "parts_total": len(parts)}
 
 
+
+
+def send_group_file(group_id, file_path, name: str | None = None, quiet: bool = False):
+    """Upload a local file to a QQ group via NapCat."""
+    path = os.path.abspath(os.path.expanduser(str(file_path or "")))
+    if not os.path.isfile(path):
+        if not quiet:
+            print(f"[SEND_GROUP_FILE] missing file group_id={group_id} path={path!r}")
+        return {"ok": False, "reason": "missing_file", "file": path}
+
+    display_name = name or os.path.basename(path)
+    try:
+        if not quiet:
+            print(f"[SEND_GROUP_FILE] 准备发群文件到 {group_id}: {display_name!r}")
+        resp = _post_json(
+            "upload_group_file",
+            {"group_id": group_id, "file": path, "name": display_name},
+            timeout=30,
+        )
+        ok = bool(resp.ok)
+        retcode = None
+        text = getattr(resp, "text", "")
+        if text:
+            try:
+                payload = json.loads(text)
+                retcode = payload.get("retcode")
+                ok = ok and (retcode in (None, 0))
+            except Exception:
+                pass
+        if not quiet:
+            print(f"[SEND_GROUP_FILE] NapCat 返回: {resp.status_code} {text[:300]}")
+        _append_outbound_event(
+            {
+                "type": "group_file",
+                "group_id": group_id,
+                "file": path,
+                "name": display_name,
+                "ok": ok,
+                "status_code": getattr(resp, "status_code", None),
+                "retcode": retcode,
+                "response_preview": text[:300],
+            }
+        )
+        return {
+            "ok": ok,
+            "status_code": getattr(resp, "status_code", None),
+            "retcode": retcode,
+            "text": text,
+            "file": path,
+            "name": display_name,
+        }
+    except Exception as exc:
+        if not quiet:
+            print(f"[SEND_GROUP_FILE] 异常 group_id={group_id} file={path!r}: {exc}")
+            traceback.print_exc()
+        _append_outbound_event(
+            {
+                "type": "group_file",
+                "group_id": group_id,
+                "file": path,
+                "name": display_name,
+                "ok": False,
+                "error": str(exc),
+            }
+        )
+        return {"ok": False, "error": str(exc), "file": path, "name": display_name}
+
 def react_message_with_multiple_emojis(
     message_id,
     count: int = 2,

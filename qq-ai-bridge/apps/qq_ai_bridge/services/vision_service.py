@@ -1,7 +1,6 @@
 """Vision pipeline service for QQ bridge."""
 
 import re
-import traceback
 from typing import Iterable
 from urllib.parse import urlparse
 
@@ -48,11 +47,13 @@ def run_vision_pipeline(image_urls: str | Iterable[str], user_text: str, vision_
     vision_log(f"[VISION] vision service called first_image_url={first_url}")
 
     try:
-        local_path = download_image(first_url, save_dir=save_dir)
+        local_path = _download_image_with_retry(first_url, save_dir=save_dir, vision_log=vision_log)
         vision_log(f"[VISION] download success: {local_path}")
     except Exception as exc:
-        vision_log(f"[VISION][image_url_unreachable] download failed url={first_url} error={exc}")
-        vision_log(f"[VISION][traceback] {traceback.format_exc()}")
+        vision_log(
+            "[VISION][image_url_unreachable] download failed "
+            f"url={first_url} error_type={type(exc).__name__} error={_compact_error(exc)}"
+        )
         return VISION_USER_DOWNLOAD_FALLBACK
 
     cfg = read_vision_config()
@@ -87,6 +88,30 @@ def run_vision_pipeline(image_urls: str | Iterable[str], user_text: str, vision_
 
     vision_log(f"[VISION][{result.status}] vision call failed and downgraded")
     return VISION_USER_FALLBACK
+
+
+def _download_image_with_retry(url: str, save_dir: str, vision_log, attempts: int = 2) -> str:
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            return download_image(url, save_dir=save_dir)
+        except Exception as exc:
+            last_error = exc
+            if attempt < attempts:
+                vision_log(
+                    "[VISION][image_download_retry] "
+                    f"attempt={attempt} error_type={type(exc).__name__} error={_compact_error(exc)}"
+                )
+    if last_error:
+        raise last_error
+    raise RuntimeError("download failed")
+
+
+def _compact_error(exc: Exception) -> str:
+    text = " ".join(str(exc or "").split())
+    if len(text) > 180:
+        return text[:180].rstrip() + "..."
+    return text
 
 
 # _postprocess_vision_reply：视觉回复处理

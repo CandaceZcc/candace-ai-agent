@@ -24,6 +24,10 @@ class WebhookImageCaptionTests(unittest.TestCase):
     def test_group_image_caption_window_is_five_seconds(self):
         self.assertEqual(webhook.IMAGE_CAPTION_GRACE_SECONDS, 5.0)
 
+    def test_group_file_notice_always_disabled(self):
+        self.assertFalse(webhook._should_handle_group_file_notice(123, {"reply_all_messages": False}))
+        self.assertFalse(webhook._should_handle_group_file_notice(123, {"reply_all_messages": True}))
+
     @patch("apps.qq_ai_bridge.adapters.webhook.threading.Timer")
     @patch("apps.qq_ai_bridge.adapters.webhook.SkillDispatcher.dispatch")
     def test_same_user_followup_text_merges_with_pending_image(self, mock_dispatch, mock_timer):

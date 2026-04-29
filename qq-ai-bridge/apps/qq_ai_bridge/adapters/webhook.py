@@ -14,19 +14,23 @@ from apps.qq_ai_bridge.adapters.message_parser import (
     format_forward_messages,
     normalize_query_text,
 )
-from apps.qq_ai_bridge.adapters.napcat_client import get_forward_msg
-from apps.qq_ai_bridge.runtime import (
-    _send_group_msg_raw,
-    _send_private_msg_raw,
+from apps.qq_ai_bridge.adapters.napcat_client import (
+    get_forward_msg,
+    send_group_msg as _send_group_msg_raw,
+    send_private_msg as _send_private_msg_raw,
 )
 from apps.qq_ai_bridge.config.settings import (
     VOCAT_API_TOKEN,
     VOCAT_BOT_ID,
     VOCAT_DEVICE_NAME,
+    VOCAT_DAILY_BROADCAST_TO_DEVICE,
     VOCAT_EXPRESSION_API_URL,
     VOCAT_INSTANCE_ID,
     VOCAT_PRODUCT_KEY,
+    VOCAT_QQ_REPLY_TO_DEVICE,
+    VOCAT_REMOTE_CONTROL_USERS,
     VOCAT_TTS_API_URL,
+    VOCAT_TRUSTED_DEVICE_IPS,
     VOCAT_WEBHOOK_TOKEN,
 )
 from apps.qq_ai_bridge.services.file_service import (
@@ -42,6 +46,13 @@ from apps.qq_ai_bridge.services.style_service import capture_group_style
 from apps.qq_ai_bridge.services.vocat_service import (
     maybe_handle_vocat_remote_command,
     process_vocat_query,
+)
+from apps.qq_ai_bridge.services.vocat_command_queue import (
+    ack_vocat_command,
+    enqueue_vocat_expression,
+    enqueue_vocat_tts,
+    get_vocat_queue_status,
+    poll_vocat_command,
 )
 from apps.qq_ai_bridge.skills.base import SkillContext
 from apps.qq_ai_bridge.skills.registry import build_skill_registry
@@ -243,6 +254,12 @@ class SkillDispatcher:
         if result and result.response_text:
             if is_private:
                 _send_private_msg_raw(user_id, result.response_text)
+                queue_result = _maybe_enqueue_private_reply_to_vocat(user_id, result.response_text)
+                if queue_result:
+                    print(
+                        f"[VOCAT] queued private reply command_id={queue_result.get('command_id')} "
+                        f"user_id={user_id}"
+                    )
             elif is_group:
                 _send_group_msg_raw(group_id, result.response_text)
 
@@ -312,6 +329,39 @@ def _preview_text(text: str, limit: int = 80) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[:limit].rstrip() + "..."
+
+
+def _authorized_vocat_request() -> tuple[bool, tuple[dict, int] | None]:
+    remote_addr = request.remote_addr or ""
+    if remote_addr in {"127.0.0.1", "::1", "localhost"} or remote_addr in VOCAT_TRUSTED_DEVICE_IPS:
+        return True, None
+    if not VOCAT_WEBHOOK_TOKEN:
+        return True, None
+    request_token = (
+        request.headers.get("X-Vocat-Token")
+        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        or str(request.values.get("token", "")).strip()
+        or str((request.get_json(silent=True) or {}).get("token", "")).strip()
+    )
+    if request_token != VOCAT_WEBHOOK_TOKEN:
+        return False, ({"ok": False, "error": "unauthorized"}, 401)
+    return True, None
+
+
+def _maybe_enqueue_private_reply_to_vocat(user_id, reply: str) -> dict | None:
+    if not VOCAT_QQ_REPLY_TO_DEVICE:
+        return None
+    try:
+        user_id_int = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    if user_id_int not in VOCAT_REMOTE_CONTROL_USERS:
+        return None
+    return enqueue_vocat_tts(reply, source="qq_private_reply")
+
+
+def _should_handle_group_file_notice(group_id, group_config: dict | None) -> bool:
+    return False
 
 
 def _attach_forward_text_if_present(raw_event: dict, parsed: dict) -> dict:
@@ -398,8 +448,11 @@ def qq_webhook():
                 group_id = data.get("group_id")
                 user_id = data.get("user_id")
                 file_info = data.get("file", {})
-                if file_info:
+                group_config = load_group_config(group_id) if group_id else {}
+                if file_info and _should_handle_group_file_notice(group_id, group_config):
                     handle_file_message("group", user_id, group_id, file_info)
+                elif file_info:
+                    print(f"[WEBHOOK] group file ignored group_id={group_id} reason=group_file_disabled")
             except Exception as e:
                 print(f"[WEBHOOK] Exception during file upload notice processing: {e}")
                 traceback.print_exc()
@@ -447,6 +500,9 @@ def vocat_webhook():
                     "api_token_configured": bool(VOCAT_API_TOKEN),
                     "expression_api_configured": bool(VOCAT_EXPRESSION_API_URL),
                     "tts_api_configured": bool(VOCAT_TTS_API_URL),
+                    "poll_control_enabled": True,
+                    "qq_reply_to_device": bool(VOCAT_QQ_REPLY_TO_DEVICE),
+                    "daily_broadcast_to_device": bool(VOCAT_DAILY_BROADCAST_TO_DEVICE),
                     "instance_id_configured": bool(VOCAT_INSTANCE_ID),
                     "product_key_configured": bool(VOCAT_PRODUCT_KEY),
                     "device_name_configured": bool(VOCAT_DEVICE_NAME),
@@ -468,14 +524,10 @@ def vocat_webhook():
         f"[VOCAT] recv remote_addr={remote_addr} query={query_preview!r} "
         f"keys={sorted(data.keys())}"
     )
-    if VOCAT_WEBHOOK_TOKEN:
-        request_token = (
-            request.headers.get("X-Vocat-Token")
-            or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-            or str(data.get("token", "")).strip()
-        )
-        if request_token != VOCAT_WEBHOOK_TOKEN:
-            return jsonify({"ok": False, "error": "unauthorized"}), 401
+    authorized, error_response = _authorized_vocat_request()
+    if not authorized:
+        payload, status = error_response
+        return jsonify(payload), status
     try:
         result = _run_async(process_vocat_query(data))
         return jsonify(result)
@@ -483,6 +535,62 @@ def vocat_webhook():
         print(f"[VOCAT] webhook processing failed: {exc}")
         traceback.print_exc()
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@webhook_bp.route("/vocat/poll", methods=["GET"])
+def vocat_poll():
+    """Return the next queued local command for a VoCat device."""
+    authorized, error_response = _authorized_vocat_request()
+    if not authorized:
+        payload, status = error_response
+        return jsonify(payload), status
+
+    device_name = request.args.get("device_name") or request.args.get("device") or ""
+    command = poll_vocat_command(device_name)
+    if not command:
+        return jsonify({"ok": True, "has_command": False, "queue": get_vocat_queue_status()["queue_size"]})
+    print(
+        f"[VOCAT] poll deliver command_id={command.get('id')} type={command.get('type')} "
+        f"source={command.get('source', '')}"
+    )
+    return jsonify({"ok": True, "has_command": True, "command": command})
+
+
+@webhook_bp.route("/vocat/ack", methods=["POST"])
+def vocat_ack():
+    """Acknowledge a delivered VoCat command."""
+    authorized, error_response = _authorized_vocat_request()
+    if not authorized:
+        payload, status = error_response
+        return jsonify(payload), status
+
+    data = request.get_json(silent=True) or {}
+    command_id = data.get("command_id") or data.get("id") or request.values.get("command_id")
+    result = ack_vocat_command(str(command_id or ""))
+    print(f"[VOCAT] ack command_id={command_id} result={result}")
+    return jsonify(result)
+
+
+@webhook_bp.route("/vocat/queue", methods=["GET", "POST"])
+def vocat_queue_status():
+    """Inspect or enqueue VoCat commands."""
+    authorized, error_response = _authorized_vocat_request()
+    if not authorized:
+        payload, status = error_response
+        return jsonify(payload), status
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        command_type = str(data.get("type") or "tts").strip().lower()
+        if command_type == "expression":
+            result = enqueue_vocat_expression(data.get("expression") or data.get("expression_id") or "happy", source="manual_queue")
+        else:
+            result = enqueue_vocat_tts(
+                str(data.get("text") or data.get("message") or ""),
+                source=str(data.get("source") or "manual_queue"),
+                expression=data.get("expression"),
+            )
+        return jsonify(result)
+    return jsonify(get_vocat_queue_status())
 
 
 def register_routes(app):

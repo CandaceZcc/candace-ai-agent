@@ -26,17 +26,7 @@ class FileUnderstandingSkill(Skill):
             )
 
         if context.is_group:
-            if not context.mentioned_self and not context.should_log:
-                context.log("[FILE] 群聊文件但未 @ 机器人，忽略")
-                return SkillResult(handled=True, source=self.name, status="ignore")
-
-            payload = handle_file_message(
-                context.message_type, context.user_id, context.group_id, context.file_info
-            )
-            return SkillResult(
-                handled=True,
-                source=self.name,
-                response_payload=payload if isinstance(payload, dict) else None
-            )
+            context.log("[FILE] 群聊文件忽略，仅私聊读取")
+            return SkillResult(handled=True, source=self.name, status="ignore")
 
         return SkillResult(handled=True, source=self.name, status="ignore")

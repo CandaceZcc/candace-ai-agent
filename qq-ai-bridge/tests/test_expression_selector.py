@@ -15,7 +15,7 @@ class ExpressionSelectorTests(unittest.TestCase):
         )
 
         self.assertNotEqual(result, "")
-        self.assertIn(result, {"我看到了", "这图有点东西", "有点抽象", "这张行"})
+        self.assertIn(result, {"何意味", "懂你意思", "顺", "？"})
 
 
 if __name__ == "__main__":
