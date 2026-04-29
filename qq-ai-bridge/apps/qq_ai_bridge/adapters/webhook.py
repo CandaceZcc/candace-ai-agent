@@ -38,7 +38,6 @@ from apps.qq_ai_bridge.services.file_service import (
     handle_file_message,
 )
 from apps.qq_ai_bridge.services.group_chat_service import load_group_config, should_log_group
-from apps.qq_ai_bridge.services.group_strategy import group_strategy_decision
 from apps.qq_ai_bridge.services.reaction_follow_service import (
     handle_group_reaction_notice,
     record_group_message_for_reaction_learning,
@@ -46,6 +45,7 @@ from apps.qq_ai_bridge.services.reaction_follow_service import (
 from apps.qq_ai_bridge.services.style_service import capture_group_style
 from apps.qq_ai_bridge.services.trace_store import add_trace_step, finish_trace, new_trace_id, start_trace, trace_prefix
 from apps.qq_ai_bridge.services.vocat_service import (
+    get_local_repo_docs_status,
     maybe_handle_vocat_remote_command,
     process_vocat_query,
 )
@@ -72,6 +72,9 @@ _LAST_VOCAT_POST: dict | None = None
 _PENDING_IMAGE_CAPTIONS: dict[str, dict] = {}
 _PENDING_IMAGE_CAPTIONS_LOCK = threading.Lock()
 IMAGE_CAPTION_GRACE_SECONDS = 5.0
+_LAST_EMPTY_VOCAT_POLL_LOG_AT = 0.0
+_EMPTY_VOCAT_POLL_LOG_INTERVAL_SECONDS = 300.0
+_SUPPRESSED_EMPTY_VOCAT_POLLS = 0
 
 
 class MessageParser:
@@ -236,23 +239,6 @@ class SkillDispatcher:
             should_log = should_log_group(group_id)
             if group_config.get("learn_style", False):
                 capture_group_style("data", group_id, user_id, effective_text, log=print)
-
-            strategy = group_strategy_decision(parsed_data, group_config)
-            parsed_data["group_strategy"] = strategy
-            print(
-                f"{trace_prefix(trace_id)}[GROUP_STRATEGY] mode={strategy.get('mode')} "
-                f"reason={strategy.get('reason', '')} delay={strategy.get('delay_ms', 0)} "
-                f"probabilities={strategy.get('probabilities', {})}"
-            )
-            add_trace_step(
-                trace_id,
-                "group_strategy",
-                mode=strategy.get("mode"),
-                reason=strategy.get("reason"),
-                delay_ms=strategy.get("delay_ms"),
-                probabilities=strategy.get("probabilities"),
-                cooldown_hit=strategy.get("cooldown_hit"),
-            )
 
         context = SkillContext(
             data=parsed_data,
@@ -605,6 +591,7 @@ def vocat_webhook():
 @webhook_bp.route("/vocat/poll", methods=["GET"])
 def vocat_poll():
     """Return the next queued local command for a VoCat device."""
+    global _LAST_EMPTY_VOCAT_POLL_LOG_AT, _SUPPRESSED_EMPTY_VOCAT_POLLS
     trace_id = new_trace_id({"tool_call_id": request.args.get("trace_id") or ""})
     authorized, error_response = _authorized_vocat_request()
     if not authorized:
@@ -616,7 +603,14 @@ def vocat_poll():
     queue_size = get_vocat_queue_status()["queue_size"]
     record_vocat_poll(command=command, queue_size=queue_size)
     if not command:
-        print(f"{trace_prefix(trace_id)}[VOCAT] poll empty queue_size={queue_size}")
+        now = time.monotonic()
+        if now - _LAST_EMPTY_VOCAT_POLL_LOG_AT >= _EMPTY_VOCAT_POLL_LOG_INTERVAL_SECONDS:
+            suppressed_count = _SUPPRESSED_EMPTY_VOCAT_POLLS
+            _SUPPRESSED_EMPTY_VOCAT_POLLS = 0
+            _LAST_EMPTY_VOCAT_POLL_LOG_AT = now
+            print(f"{trace_prefix(trace_id)}[VOCAT] poll_empty suppressed_count={suppressed_count} queue_size={queue_size}")
+        else:
+            _SUPPRESSED_EMPTY_VOCAT_POLLS += 1
         return jsonify({"ok": True, "has_command": False, "queue": queue_size})
     print(
         f"{trace_prefix(trace_id)}[VOCAT] poll deliver command_id={command.get('id')} type={command.get('type')} "
@@ -671,7 +665,9 @@ def vocat_status():
     if not authorized:
         payload, status = error_response
         return jsonify(payload), status
-    return jsonify(get_vocat_runtime_status())
+    status = get_vocat_runtime_status()
+    status.update(get_local_repo_docs_status())
+    return jsonify(status)
 
 
 def register_routes(app):

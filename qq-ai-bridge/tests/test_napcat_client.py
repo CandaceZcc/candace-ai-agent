@@ -26,6 +26,12 @@ class NapcatClientTests(unittest.TestCase):
         parts = split_outbound_messages("\n\n  \n\n第一段\n\n")
         self.assertEqual(parts, ["第一段"])
 
+    def test_send_group_msg_reports_empty_sanitized_message(self):
+        result = send_group_msg(12345, "？", quiet=True)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "empty_message")
+
     def test_split_outbound_messages_by_send_split_token(self):
         parts = split_outbound_messages("第一条[[SEND_SPLIT]]第二条")
         self.assertEqual(parts, ["第一条", "第二条"])

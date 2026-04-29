@@ -6,7 +6,9 @@ import unittest
 sys.path.insert(0, "qq-ai-bridge")
 
 from apps.qq_ai_bridge.adapters.admin_ui import (
+    _log_file_meta,
     _normalize_strategy_payload,
+    BRIDGE_LOG_PATH,
     mask_sensitive,
     parse_log_line,
     parse_multi_filter_values,
@@ -72,6 +74,13 @@ class AdminConsoleHelpersTest(unittest.TestCase):
         self.assertEqual(len(lines), 1000)
         self.assertEqual(lines[0], "line-105")
         self.assertEqual(lines[-1], "line-1104")
+
+    def test_log_file_meta_exposes_size_and_mtime_keys(self):
+        meta = _log_file_meta()
+
+        self.assertIn("mtime", meta)
+        self.assertIn("size", meta)
+        self.assertEqual(str(BRIDGE_LOG_PATH), str(BRIDGE_LOG_PATH.resolve()))
 
     def test_normalize_strategy_payload_rejects_invalid_probability(self):
         with self.assertRaises(ValueError):

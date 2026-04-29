@@ -315,6 +315,8 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                 f" count={repeat_count} text={repeat_text!r}"
             )
 
+        strategy = _pick_batch_strategy(batch)
+        strategy_mode = str(strategy.get("mode") or "")
         global_listen_mode = _is_global_listen_group(group_id, group_config)
         direct_react_count = _detect_direct_reaction_request_count(merged_text)
         decision_mode = _get_reaction_decision_mode(group_config)
@@ -341,7 +343,7 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                     )
                     continue
 
-        if global_listen_mode:
+        if global_listen_mode and strategy_mode not in {"text", "delay_text"}:
             llm_decision = _decide_group_response_mode_with_llm(
                 merged_text=merged_text,
                 batch=batch,
@@ -391,6 +393,11 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                     )
                 else:
                     log(f"[GROUP_CHAT] llm_reaction_skipped_missing_message_id group_id={group_id}")
+        elif global_listen_mode:
+            log(
+                f"[GROUP_CHAT] strategy_mode_override group_id={group_id}"
+                f" mode={strategy_mode} skip=group_response_mode"
+            )
 
         prompt_payload = prepare_group_ai_prompt(
             group_id,
@@ -466,7 +473,6 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             )
             continue
         llm_action.text = _humanize_group_reply(llm_action.text, merged_text)
-        strategy = _pick_batch_strategy(batch)
         delay_ms = int(strategy.get("delay_ms") or 0)
         if strategy.get("mode") == "delay_text" and delay_ms > 0:
             log(f"[GROUP_CHAT] strategy_delay group_id={group_id} delay_ms={delay_ms}")
@@ -481,6 +487,13 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             force_parts=requested_parts,
             reply_to_message_id=reply_to_message_id,
         )
+        if not action_result.get("ok"):
+            log(
+                f"[GROUP_CHAT] send_skipped_empty group_id={group_id}"
+                f" reason={action_result.get('reason', 'send_failed')}"
+                f" reply_to_message_id={reply_to_message_id or '-'}"
+            )
+            continue
         if action_result.get("ok"):
             record_group_strategy_reply(group_id)
         append_group_chat_log(

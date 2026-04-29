@@ -63,7 +63,8 @@ _LOCAL_REPO_DOCS_PATTERNS = (
     "当前项目状态",
     "VoCat 怎么验证",
 )
-_MD_EXCLUDE_DIRS = {".git", ".venv", ".runtime", "node_modules"}
+_MD_EXCLUDE_DIRS = {".git", ".venv", "venv", ".runtime", "node_modules", "data", "tmp"}
+_LAST_DOCS_SOURCE: dict[str, Any] = {}
 _VOICE_REPLY_SOURCES = {
     "vocat_function_call",
     "vocat_voice",
@@ -162,7 +163,7 @@ def _detect_local_repo_docs_query(query: str) -> bool:
 def _iter_repo_markdown_files() -> list[Path]:
     root = VOCAT_MD_ROOT.expanduser().resolve()
     candidates: list[Path] = []
-    for pattern in ("README*.md", "docs/**/*.md"):
+    for pattern in ("**/README*.md", "docs/**/*.md", "*.md"):
         for path in root.glob(pattern):
             try:
                 resolved = path.resolve()
@@ -176,11 +177,21 @@ def _iter_repo_markdown_files() -> list[Path]:
     return sorted(set(candidates), key=lambda item: str(item.relative_to(root)))[:12]
 
 
-def _build_repo_docs_excerpt(query: str) -> str:
+def get_local_repo_docs_status() -> dict[str, Any]:
+    root = VOCAT_MD_ROOT.expanduser().resolve()
+    files = _iter_repo_markdown_files()
+    return {
+        "md_root": str(root),
+        "md_file_count": len(files),
+        "last_docs_source": dict(_LAST_DOCS_SOURCE),
+    }
+
+
+def _build_repo_docs_excerpt(query: str) -> tuple[str, list[Path]]:
     root = VOCAT_MD_ROOT.expanduser().resolve()
     files = _iter_repo_markdown_files()
     if not files:
-        return "没有在 VOCAT_MD_ROOT 下找到 README 或 docs Markdown。"
+        return "没有在 VOCAT_MD_ROOT 下找到 README 或 docs Markdown。", []
     parts: list[str] = []
     keywords = [token for token in re.split(r"\W+", query, flags=re.UNICODE) if len(token) >= 2]
     for path in files:
@@ -195,12 +206,30 @@ def _build_repo_docs_excerpt(query: str) -> str:
                 snippet = text[start : start + 1400]
                 break
         parts.append(f"## {path.relative_to(root)}\n{snippet.strip()}")
-    return "\n\n".join(parts)[:6000]
+    return "\n\n".join(parts)[:6000], files
 
 
 async def _handle_local_repo_docs(query: str, trace_id: str) -> dict[str, Any]:
+    root = VOCAT_MD_ROOT.expanduser().resolve()
+    excerpt, files = _build_repo_docs_excerpt(query)
+    matched_files = [str(path.relative_to(root)) for path in files[:8]]
+    _LAST_DOCS_SOURCE.clear()
+    _LAST_DOCS_SOURCE.update(
+        {
+            "root": str(root),
+            "file_count": len(files),
+            "matched_files": matched_files,
+            "query": _preview(query, 120),
+        }
+    )
     add_trace_step(trace_id, "skill", name="local_repo_docs")
-    excerpt = _build_repo_docs_excerpt(query)
+    add_trace_step(
+        trace_id,
+        "local_repo_docs",
+        root=str(root),
+        file_count=len(files),
+        matched_files=matched_files,
+    )
     prompt = (
         "你是本地项目文档助手。请只根据下面 Markdown 片段回答用户问题，"
         "回答要简短、可执行；如果片段不足就说明依据有限。\n\n"

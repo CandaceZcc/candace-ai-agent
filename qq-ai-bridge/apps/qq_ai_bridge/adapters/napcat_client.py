@@ -233,7 +233,7 @@ def send_group_msg(
     if not parts:
         if not quiet:
             print(f"[SEND_GROUP] skip-empty-sanitized group_id={group_id}")
-        return
+        return {"ok": False, "reason": "empty_message"}
 
     sent = 0
     last_resp = None

@@ -16,7 +16,12 @@ from storage_utils import (
 )
 
 from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
-from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
+from apps.qq_ai_bridge.config.settings import (
+    BASE_DATA_DIR,
+    PRIVATE_COOLDOWN_MODE,
+    PRIVATE_DEBOUNCE_MS,
+    PRIVATE_REPLY_COOLDOWN_SEC,
+)
 from apps.qq_ai_bridge.services.emoji_service import (
     build_face_cq,
     build_face_sequence,
@@ -39,7 +44,7 @@ from apps.qq_ai_bridge.services.response_action import (
     parse_llm_response_action,
 )
 
-DEBOUNCE_MS = 1000
+DEBOUNCE_MS = PRIVATE_DEBOUNCE_MS
 PRIVATE_REACTION_MIRROR_FACE = False
 
 
@@ -61,6 +66,7 @@ class PrivateChatState:
     last_enqueue_monotonic: float = 0.0
     debounce_started_monotonic: float = 0.0
     worker_running: bool = False
+    last_reply_monotonic: float = 0.0
 
 
 _PRIVATE_CHAT_STATES: dict[str, PrivateChatState] = {}
@@ -133,6 +139,18 @@ def _get_private_chat_state(user_id) -> PrivateChatState:
 def _merge_pending_messages(messages: list[PendingPrivateMessage]) -> tuple[str, int]:
     merged = [item.text.strip() for item in messages if item.text.strip()]
     return "\n".join(merged).strip(), len(merged)
+
+
+def _cooldown_remaining_seconds(state: PrivateChatState) -> float:
+    if PRIVATE_REPLY_COOLDOWN_SEC <= 0 or state.last_reply_monotonic <= 0:
+        return 0.0
+    elapsed = time.monotonic() - state.last_reply_monotonic
+    return max(0.0, float(PRIVATE_REPLY_COOLDOWN_SEC) - elapsed)
+
+
+def _record_private_reply_sent(state: PrivateChatState) -> None:
+    with state.lock:
+        state.last_reply_monotonic = time.monotonic()
 
 
 # enqueue_private_text：私聊文本入队合并
@@ -241,6 +259,23 @@ def _run_private_chat_worker(user_id) -> None:
                 f" mode={emoji_result.get('mode')}"
             )
             continue
+        cooldown_remaining = _cooldown_remaining_seconds(state)
+        if cooldown_remaining > 0 and PRIVATE_COOLDOWN_MODE == "record_only":
+            append_private_history(
+                BASE_DATA_DIR,
+                user_id,
+                merged_text,
+                "[cooldown_skip]",
+                limit=20,
+                user_timestamp=current_message_ts or None,
+            )
+            print(
+                f"[PRIVATE_CHAT] cooldown_skip user_id={user_id}"
+                f" remaining_sec={cooldown_remaining:.1f}"
+                f" merged_message_count={merged_count}"
+                f" mode={PRIVATE_COOLDOWN_MODE}"
+            )
+            continue
         llm_raw_reply = call_ai(
             prompt_payload["prompt"],
             metadata={
@@ -273,6 +308,7 @@ def _run_private_chat_worker(user_id) -> None:
                 reaction_fallback_reply_face=not PRIVATE_REACTION_MIRROR_FACE,
             )
             if action_result.get("ok"):
+                _record_private_reply_sent(state)
                 print(
                     f"[PRIVATE_CHAT] llm_action=reaction user_id={user_id}"
                     f" message_id={current_message_id}"
@@ -294,6 +330,7 @@ def _run_private_chat_worker(user_id) -> None:
             target_message_id=None,
             quiet=False,
         )
+        _record_private_reply_sent(state)
         print(
             f"[PRIVATE_CHAT] replied user_id={user_id}"
             f" merged_message_count={merged_count}"

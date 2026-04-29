@@ -23,6 +23,14 @@ class PrivatePromptProfileTests(unittest.TestCase):
             self.assertIn("电影", payload["prompt"])
             self.assertIn("摄影", payload["prompt"])
 
+    def test_private_prompt_mentions_builtin_admin_commands(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("apps.qq_ai_bridge.services.prompt_service.BASE_DATA_DIR", tmpdir):
+                payload = prepare_private_ai_prompt(123, "查看群策略", current_timestamp=3)
+
+        self.assertIn("owner-only bridge configuration", payload["prompt"])
+        self.assertIn("查看某群的策略", payload["prompt"])
+
 
 if __name__ == "__main__":
     unittest.main()

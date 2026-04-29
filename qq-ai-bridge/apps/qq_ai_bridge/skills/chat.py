@@ -3,6 +3,7 @@ from apps.qq_ai_bridge.services.private_chat_service import enqueue_private_text
 from apps.qq_ai_bridge.config.settings import GLOBAL_LISTEN_GROUP_IDS
 from apps.qq_ai_bridge.services.emoji_service import infer_reaction_preferred_order
 from apps.qq_ai_bridge.services.group_strategy import group_strategy_decision, record_group_strategy_reply
+from apps.qq_ai_bridge.services.private_admin_service import maybe_handle_private_admin_command
 from apps.qq_ai_bridge.services.response_action import ActionKind, ResponseAction, execute_group_action
 from apps.qq_ai_bridge.services.trace_store import add_trace_step
 from apps.qq_ai_bridge.skills.base import Skill, SkillContext, SkillResult
@@ -29,6 +30,27 @@ class ChatSkill(Skill):
             if not query:
                 return SkillResult(handled=True, source=self.name, status="ignore")
 
+            admin_result = maybe_handle_private_admin_command(context.user_id, query)
+            if admin_result:
+                add_trace_step(
+                    context.data.get("trace_id"),
+                    "private_admin_config",
+                    ok=admin_result.get("ok"),
+                    group_id=admin_result.get("group_id"),
+                )
+                context.log(
+                    f"[PRIVATE_ADMIN] handled={admin_result.get('handled')}"
+                    f" ok={admin_result.get('ok')}"
+                    f" group_id={admin_result.get('group_id', '-')}"
+                )
+                return SkillResult(
+                    handled=True,
+                    source="private_admin_config",
+                    response_text=str(admin_result.get("reply") or ""),
+                    response_payload=admin_result,
+                    already_sent=False,
+                )
+
             queue_info = enqueue_private_text(
                 context.user_id,
                 query,
@@ -53,6 +75,20 @@ class ChatSkill(Skill):
             fallback_global_listen = int(context.group_id or 0) in GLOBAL_LISTEN_GROUP_IDS
             global_listen = configured_reply_all or fallback_global_listen
             explicit_trigger = bool(context.mentioned_self or ai_prefix_triggered or bot_alias_triggered or _is_reply_to_self(context))
+            if _is_forwarded_private_context(query) and not explicit_trigger:
+                add_trace_step(context.data.get("trace_id"), "routing", decision="forwarded_private_context")
+                context.log(
+                    f"[ROUTE] 群聊消息未入队 group_id={context.group_id}"
+                    f" reason=forwarded_private_context"
+                    f" explicit_trigger={explicit_trigger}"
+                    f" reply_all_messages={bool(context.group_config.get('reply_all_messages', False))}"
+                )
+                return SkillResult(
+                    handled=True,
+                    source=self.name,
+                    status="ignore",
+                    response_payload={"status": "forwarded_private_context"},
+                )
             if _is_addressed_to_someone_else(context, explicit_trigger=explicit_trigger):
                 context.log(
                     f"[ROUTE] 群聊消息未入队 group_id={context.group_id}"
@@ -68,6 +104,7 @@ class ChatSkill(Skill):
                 "is_mentioned": context.mentioned_self,
                 "group_id": context.group_id,
                 "self_id": context.self_id,
+                "allow_ambient": global_listen,
             }
             strategy = group_strategy_decision(strategy_input, context.group_config)
             context.data["group_strategy"] = strategy
@@ -203,3 +240,21 @@ def _looks_like_direct_reply_to_other(text: str) -> bool:
     if len(normalized) <= 24:
         return True
     return any(token in normalized for token in ("你", "你们", "他", "她", "这条", "上面", "刚才"))
+
+
+def _is_forwarded_private_context(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized.startswith("[聊天记录]"):
+        return False
+    return any(
+        token in normalized
+        for token in (
+            "Radioheadalism：",
+            "私聊模式",
+            "查看哈基米",
+            "调整为仅艾特",
+            "回复频率",
+            "沉默频率",
+            "群聊配置",
+        )
+    )

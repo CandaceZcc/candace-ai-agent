@@ -279,6 +279,13 @@
         font-size: 12px;
       }
 
+      .section-note {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+        margin-top: 6px;
+      }
+
       .metric-value {
         margin-top: 10px;
         font-size: 27px;
@@ -851,6 +858,7 @@
                   </div>
                 </div>
                 <div class="status" id="logsStatus"></div>
+                <div class="status" id="logsFileStatus"></div>
                 <div class="log-list" id="logsList"></div>
               </div>
             </article>
@@ -1050,6 +1058,21 @@
             </details>
           `;
         }).join("");
+      }
+
+      function renderLogFileStatus(payload) {
+        const mtime = payload.mtime ? new Date(payload.mtime) : null;
+        const size = Number(payload.size || 0);
+        const ageMs = mtime ? Date.now() - mtime.getTime() : Number.POSITIVE_INFINITY;
+        const stale = !mtime || ageMs > 120000;
+        const sizeKb = (size / 1024).toFixed(1);
+        const updatedText = mtime ? mtime.toLocaleString() : "未知";
+        const path = payload.log_path || "bridge.log";
+        setStatus(
+          $("logsFileStatus"),
+          `文件 ${path} · ${sizeKb} KB · 更新 ${updatedText}${stale ? " · 日志未更新" : ""}`,
+          stale ? "error" : "ok"
+        );
       }
 
       function renderDashboard(summary) {
@@ -1267,6 +1290,7 @@
         setStatus($("logsStatus"), "读取中…");
         const payload = await fetchJson(`/admin/api/logs?${params.toString()}`);
         renderLogEntries(payload.entries || [], $("logsList"));
+        renderLogFileStatus(payload);
         setStatus($("logsStatus"), `已读取 ${payload.entries.length} 条。`, "ok");
       }
 
@@ -1398,6 +1422,7 @@
             </section>
             <section class="group-strategy">
               <div class="section-kicker">策略配置</div>
+              <div class="section-note">触发模式=仅艾特时，概率只影响被触发后的回复，不会主动监听全群。</div>
               <div class="strategy-grid">
                 ${strategyRange("reply_probability", "回复概率", group.strategy.reply_probability)}
                 ${strategyRange("silence_probability", "沉默概率", group.strategy.silence_probability)}

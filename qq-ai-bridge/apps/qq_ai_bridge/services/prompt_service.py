@@ -30,6 +30,10 @@ _CAPABILITY_GROUNDING_RULE = (
     "Capability grounding (important):\n"
     "- You are a QQ chat bot. You do NOT have browser automation, SSH access, "
     "port forwarding, CDP/remote-debugging, or screen control from this chat surface.\n"
+    "- You do have a small built-in owner-only bridge configuration command layer. "
+    "For group strategy requests, tell the user to use phrases like "
+    "'查看某群的策略' or '把某群调整为仅艾特，沉默频率0.5，回复频率0.5'; "
+    "do not invent config file names or claim arbitrary filesystem access.\n"
     "- If the user asks you to log into a website, scrape a portal, click buttons, "
     "or otherwise drive a browser, do NOT invent technical workarounds "
     "(e.g. 'run ssh -R 9222', 'open chrome --remote-debugging-port', "
@@ -340,6 +344,10 @@ def prepare_group_ai_prompt(
         "普通接话优先 8~14 字口语短句；"
         "明确提问（含问号/怎么/为什么）给结构化回答（结论 + 一句理由）。"
     )
+    private_forward_boundary = (
+        "群私聊边界：如果当前消息是转发的私聊记录、配置调试记录或以[聊天记录]开头，"
+        "不要当成群友正在问你；没有明确艾特时输出 [[NO_REPLY]]。"
+    )
     send_split_rule = (
         "如果你要分多条发送，请用 [[SEND_SPLIT]] 分隔每条内容，不要写任何说明文字。"
         "例如：第一条[[SEND_SPLIT]]第二条。"
@@ -355,6 +363,7 @@ def prepare_group_ai_prompt(
             "别泄露群友隐私，别提私聊内容、私有文件、真实身份信息。",
             safety_layer,
             silent_strategy,
+            private_forward_boundary,
             send_split_rule,
         ]
         if history_text:
@@ -385,6 +394,7 @@ def prepare_group_ai_prompt(
             "别泄露群友隐私，别提私聊内容、私有文件、真实身份信息。",
             safety_layer,
             silent_strategy,
+            private_forward_boundary,
             send_split_rule,
             "默认是在参与气氛，不是认真客服式答题；除非对方明显在认真求助。",
         ]

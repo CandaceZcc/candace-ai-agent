@@ -25,7 +25,7 @@ class GroupStrategyTests(unittest.TestCase):
     @patch("apps.qq_ai_bridge.services.group_strategy.random.uniform", return_value=0.95)
     def test_weighted_probability_can_select_reaction(self, _mock_random):
         result = group_strategy_decision(
-            {"text": "普通聊天", "group_id": "123"},
+            {"text": "普通聊天", "group_id": "123", "allow_ambient": True},
             {
                 "strategy": {
                     "reply_probability": 0.0,
@@ -40,8 +40,8 @@ class GroupStrategyTests(unittest.TestCase):
 
     def test_require_mention_for_reply_forces_silence(self):
         result = group_strategy_decision(
-            {"text": "普通聊天", "group_id": "123", "is_mentioned": False},
-            {"strategy": {"require_mention_for_reply": True}},
+            {"text": "普通聊天", "group_id": "123", "is_mentioned": False, "allow_ambient": True},
+            {"reply_all_messages": True, "strategy": {"require_mention_for_reply": True}},
         )
 
         self.assertEqual(result["mode"], "silence")
@@ -63,7 +63,7 @@ class GroupStrategyTests(unittest.TestCase):
     @patch("apps.qq_ai_bridge.services.group_strategy.random.uniform", return_value=0.1)
     def test_delay_uses_configured_range(self, _mock_uniform, mock_randint):
         result = group_strategy_decision(
-            {"text": "普通聊天", "group_id": "123"},
+            {"text": "普通聊天", "group_id": "123", "allow_ambient": True},
             {
                 "strategy": {
                     "reply_probability": 1.0,
@@ -78,6 +78,22 @@ class GroupStrategyTests(unittest.TestCase):
         self.assertEqual(result["mode"], "delay_text")
         self.assertEqual(result["delay_ms"], 900)
         mock_randint.assert_called_once_with(500, 1200)
+
+    def test_mention_only_without_trigger_skips_probability(self):
+        result = group_strategy_decision(
+            {"text": "普通聊天", "group_id": "123", "allow_ambient": False},
+            {
+                "reply_all_messages": False,
+                "strategy": {
+                    "reply_probability": 1.0,
+                    "silence_probability": 0.0,
+                    "reaction_probability": 0.0,
+                },
+            },
+        )
+
+        self.assertEqual(result["mode"], "silence")
+        self.assertEqual(result["reason"], "mention_only_not_triggered")
 
 
 if __name__ == "__main__":

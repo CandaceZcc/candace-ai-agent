@@ -9,6 +9,34 @@ from apps.qq_ai_bridge.skills.chat import ChatSkill
 
 
 class ChatSkillTests(unittest.TestCase):
+    @patch("apps.qq_ai_bridge.skills.chat.maybe_handle_private_admin_command")
+    def test_private_admin_command_bypasses_llm_queue(self, mock_admin):
+        mock_admin.return_value = {"ok": True, "reply": "已更新：测试群", "group_id": "123"}
+        context = SkillContext(
+            data={"trace_id": "trace1"},
+            post_type="message",
+            message_type="private",
+            user_id=273007866,
+            self_id=2,
+            group_id=None,
+            group_config={},
+            should_log=True,
+            msg="查看测试群的策略",
+            normalized_msg="查看测试群的策略",
+            effective_text="查看测试群的策略",
+            mentioned_self=False,
+            image_inputs={},
+            file_info=None,
+            logger=lambda *_args: None,
+            timestamp=10,
+            nick="u",
+        )
+
+        result = ChatSkill().handle(context)
+
+        self.assertEqual(result.source, "private_admin_config")
+        self.assertEqual(result.response_text, "已更新：测试群")
+
     @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text")
     def test_global_listen_group_does_not_mark_message_as_explicit_trigger(self, mock_enqueue):
         mock_enqueue.return_value = {"queued": True}
@@ -42,6 +70,36 @@ class ChatSkillTests(unittest.TestCase):
         self.assertTrue(result.response_payload["queue"]["queued"])
         self.assertFalse(mock_enqueue.call_args.kwargs["explicit_trigger"])
         self.assertTrue(any("explicit_trigger=False" in item for item in logs))
+
+    @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text")
+    def test_forwarded_private_context_is_not_queued_without_trigger(self, mock_enqueue):
+        logs = []
+        context = SkillContext(
+            data={"message_id": 123, "trace_id": "trace1"},
+            post_type="message",
+            message_type="group",
+            user_id=1,
+            self_id=2,
+            group_id=810938203,
+            group_config={"reply_all_messages": True},
+            should_log=True,
+            msg="[聊天记录] Radioheadalism：查看哈基米音乐作者群的策略",
+            normalized_msg="[聊天记录] Radioheadalism：查看哈基米音乐作者群的策略",
+            effective_text="[聊天记录] Radioheadalism：查看哈基米音乐作者群的策略",
+            mentioned_self=False,
+            image_inputs={},
+            file_info=None,
+            logger=logs.append,
+            timestamp=10,
+            nick="u",
+        )
+
+        result = ChatSkill().handle(context)
+
+        self.assertTrue(result.handled)
+        self.assertEqual(result.status, "ignore")
+        mock_enqueue.assert_not_called()
+        self.assertTrue(any("forwarded_private_context" in item for item in logs))
 
     @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text")
     def test_mention_marks_message_as_explicit_trigger(self, mock_enqueue):

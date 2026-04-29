@@ -57,12 +57,15 @@ def group_strategy_decision(parsed_data: dict[str, Any], group_config: dict[str,
     at_targets = parsed_data.get("at_targets") or []
     group_id = str(parsed_data.get("group_id") or "")
     explicit_trigger = bool(parsed_data.get("explicit_trigger") or mentioned_self or text.startswith(("/", "#")))
+    allow_ambient = bool(parsed_data.get("allow_ambient") or (group_config or {}).get("reply_all_messages"))
     probabilities = _probabilities_payload(cfg)
 
     if not text:
         return _decision("silence", "noise_empty", cfg, probabilities=probabilities)
     if _addressed_to_other(at_targets, parsed_data.get("self_id"), raw):
         return _decision("silence", "addressed_to_other", cfg, probabilities=probabilities)
+    if not allow_ambient and not explicit_trigger:
+        return _decision("silence", "mention_only_not_triggered", cfg, probabilities=probabilities)
     if cfg["require_mention_for_reply"] and not explicit_trigger:
         return _decision("silence", "require_mention_for_reply", cfg, probabilities=probabilities)
     cooldown_remaining = _cooldown_remaining_ms(group_id, cfg["cooldown_sec"])

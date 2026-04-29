@@ -26,10 +26,22 @@ class ResponseActionTests(unittest.TestCase):
         self.assertEqual(action.kind, ActionKind.TEXT)
         self.assertEqual(action.text, "你好呀")
 
+    def test_parse_markdown_list_collapses_to_plain_text(self):
+        action = parse_llm_response_action("**两个选择：**\n\n1. 改仅艾特\n2. 调概率")
+
+        self.assertEqual(action.kind, ActionKind.TEXT)
+        self.assertNotIn("**", action.text)
+        self.assertNotIn("\n\n", action.text)
+
+    def test_unknown_json_is_not_user_visible_text(self):
+        action = parse_llm_response_action('{"foo":"bar"}')
+
+        self.assertEqual(action.kind, ActionKind.NO_REPLY)
+
     def test_execute_group_text_can_reply_to_message(self):
         from unittest.mock import patch
 
-        with patch("apps.qq_ai_bridge.services.response_action.send_group_msg") as mock_send:
+        with patch("apps.qq_ai_bridge.services.response_action.send_group_msg", return_value={"ok": True}) as mock_send:
             result = execute_group_action(
                 12345,
                 ResponseAction(kind=ActionKind.TEXT, text="收到"),
@@ -40,6 +52,20 @@ class ResponseActionTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         mock_send.assert_called_once_with(12345, "收到", quiet=True, force_parts=None, reply_to_message_id=998877)
+
+    def test_execute_group_text_propagates_empty_send_failure(self):
+        from unittest.mock import patch
+
+        with patch("apps.qq_ai_bridge.services.response_action.send_group_msg", return_value={"ok": False, "reason": "empty_message"}):
+            result = execute_group_action(
+                12345,
+                ResponseAction(kind=ActionKind.TEXT, text="？"),
+                target_message_id=None,
+                quiet=True,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "empty_message")
 
 
 if __name__ == "__main__":

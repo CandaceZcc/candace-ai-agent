@@ -124,6 +124,19 @@ class VocatServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("项目启动", result["reply"])
         mock_kimi.assert_awaited_once()
 
+    def test_default_md_root_is_bridge_root_and_finds_project_markdown(self):
+        status = vocat_service.get_local_repo_docs_status()
+
+        self.assertTrue(status["md_root"].endswith("qq-ai-bridge"))
+        self.assertGreaterEqual(status["md_file_count"], 1)
+
+    def test_repo_markdown_search_excludes_runtime_dirs(self):
+        files = vocat_service._iter_repo_markdown_files()
+        rendered = [str(path.relative_to(vocat_service.VOCAT_MD_ROOT.expanduser().resolve())) for path in files]
+
+        self.assertTrue(any(item.endswith(".md") for item in rendered))
+        self.assertFalse(any(".runtime" in item or "node_modules" in item or "venv" in item for item in rendered))
+
 
 if __name__ == "__main__":
     unittest.main()

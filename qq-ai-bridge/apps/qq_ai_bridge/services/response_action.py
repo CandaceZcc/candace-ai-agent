@@ -31,6 +31,7 @@ class ResponseAction:
 
 
 _LEGACY_EMOJI_TAG_PATTERN = re.compile(r"\[emoji:[^\]]+\]", re.IGNORECASE)
+_MARKDOWN_BULLET_PATTERN = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)、]\s*)")
 
 
 # parse_llm_response_action：解析模型动作协议
@@ -51,7 +52,10 @@ def parse_llm_response_action(raw_text: str) -> ResponseAction:
 
     obj = _parse_json_object(text)
     if obj is None:
-        return ResponseAction(kind=ActionKind.TEXT, text=text, reason="plain_text")
+        cleaned = sanitize_model_visible_text(text)
+        if not cleaned:
+            return ResponseAction(kind=ActionKind.NO_REPLY, reason="empty_plain_text")
+        return ResponseAction(kind=ActionKind.TEXT, text=cleaned, reason="plain_text")
 
     action_name = str(obj.get("action") or obj.get("mode") or obj.get("kind") or "").strip().lower()
     if action_name in {"no_reply", "silence"}:
@@ -71,7 +75,7 @@ def parse_llm_response_action(raw_text: str) -> ResponseAction:
             reason=str(obj.get("reason", ""))[:40],
         )
     if action_name == "text":
-        message = str(obj.get("text") or obj.get("message") or "").strip()
+        message = sanitize_model_visible_text(str(obj.get("text") or obj.get("message") or "").strip())
         if not message:
             return ResponseAction(kind=ActionKind.NO_REPLY, reason="empty_text_action")
         return ResponseAction(kind=ActionKind.TEXT, text=message, reason=str(obj.get("reason", ""))[:40])
@@ -79,6 +83,28 @@ def parse_llm_response_action(raw_text: str) -> ResponseAction:
     # JSON that is not in the allowlisted action protocol is rejected instead
     # of being leaked as user-visible protocol/control text.
     return ResponseAction(kind=ActionKind.NO_REPLY, reason="unknown_json_action")
+
+
+def sanitize_model_visible_text(text: str) -> str:
+    """Collapse model protocol/markdown-ish output into a QQ-safe plain reply."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    raw = re.sub(r"```(?:[a-zA-Z0-9_-]+)?\s*([\s\S]*?)```", r"\1", raw).strip()
+    raw = re.sub(r"`([^`]+)`", r"\1", raw)
+    raw = re.sub(r"\*\*([^*]+)\*\*", r"\1", raw)
+    raw = re.sub(r"^#{1,6}\s*", "", raw, flags=re.MULTILINE)
+    lines: list[str] = []
+    for line in raw.splitlines():
+        cleaned = _MARKDOWN_BULLET_PATTERN.sub("", line).strip()
+        if cleaned:
+            lines.append(cleaned)
+    if not lines:
+        return ""
+    if len(lines) == 1:
+        return lines[0]
+    compact = "；".join(lines[:4])
+    return re.sub(r"\s+", " ", compact).strip()
 
 
 # _parse_json_object：解析JSON对象
@@ -131,13 +157,15 @@ def execute_group_action(
             "applied_count": int(result.get("applied_count", 0)),
             "emoji_names": result.get("emoji_names", []),
         }
-    send_group_msg(
+    result = send_group_msg(
         group_id,
         action.text,
         quiet=quiet,
         force_parts=force_parts,
         reply_to_message_id=reply_to_message_id,
     )
+    if isinstance(result, dict):
+        return {"mode": ActionKind.TEXT.value, **result}
     return {"ok": True, "mode": ActionKind.TEXT.value}
 
 
@@ -180,5 +208,7 @@ def execute_private_action(
             "applied_count": applied_count,
             "emoji_names": result.get("emoji_names", []),
         }
-    send_private_msg(user_id, action.text, quiet=quiet)
+    result = send_private_msg(user_id, action.text, quiet=quiet)
+    if isinstance(result, dict):
+        return {"mode": ActionKind.TEXT.value, **result}
     return {"ok": True, "mode": ActionKind.TEXT.value}

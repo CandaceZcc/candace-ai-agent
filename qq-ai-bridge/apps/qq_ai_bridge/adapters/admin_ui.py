@@ -26,6 +26,7 @@ from apps.qq_ai_bridge.services.vocat_command_queue import (
     get_vocat_queue_status,
     get_vocat_runtime_status,
 )
+from apps.qq_ai_bridge.services.vocat_service import get_local_repo_docs_status
 from apps.qq_ai_bridge.services.group_strategy import DEFAULT_GROUP_STRATEGY, normalize_group_strategy_config
 from apps.qq_ai_bridge.services.trace_store import get_trace, list_traces
 
@@ -203,6 +204,17 @@ def tail_lines(path: str | os.PathLike[str], limit: int = DEFAULT_LOG_LIMIT) -> 
             data = fp.read(read_size) + data
 
     return [line.decode("utf-8", "replace") for line in data.splitlines()[-limit:]]
+
+
+def _log_file_meta() -> dict[str, Any]:
+    try:
+        stat = BRIDGE_LOG_PATH.stat()
+    except FileNotFoundError:
+        return {"mtime": None, "size": 0}
+    return {
+        "mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        "size": stat.st_size,
+    }
 
 
 def mask_sensitive(value: Any) -> str:
@@ -480,10 +492,13 @@ def get_admin_summary():
 @admin_ui_bp.get("/admin/api/logs")
 def get_admin_logs():
     limit = _clamp_log_limit(request.args.get("limit"))
+    meta = _log_file_meta()
     return jsonify(
         {
             "ok": True,
             "log_path": str(BRIDGE_LOG_PATH),
+            "mtime": meta["mtime"],
+            "size": meta["size"],
             "limit": limit,
             "entries": _filtered_log_entries(),
         }
@@ -492,7 +507,9 @@ def get_admin_logs():
 
 @admin_ui_bp.get("/admin/api/vocat/status")
 def get_admin_vocat_status():
-    return jsonify(get_vocat_runtime_status())
+    status = get_vocat_runtime_status()
+    status.update(get_local_repo_docs_status())
+    return jsonify(status)
 
 
 @admin_ui_bp.get("/admin/api/traces")
