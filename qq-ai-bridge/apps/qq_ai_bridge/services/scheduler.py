@@ -29,6 +29,7 @@ from apps.qq_ai_bridge.services.schedule_service import (
     ensure_schedule_file,
 )
 from apps.qq_ai_bridge.services.time_utils import get_now_local
+from apps.qq_ai_bridge.services.trace_store import add_trace_step, finish_trace, new_trace_id, start_trace, trace_prefix
 from apps.qq_ai_bridge.services.vocat_command_queue import enqueue_vocat_tts
 
 _START_LOCK = threading.Lock()
@@ -205,8 +206,14 @@ def _compute_sleep_seconds(now: datetime, next_reminder_wait: int | None) -> int
 def _queue_vocat_daily_broadcast(text: str, *, source: str) -> None:
     if not VOCAT_DAILY_BROADCAST_TO_DEVICE:
         return
+    trace_id = new_trace_id({})
+    start_trace(trace_id, source="scheduler", input_text=text[:180])
+    add_trace_step(trace_id, "scheduler", source=source)
     result = enqueue_vocat_tts(text, source=f"scheduler_{source}")
     if result.get("ok"):
-        print(f"[VOCAT] queued scheduler broadcast command_id={result.get('command_id')} source={source}")
+        add_trace_step(trace_id, "send", target="vocat_queue", command_id=result.get("command_id"))
+        print(f"{trace_prefix(trace_id)}[VOCAT] queued scheduler broadcast command_id={result.get('command_id')} source={source}")
+        finish_trace(trace_id, result=result.get("command_id"), status="ok", source="scheduler")
     else:
-        print(f"[VOCAT] failed to queue scheduler broadcast source={source} ret={result}")
+        print(f"{trace_prefix(trace_id)}[VOCAT] failed to queue scheduler broadcast source={source} ret={result}")
+        finish_trace(trace_id, result=result, status="error", source="scheduler")

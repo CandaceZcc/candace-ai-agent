@@ -31,7 +31,15 @@ class VocatCommandQueueTest(unittest.TestCase):
         command = queue.poll_vocat_command()
 
         queue.record_vocat_poll(command=command, queue_size=queue.get_vocat_queue_status()["queue_size"])
-        queue.record_vocat_webhook(query="测试", reply="收到", expression="happy", source="test", remote_addr="127.0.0.1")
+        queue.record_vocat_webhook(
+            query="测试",
+            reply="收到",
+            expression="happy",
+            source="test",
+            remote_addr="127.0.0.1",
+            trace_id="trace1234",
+            model_reply="模型回复",
+        )
         ack = queue.ack_vocat_command(queued["command_id"])
         queue.record_vocat_ack(queued["command_id"], ack)
 
@@ -40,6 +48,8 @@ class VocatCommandQueueTest(unittest.TestCase):
         self.assertTrue(status["device_online"])
         self.assertEqual(status["last_query"], "测试")
         self.assertEqual(status["last_reply"], "收到")
+        self.assertEqual(status["last_trace_id"], "trace1234")
+        self.assertEqual(status["last_model_reply"], "模型回复")
         self.assertEqual(status["last_expression"], "happy")
         self.assertEqual(status["last_command_id"], queued["command_id"])
         self.assertGreaterEqual(status["poll_count"], 1)

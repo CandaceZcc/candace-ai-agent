@@ -26,6 +26,7 @@ from apps.qq_ai_bridge.services.vocat_command_queue import (
     get_vocat_queue_status,
     get_vocat_runtime_status,
 )
+from apps.qq_ai_bridge.services.trace_store import get_trace, list_traces
 
 admin_ui_bp = Blueprint("admin_ui", __name__)
 BRIDGE_LOG_PATH = (REPO_ROOT / ".runtime" / "logs" / "bridge.log").resolve()
@@ -369,6 +370,11 @@ def admin_system_page():
     return render_template("group_admin.html", initial_section="system")
 
 
+@admin_ui_bp.get("/admin/traces")
+def admin_traces_page():
+    return render_template("group_admin.html", initial_section="traces")
+
+
 @admin_ui_bp.get("/api/admin/groups")
 @admin_ui_bp.get("/admin/api/groups")
 def get_group_admin_data():
@@ -420,6 +426,19 @@ def get_admin_logs():
 @admin_ui_bp.get("/admin/api/vocat/status")
 def get_admin_vocat_status():
     return jsonify(get_vocat_runtime_status())
+
+
+@admin_ui_bp.get("/admin/api/traces")
+def get_admin_traces():
+    return jsonify({"ok": True, "traces": list_traces()})
+
+
+@admin_ui_bp.get("/admin/api/trace/<trace_id>")
+def get_admin_trace(trace_id: str):
+    trace = get_trace(trace_id)
+    if not trace:
+        return jsonify({"ok": False, "error": "trace not found"}), 404
+    return jsonify({"ok": True, "trace": trace})
 
 
 def register_admin_routes(app):

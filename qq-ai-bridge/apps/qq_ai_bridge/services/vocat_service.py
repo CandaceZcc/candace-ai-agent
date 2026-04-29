@@ -18,7 +18,6 @@ from apps.qq_ai_bridge.config.settings import (
     OWNER_QQ,
     SCHEDULE_PATH,
     VOCAT_MD_ROOT,
-    VOCAT_QQ_KEYWORDS,
     VOCAT_QQ_FORWARD_USER_ID,
     VOCAT_REMOTE_CONTROL_USERS,
     VOCAT_VOICE_REPLY_TO_QQ,
@@ -31,20 +30,40 @@ from apps.qq_ai_bridge.services.schedule_service import (
     query_today_schedule,
     query_tomorrow_schedule,
 )
+from apps.qq_ai_bridge.services.trace_store import (
+    add_trace_step,
+    finish_trace,
+    new_trace_id,
+    start_trace,
+    trace_prefix,
+)
 from apps.qq_ai_bridge.services.weather_service import handle_weather_query
 from apps.qq_ai_bridge.services.vocat_command_queue import normalize_vocat_expression, select_vocat_expression
 from shared.ai.llm_client import call_kimi_text_async
 
 _VOCAT_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="vocat")
 
-_QQ_FORWARD_PATTERNS = (
-    re.compile(r"^(?:发|转发|告诉)\s*qq", re.IGNORECASE),
-    re.compile(r"qq\s*(?:说|发送|转发)", re.IGNORECASE),
-)
+_QQ_FORWARD_COMMAND_RE = re.compile(r"^(?:发\s*QQ|发QQ|转发\s*QQ|告诉\s*QQ|QQ\s*说)\s*(?P<body>.+)$", re.IGNORECASE)
 _MD_READ_PATTERNS = (
     re.compile(r"(?P<path>[\w./\\-]+\.md)\b", re.IGNORECASE),
     re.compile(r"(?:读取|查看|打开|总结)\s+(?P<path>[\w./\\-]+\.md)\b", re.IGNORECASE),
 )
+_MODEL_REFUSAL_PHRASES = (
+    "无法直接访问",
+    "无法操作",
+    "无法发送 QQ",
+    "无法帮你发送",
+    "无法连接 QQ",
+    "无法执行",
+)
+_QUERY_KEYS = ("raw_query", "user_query", "original_query", "asr_text", "text", "message", "content", "query")
+_LOCAL_REPO_DOCS_PATTERNS = (
+    "项目怎么启动",
+    "读取仓库文档",
+    "当前项目状态",
+    "VoCat 怎么验证",
+)
+_MD_EXCLUDE_DIRS = {".git", ".venv", ".runtime", "node_modules"}
 _VOICE_REPLY_SOURCES = {
     "vocat_function_call",
     "vocat_voice",
@@ -63,18 +82,39 @@ _EXPRESSION_COMMAND_WORDS = ("切换", "切到", "显示", "设置", "换", "调
 
 # _extract_query：提取相关逻辑
 def _extract_query(data: dict[str, Any]) -> str:
-    for key in ("query", "text", "asr_text", "message", "content"):
+    query, _ = _extract_query_pair(data)
+    return query
+
+
+def _extract_query_pair(data: dict[str, Any]) -> tuple[str, str]:
+    for key in _QUERY_KEYS:
         value = data.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+            routing_query = value.strip()
+            model_reply = ""
+            raw_query = data.get("raw_query")
+            fallback_query = data.get("query")
+            if isinstance(raw_query, str) and raw_query.strip() and isinstance(fallback_query, str):
+                model_reply = fallback_query.strip() if raw_query.strip() != fallback_query.strip() else ""
+            return routing_query, model_reply
+    return "", ""
 
 
-# _is_qq_forward_query：判断转发查询
-def _is_qq_forward_query(query: str) -> bool:
-    if any(keyword and keyword in query for keyword in VOCAT_QQ_KEYWORDS):
-        return True
-    return any(pattern.search(query) for pattern in _QQ_FORWARD_PATTERNS)
+def _contains_model_refusal(text: str) -> bool:
+    return any(phrase in str(text or "") for phrase in _MODEL_REFUSAL_PHRASES)
+
+
+def _has_raw_query(data: dict[str, Any]) -> bool:
+    return isinstance(data.get("raw_query"), str) and bool(data.get("raw_query", "").strip())
+
+
+# _parse_qq_forward_command：解析明确 QQ 转发命令
+def _parse_qq_forward_command(query: str) -> str | None:
+    match = _QQ_FORWARD_COMMAND_RE.match(str(query or "").strip())
+    if not match:
+        return None
+    body = re.sub(r"\s+", " ", match.group("body") or "").strip()
+    return body or None
 
 
 # _extract_md_path：提取Markdown路径
@@ -112,6 +152,73 @@ def _read_markdown_file(path: Path) -> str:
     if len(text) > 1200:
         preview += "\n\n[内容已截断]"
     return f"{path.name} 的内容如下：\n{preview}"
+
+
+def _detect_local_repo_docs_query(query: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(query or "")).strip()
+    return any(pattern in normalized for pattern in _LOCAL_REPO_DOCS_PATTERNS)
+
+
+def _iter_repo_markdown_files() -> list[Path]:
+    root = VOCAT_MD_ROOT.expanduser().resolve()
+    candidates: list[Path] = []
+    for pattern in ("README*.md", "docs/**/*.md"):
+        for path in root.glob(pattern):
+            try:
+                resolved = path.resolve()
+                resolved.relative_to(root)
+            except ValueError:
+                continue
+            if any(part in _MD_EXCLUDE_DIRS for part in resolved.relative_to(root).parts):
+                continue
+            if resolved.is_file():
+                candidates.append(resolved)
+    return sorted(set(candidates), key=lambda item: str(item.relative_to(root)))[:12]
+
+
+def _build_repo_docs_excerpt(query: str) -> str:
+    root = VOCAT_MD_ROOT.expanduser().resolve()
+    files = _iter_repo_markdown_files()
+    if not files:
+        return "没有在 VOCAT_MD_ROOT 下找到 README 或 docs Markdown。"
+    parts: list[str] = []
+    keywords = [token for token in re.split(r"\W+", query, flags=re.UNICODE) if len(token) >= 2]
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="ignore").strip()
+        if not text:
+            continue
+        snippet = text[:1400]
+        for keyword in keywords:
+            index = text.find(keyword)
+            if index >= 0:
+                start = max(0, index - 350)
+                snippet = text[start : start + 1400]
+                break
+        parts.append(f"## {path.relative_to(root)}\n{snippet.strip()}")
+    return "\n\n".join(parts)[:6000]
+
+
+async def _handle_local_repo_docs(query: str, trace_id: str) -> dict[str, Any]:
+    add_trace_step(trace_id, "skill", name="local_repo_docs")
+    excerpt = _build_repo_docs_excerpt(query)
+    prompt = (
+        "你是本地项目文档助手。请只根据下面 Markdown 片段回答用户问题，"
+        "回答要简短、可执行；如果片段不足就说明依据有限。\n\n"
+        f"用户问题：{query}\n\nMarkdown 片段：\n{excerpt}"
+    )
+    print(f"{trace_prefix(trace_id)}[LLM] call kimi source=local_repo_docs query={_preview(query)!r}")
+    add_trace_step(trace_id, "llm", provider="kimi", purpose="local_repo_docs")
+    summary = await call_kimi_text_async(prompt)
+    if not summary or summary.startswith(("Kimi API 未配置", "Kimi 调用失败", "Kimi 处理失败")):
+        summary = excerpt[:1200].strip()
+        if len(excerpt) > 1200:
+            summary += "\n\n[内容已截断]"
+    return {
+        "handled": True,
+        "source": "local_repo_docs",
+        "reply": summary,
+        "expression": "blink",
+    }
 
 
 def _preview(text: str, limit: int = 80) -> str:
@@ -179,14 +286,21 @@ def _should_forward_reply_to_qq(data: dict[str, Any]) -> bool:
     return _payload_bool(data, "reply_to_qq", default)
 
 
-async def _maybe_forward_reply_to_qq(data: dict[str, Any], query: str, reply: str) -> dict[str, Any] | None:
+async def _maybe_forward_reply_to_qq(
+    data: dict[str, Any],
+    query: str,
+    reply: str,
+    trace_id: str | None = None,
+) -> dict[str, Any] | None:
     if not _should_forward_reply_to_qq(data):
         return None
     message = f"[VoCat]\n你说：{query}\n回复：{reply}"
+    print(f"{trace_prefix(trace_id)}[VOCAT] send QQ voice_reply query={_preview(query)!r}")
+    add_trace_step(trace_id, "send", target="qq", reason="voice_reply")
     return await send_private_msg_async(VOCAT_QQ_FORWARD_USER_ID, message, quiet=True)
 
 
-def _with_expression(result: dict[str, Any]) -> dict[str, Any]:
+def _with_expression(result: dict[str, Any], trace_id: str | None = None) -> dict[str, Any]:
     reply = str(result.get("reply", "") or "")
     query = str(result.get("query", "") or "")
     explicit_expression = result.get("expression")
@@ -194,8 +308,11 @@ def _with_expression(result: dict[str, Any]) -> dict[str, Any]:
         result["expression"] = normalize_vocat_expression(explicit_expression)
     else:
         result["expression"] = select_vocat_expression(query or reply)
+    result.setdefault("targets", ["vocat"])
+    if "trace_id" not in result and trace_id:
+        result["trace_id"] = trace_id
     print(
-        f"[VOCAT] expression source={result.get('source', '')} "
+        f"{trace_prefix(trace_id)}[VOCAT] expression source={result.get('source', '')} "
         f"expression={result['expression']} query={_preview(query)!r} reply={_preview(reply)!r}"
     )
     return result
@@ -274,47 +391,99 @@ def _submit_background_job(kind: str, query: str) -> None:
 # process_vocat_query：处理VoCat查询
 async def process_vocat_query(data: dict[str, Any]) -> dict[str, Any]:
     """Process a VoCat webhook request."""
-    query = _extract_query(data)
+    trace_id = new_trace_id(data)
+    query, model_reply = _extract_query_pair(data)
+    start_trace(trace_id, source=str(data.get("source") or "vocat"), input_text=query)
+    add_trace_step(trace_id, "webhook", keys=sorted(data.keys()))
+    print(f"{trace_prefix(trace_id)}[VOCAT] process query={_preview(query)!r} model_reply={_preview(model_reply)!r}")
     if not query:
-        return {"ok": False, "error": "missing_query"}
+        result = {"ok": False, "error": "missing_query", "trace_id": trace_id}
+        finish_trace(trace_id, result=result, status="error", source="missing_query")
+        return result
 
-    local_result = await asyncio.to_thread(_handle_local_skill_sync, query)
-    if local_result:
-        if local_result.get("background"):
-            _submit_background_job(local_result["background_kind"], query)
-        qq_result = await _maybe_forward_reply_to_qq(data, query, str(local_result.get("reply", "")))
-        result = {"ok": True, **local_result, "query": query}
-        if qq_result is not None:
-            result["qq_result"] = qq_result
-        return _with_expression(result)
+    if _contains_model_refusal(query) and not _has_raw_query(data):
+        add_trace_step(trace_id, "routing", decision="vocat_model_refusal")
+        result = _with_expression(
+            {
+                "ok": True,
+                "handled": True,
+                "source": "vocat_model_refusal",
+                "reply": "本机没有拿到原始语音",
+                "query": query,
+                "model_reply": query,
+                "targets": ["vocat"],
+            },
+            trace_id,
+        )
+        finish_trace(trace_id, result=result.get("reply", ""), status="ok", source=result.get("source"))
+        return result
 
-    if _is_qq_forward_query(query):
+    if model_reply:
+        add_trace_step(trace_id, "routing", decision="raw_query_priority", model_reply=_preview(model_reply))
+
+    forward_body = _parse_qq_forward_command(query)
+    if forward_body and not _contains_model_refusal(query):
+        add_trace_step(trace_id, "routing", decision="qq_forward")
+        print(f"{trace_prefix(trace_id)}[VOCAT] send QQ forward_body={_preview(forward_body)!r}")
+        add_trace_step(trace_id, "send", target="qq")
         send_result = await send_private_msg_async(
             VOCAT_QQ_FORWARD_USER_ID,
-            f"[VoCat] {query}",
+            f"[VoCat] {forward_body}",
             quiet=True,
         )
-        return _with_expression({
+        result = _with_expression({
             "ok": True,
             "handled": True,
             "source": "qq_forward",
             "reply": "我已经把这条消息转发到 QQ 了。",
             "qq_result": send_result,
             "query": query,
-        })
+            "model_reply": model_reply or None,
+            "targets": ["qq", "vocat"],
+        }, trace_id)
+        finish_trace(trace_id, result=result.get("reply", ""), status="ok", source=result.get("source"))
+        return result
 
+    if _detect_local_repo_docs_query(query):
+        add_trace_step(trace_id, "routing", decision="local_repo_docs")
+        local_docs_result = await _handle_local_repo_docs(query, trace_id)
+        result = _with_expression({"ok": True, **local_docs_result, "query": query, "model_reply": model_reply or None}, trace_id)
+        finish_trace(trace_id, result=result.get("reply", ""), status="ok", source=result.get("source"))
+        return result
+
+    local_result = _handle_local_skill_sync(query)
+    if local_result:
+        add_trace_step(trace_id, "routing", decision=local_result.get("source", "local_skill"))
+        add_trace_step(trace_id, "skill", name=local_result.get("source", "local_skill"))
+        if local_result.get("background"):
+            _submit_background_job(local_result["background_kind"], query)
+        qq_result = await _maybe_forward_reply_to_qq(data, query, str(local_result.get("reply", "")), trace_id)
+        result = {"ok": True, **local_result, "query": query, "model_reply": model_reply or None}
+        if qq_result is not None:
+            result["qq_result"] = qq_result
+        result = _with_expression(result, trace_id)
+        finish_trace(trace_id, result=result.get("reply", ""), status="ok", source=result.get("source"))
+        return result
+
+    add_trace_step(trace_id, "routing", decision="kimi")
+    print(f"{trace_prefix(trace_id)}[LLM] call kimi source=vocat query={_preview(query)!r}")
+    add_trace_step(trace_id, "llm", provider="kimi", purpose="vocat_reply")
     llm_reply = await call_kimi_text_async(query)
-    qq_result = await _maybe_forward_reply_to_qq(data, query, llm_reply)
+    qq_result = await _maybe_forward_reply_to_qq(data, query, llm_reply, trace_id)
     result = {
         "ok": True,
         "handled": True,
         "source": "kimi",
         "reply": llm_reply,
         "query": query,
+        "model_reply": model_reply or None,
     }
     if qq_result is not None:
         result["qq_result"] = qq_result
-    return _with_expression(result)
+        result["targets"] = ["qq", "vocat"]
+    result = _with_expression(result, trace_id)
+    finish_trace(trace_id, result=result.get("reply", ""), status="ok", source=result.get("source"))
+    return result
 
 
 # maybe_handle_vocat_remote_command：处理VoCat遥控命令

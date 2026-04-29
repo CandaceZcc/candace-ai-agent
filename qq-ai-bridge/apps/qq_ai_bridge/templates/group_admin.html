@@ -713,6 +713,7 @@
         <nav class="nav-list">
           <button class="nav-item" data-nav="dashboard" type="button"><span>概览</span><span class="pill" id="navBridge">--</span></button>
           <button class="nav-item" data-nav="vocat" type="button"><span>VoCat</span><span class="pill" id="navVocat">--</span></button>
+          <button class="nav-item" data-nav="traces" type="button"><span>Trace</span><span class="pill" id="navTraceCount">0</span></button>
           <button class="nav-item" data-nav="logs" type="button"><span>日志中心</span><span class="pill">log</span></button>
           <button class="nav-item" data-nav="groups" type="button"><span>群聊配置</span><span class="pill" id="navGroupCount">0</span></button>
           <button class="nav-item" data-nav="private" type="button"><span>私聊调试</span><span class="pill">dm</span></button>
@@ -829,6 +830,30 @@
             </article>
           </section>
 
+          <section class="view" id="view-traces">
+            <div class="grid-2">
+              <article class="panel">
+                <div class="panel-head">
+                  <div class="panel-title">Trace 列表</div>
+                  <button class="button" id="refreshTracesButton" type="button">刷新 Trace</button>
+                </div>
+                <div class="panel-body">
+                  <div class="status" id="tracesStatus"></div>
+                  <div class="log-list" id="traceList"></div>
+                </div>
+              </article>
+              <article class="panel">
+                <div class="panel-head">
+                  <div class="panel-title">Pipeline</div>
+                </div>
+                <div class="panel-body">
+                  <div class="status-grid" id="traceDetailMeta"></div>
+                  <div class="log-list" id="tracePipeline"></div>
+                </div>
+              </article>
+            </div>
+          </section>
+
           <section class="view" id="view-groups">
             <div class="metrics" id="groupStats"></div>
             <div class="groups-layout">
@@ -898,6 +923,7 @@
       const SECTION_META = {
         dashboard: ["概览", "Bridge、NapCat、VoCat 与日志状态。"],
         vocat: ["VoCat 状态", "设备 pull、ack、webhook 与本机测试队列。"],
+        traces: ["Trace", "按 trace_id 查看 webhook → routing → skill → send。"],
         logs: ["日志中心", "多选类别、级别与字段过滤 bridge.log。"],
         groups: ["群聊配置", "白名单、触发规则、表情决策和机器人回复开关。"],
         private: ["私聊调试", "最近 private chat 相关日志。"],
@@ -912,6 +938,8 @@
         logCategories: new Set(["all"]),
         logLevels: new Set(),
         logTimer: null,
+        traces: [],
+        selectedTraceId: "",
       };
 
       const $ = (id) => document.getElementById(id);
@@ -1064,6 +1092,60 @@
         renderVocatGrid(status, $("vocatStatusGrid"));
         renderVocatMetrics(status);
         $("navVocat").textContent = status.device_online ? "on" : "off";
+      }
+
+      function renderTraceList() {
+        $("navTraceCount").textContent = String(state.traces.length);
+        if (!state.traces.length) {
+          $("traceList").innerHTML = `<div class="empty">还没有 trace。</div>`;
+          $("traceDetailMeta").innerHTML = "";
+          $("tracePipeline").innerHTML = "";
+          return;
+        }
+        $("traceList").innerHTML = state.traces.map((trace) => `
+          <button class="nav-item ${trace.trace_id === state.selectedTraceId ? "active" : ""}" data-trace-id="${escapeHtmlAttr(trace.trace_id)}" type="button">
+            <span>${escapeHtml(trace.trace_id)} · ${escapeHtml(trace.source || "")}</span>
+            <span class="pill">${escapeHtml(trace.status || "")}</span>
+          </button>
+        `).join("");
+        $("traceList").querySelectorAll("[data-trace-id]").forEach((button) => {
+          button.addEventListener("click", () => loadTraceDetail(button.dataset.traceId).catch((error) => setStatus($("tracesStatus"), error.message, "error")));
+        });
+      }
+
+      function renderTraceDetail(trace) {
+        state.selectedTraceId = trace.trace_id || "";
+        $("traceDetailMeta").innerHTML = [
+          kv("trace_id", trace.trace_id || ""),
+          kv("source", trace.source || ""),
+          kv("status", trace.status || ""),
+          kv("duration_ms", trace.duration_ms ?? trace.duration ?? 0),
+          kv("input", trace.input || ""),
+        ].join("");
+        const steps = trace.steps || [];
+        $("tracePipeline").innerHTML = steps.length ? steps.map((step, index) => `
+          <div class="kv">
+            <div class="kv-label">${index + 1}. ${escapeHtml(step.stage || "")}</div>
+            <div class="kv-value">${escapeHtml(JSON.stringify(step))}</div>
+          </div>
+        `).join("") : `<div class="empty">没有 pipeline steps。</div>`;
+        renderTraceList();
+      }
+
+      async function loadTraces() {
+        setStatus($("tracesStatus"), "读取中…");
+        const payload = await fetchJson("/admin/api/traces");
+        state.traces = payload.traces || [];
+        if (!state.selectedTraceId && state.traces[0]) state.selectedTraceId = state.traces[0].trace_id;
+        renderTraceList();
+        if (state.selectedTraceId) await loadTraceDetail(state.selectedTraceId, false);
+        setStatus($("tracesStatus"), `已读取 ${state.traces.length} 条。`, "ok");
+      }
+
+      async function loadTraceDetail(traceId, updateList = true) {
+        const payload = await fetchJson(`/admin/api/trace/${encodeURIComponent(traceId)}`);
+        renderTraceDetail(payload.trace || {});
+        if (updateList) renderTraceList();
       }
 
       async function queueVocatTts() {
@@ -1374,6 +1456,7 @@
         $("pageSubtitle").textContent = SECTION_META[state.current][1];
         if (state.current === "dashboard") loadSummary().catch(console.error);
         if (state.current === "vocat") loadVocatStatus().catch((error) => setStatus($("vocatActionStatus"), error.message, "error"));
+        if (state.current === "traces") loadTraces().catch((error) => setStatus($("tracesStatus"), error.message, "error"));
         if (state.current === "logs") loadLogs().catch((error) => setStatus($("logsStatus"), error.message, "error"));
         if (state.current === "groups" && !state.groups.length) loadGroups().catch((error) => setGroupStatus(error.message, "error"));
         if (state.current === "private") loadPrivateLogs().catch(console.error);
@@ -1386,6 +1469,7 @@
       function refreshCurrent() {
         if (state.current === "dashboard") return loadSummary();
         if (state.current === "vocat") return loadVocatStatus();
+        if (state.current === "traces") return loadTraces();
         if (state.current === "logs") return loadLogs();
         if (state.current === "groups") return loadGroups();
         if (state.current === "private") return loadPrivateLogs();
@@ -1398,6 +1482,7 @@
         });
         $("refreshCurrentButton").addEventListener("click", () => refreshCurrent().catch(console.error));
         $("refreshVocatButton").addEventListener("click", () => loadVocatStatus().catch((error) => setStatus($("vocatActionStatus"), error.message, "error")));
+        $("refreshTracesButton").addEventListener("click", () => loadTraces().catch((error) => setStatus($("tracesStatus"), error.message, "error")));
         $("sendVocatTtsButton").addEventListener("click", () => queueVocatTts().catch((error) => setStatus($("vocatActionStatus"), error.message, "error")));
         document.querySelectorAll("[data-expression]").forEach((button) => {
           button.addEventListener("click", () => queueVocatExpression(button.dataset.expression).catch((error) => setStatus($("vocatActionStatus"), error.message, "error")));

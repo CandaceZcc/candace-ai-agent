@@ -38,11 +38,13 @@ from apps.qq_ai_bridge.services.file_service import (
     handle_file_message,
 )
 from apps.qq_ai_bridge.services.group_chat_service import load_group_config, should_log_group
+from apps.qq_ai_bridge.services.group_strategy import group_strategy_decision
 from apps.qq_ai_bridge.services.reaction_follow_service import (
     handle_group_reaction_notice,
     record_group_message_for_reaction_learning,
 )
 from apps.qq_ai_bridge.services.style_service import capture_group_style
+from apps.qq_ai_bridge.services.trace_store import add_trace_step, finish_trace, new_trace_id, start_trace, trace_prefix
 from apps.qq_ai_bridge.services.vocat_service import (
     maybe_handle_vocat_remote_command,
     process_vocat_query,
@@ -215,6 +217,7 @@ class SkillDispatcher:
         text = parsed_data["text"]
         is_mentioned = parsed_data["is_mentioned"]
         raw_message = parsed_data["raw_message"]
+        trace_id = parsed_data.get("trace_id") or new_trace_id(parsed_data)
 
         effective_text = normalize_query_text(text)
         is_private = msg_type == "private"
@@ -226,11 +229,27 @@ class SkillDispatcher:
         if is_group and group_id:
             group_config = load_group_config(group_id)
             if bool(group_config.get("ignore", False)) or not bool(group_config.get("enabled", True)):
-                print(f"[ROUTE] group ignored by config group_id={group_id} enabled={group_config.get('enabled', True)}")
+                print(f"{trace_prefix(trace_id)}[ROUTE] group ignored by config group_id={group_id} enabled={group_config.get('enabled', True)}")
+                add_trace_step(trace_id, "routing", decision="group_ignored", group_id=group_id)
+                finish_trace(trace_id, result="group_ignored", status="ok", source="qq_webhook")
                 return
             should_log = should_log_group(group_id)
             if group_config.get("learn_style", False):
                 capture_group_style("data", group_id, user_id, effective_text, log=print)
+
+            strategy = group_strategy_decision(parsed_data)
+            parsed_data["group_strategy"] = strategy
+            print(
+                f"{trace_prefix(trace_id)}[GROUP_STRATEGY] mode={strategy.get('mode')} "
+                f"reason={strategy.get('reason', '')}"
+            )
+            add_trace_step(
+                trace_id,
+                "group_strategy",
+                mode=strategy.get("mode"),
+                reason=strategy.get("reason"),
+                delay_ms=strategy.get("delay_ms"),
+            )
 
         context = SkillContext(
             data=parsed_data,
@@ -247,7 +266,7 @@ class SkillDispatcher:
             mentioned_self=is_mentioned,
             image_inputs=parsed_data.get("image_inputs", {}),
             file_info=None,
-            logger=print,
+            logger=lambda *args, **kwargs: print(trace_prefix(trace_id), *args, **kwargs),
             timestamp=parsed_data.get("timestamp"),
             message_id=parsed_data.get("message_id"),
             nick=parsed_data.get("nick", ""),
@@ -255,17 +274,22 @@ class SkillDispatcher:
         )
 
         result = dispatch_skill(context, SKILL_REGISTRY)
+        if result:
+            add_trace_step(trace_id, "skill", name=result.source or "unknown", status=result.status)
         if result and result.response_text:
             if is_private:
+                add_trace_step(trace_id, "send", target="qq_private")
                 _send_private_msg_raw(user_id, result.response_text)
                 queue_result = _maybe_enqueue_private_reply_to_vocat(user_id, result.response_text)
                 if queue_result:
                     print(
-                        f"[VOCAT] queued private reply command_id={queue_result.get('command_id')} "
+                        f"{trace_prefix(trace_id)}[VOCAT] queued private reply command_id={queue_result.get('command_id')} "
                         f"user_id={user_id}"
                     )
             elif is_group:
+                add_trace_step(trace_id, "send", target="qq_group")
                 _send_group_msg_raw(group_id, result.response_text)
+        finish_trace(trace_id, result=(result.response_text if result else ""), status="ok", source="qq_webhook")
 
 
 def _caption_pending_key(parsed_data: dict) -> str:
@@ -396,24 +420,30 @@ def _attach_forward_text_if_present(raw_event: dict, parsed: dict) -> dict:
 def qq_webhook():
     data = request.json or {}
     post_type = data.get("post_type")
+    trace_id = new_trace_id(data)
 
     if post_type == "message":
         try:
             parsed = MessageParser.parse_common_data(data)
             if parsed:
+                parsed["trace_id"] = trace_id
+                start_trace(trace_id, source="qq_webhook", input_text=parsed.get("text") or parsed.get("raw_message") or "")
+                add_trace_step(trace_id, "webhook", post_type=post_type, message_type=parsed.get("msg_type"))
                 parsed = _attach_forward_text_if_present(data, parsed)
                 if parsed.get("msg_type") == "group" and not is_group_whitelisted(GROUP_CONFIG_PATH, parsed.get("group_id")):
+                    add_trace_step(trace_id, "routing", decision="group_not_whitelisted", group_id=parsed.get("group_id"))
+                    finish_trace(trace_id, result="group_not_whitelisted", status="ok", source="qq_webhook")
                     return jsonify({"status": "ok", "skipped": "group_not_whitelisted"})
                 if parsed.get("type") == "text":
                     preview = _preview_text(parsed.get("text", ""))
                     if parsed.get("msg_type") == "private":
                         print(
-                            f"[WEBHOOK] recv private user_id={parsed.get('user_id')} "
+                            f"{trace_prefix(trace_id)}[WEBHOOK] recv private user_id={parsed.get('user_id')} "
                             f"nick={parsed.get('nick')!r} text={preview!r}"
                         )
                     elif parsed.get("msg_type") == "group":
                         print(
-                            f"[WEBHOOK] recv group group_id={parsed.get('group_id')} "
+                            f"{trace_prefix(trace_id)}[WEBHOOK] recv group group_id={parsed.get('group_id')} "
                             f"user_id={parsed.get('user_id')} nick={parsed.get('nick')!r} text={preview!r}"
                         )
                         record_group_message_for_reaction_learning(
@@ -427,7 +457,7 @@ def qq_webhook():
                         )
                 elif parsed.get("type") == "file":
                     print(
-                        f"[WEBHOOK] recv file msg_type={parsed.get('msg_type')} "
+                        f"{trace_prefix(trace_id)}[WEBHOOK] recv file msg_type={parsed.get('msg_type')} "
                         f"user_id={parsed.get('user_id')} group_id={parsed.get('group_id')} "
                         f"name={parsed.get('file_info', {}).get('name')!r}"
                     )
@@ -436,13 +466,17 @@ def qq_webhook():
                         maybe_handle_vocat_remote_command(parsed.get("user_id"), parsed.get("text", ""))
                     )
                     if remote_result and remote_result.get("handled"):
+                        add_trace_step(trace_id, "routing", decision="vocat_remote_control")
+                        add_trace_step(trace_id, "send", target="qq_private")
                         _send_private_msg_raw(parsed.get("user_id"), remote_result.get("reply", "已执行。"))
+                        finish_trace(trace_id, result=remote_result.get("reply", ""), status="ok", source="vocat_remote_control")
                         return jsonify({"status": "ok", "source": "vocat_remote_control"})
                 if not _maybe_handle_image_caption_merge(parsed):
                     SkillDispatcher.dispatch(parsed)
         except Exception as e:
-            print(f"[WEBHOOK] Exception during message processing: {e}")
+            print(f"{trace_prefix(trace_id)}[WEBHOOK] Exception during message processing: {e}")
             traceback.print_exc()
+            finish_trace(trace_id, result=str(e), status="error", source="qq_webhook")
 
     elif post_type == "notice":
         notice_type = data.get("notice_type")
@@ -516,16 +550,30 @@ def vocat_webhook():
         )
 
     data = request.get_json(silent=True) or {}
+    trace_id = new_trace_id(data)
+    data = dict(data)
+    data.setdefault("tool_call_id", trace_id)
     remote_addr = request.remote_addr or "unknown"
-    query_preview = _preview_text(data.get("query") or data.get("text") or data.get("message") or "")
+    query_preview = _preview_text(
+        data.get("raw_query")
+        or data.get("user_query")
+        or data.get("original_query")
+        or data.get("asr_text")
+        or data.get("text")
+        or data.get("message")
+        or data.get("content")
+        or data.get("query")
+        or ""
+    )
     _LAST_VOCAT_POST = {
         "at": datetime.now(timezone.utc).isoformat(),
         "remote_addr": remote_addr,
         "is_local_request": remote_addr in {"127.0.0.1", "::1", "localhost"},
         "query_preview": query_preview,
+        "trace_id": trace_id,
     }
     print(
-        f"[VOCAT] recv remote_addr={remote_addr} query={query_preview!r} "
+        f"{trace_prefix(trace_id)}[VOCAT] recv remote_addr={remote_addr} query={query_preview!r} "
         f"keys={sorted(data.keys())}"
     )
     authorized, error_response = _authorized_vocat_request()
@@ -535,22 +583,26 @@ def vocat_webhook():
     try:
         result = _run_async(process_vocat_query(data))
         record_vocat_webhook(
-            query=data.get("query") or data.get("text") or data.get("message") or "",
+            query=result.get("query") or data.get("query") or data.get("text") or data.get("message") or "",
             reply=result.get("reply", ""),
             expression=result.get("expression"),
             source=result.get("source", ""),
             remote_addr=remote_addr,
+            trace_id=result.get("trace_id", trace_id),
+            model_reply=result.get("model_reply") or "",
         )
         return jsonify(result)
     except Exception as exc:
-        print(f"[VOCAT] webhook processing failed: {exc}")
+        print(f"{trace_prefix(trace_id)}[VOCAT] webhook processing failed: {exc}")
         traceback.print_exc()
+        finish_trace(trace_id, result=str(exc), status="error", source="vocat_webhook")
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @webhook_bp.route("/vocat/poll", methods=["GET"])
 def vocat_poll():
     """Return the next queued local command for a VoCat device."""
+    trace_id = new_trace_id({"tool_call_id": request.args.get("trace_id") or ""})
     authorized, error_response = _authorized_vocat_request()
     if not authorized:
         payload, status = error_response
@@ -561,9 +613,10 @@ def vocat_poll():
     queue_size = get_vocat_queue_status()["queue_size"]
     record_vocat_poll(command=command, queue_size=queue_size)
     if not command:
+        print(f"{trace_prefix(trace_id)}[VOCAT] poll empty queue_size={queue_size}")
         return jsonify({"ok": True, "has_command": False, "queue": queue_size})
     print(
-        f"[VOCAT] poll deliver command_id={command.get('id')} type={command.get('type')} "
+        f"{trace_prefix(trace_id)}[VOCAT] poll deliver command_id={command.get('id')} type={command.get('type')} "
         f"source={command.get('source', '')}"
     )
     return jsonify({"ok": True, "has_command": True, "command": command})
@@ -572,6 +625,7 @@ def vocat_poll():
 @webhook_bp.route("/vocat/ack", methods=["POST"])
 def vocat_ack():
     """Acknowledge a delivered VoCat command."""
+    trace_id = new_trace_id({})
     authorized, error_response = _authorized_vocat_request()
     if not authorized:
         payload, status = error_response
@@ -581,7 +635,7 @@ def vocat_ack():
     command_id = data.get("command_id") or data.get("id") or request.values.get("command_id")
     result = ack_vocat_command(str(command_id or ""))
     record_vocat_ack(str(command_id or ""), result)
-    print(f"[VOCAT] ack command_id={command_id} result={result}")
+    print(f"{trace_prefix(trace_id)}[VOCAT] ack command_id={command_id} result={result}")
     return jsonify(result)
 
 

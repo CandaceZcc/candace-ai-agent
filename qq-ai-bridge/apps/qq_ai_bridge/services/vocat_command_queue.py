@@ -163,6 +163,8 @@ def record_vocat_webhook(
     expression: str | int | None = None,
     source: str = "",
     remote_addr: str = "",
+    trace_id: str = "",
+    model_reply: str = "",
 ) -> dict[str, Any]:
     with _STATUS_LOCK:
         _STATUS.update(
@@ -173,6 +175,8 @@ def record_vocat_webhook(
                 "last_expression": normalize_vocat_expression(expression),
                 "last_source": str(source or ""),
                 "last_remote_addr": str(remote_addr or ""),
+                "last_trace_id": str(trace_id or ""),
+                "last_model_reply": _preview(model_reply, 240),
             }
         )
         return dict(_STATUS)

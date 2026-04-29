@@ -74,6 +74,56 @@ class VocatServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["source"], "kimi")
         self.assertEqual(result["expression"], "happy")
 
+    @patch("apps.qq_ai_bridge.services.vocat_service.call_kimi_text_async", new_callable=AsyncMock)
+    @patch("apps.qq_ai_bridge.services.vocat_service.send_private_msg_async", new_callable=AsyncMock)
+    async def test_explicit_qq_forward_uses_command_body_only(self, mock_send_private, mock_kimi):
+        mock_send_private.return_value = {"ok": True}
+
+        result = await vocat_service.process_vocat_query({"query": "发 QQ 测试"})
+
+        self.assertEqual(result["source"], "qq_forward")
+        self.assertEqual(result["targets"], ["qq", "vocat"])
+        mock_send_private.assert_awaited_once()
+        self.assertEqual(mock_send_private.await_args.args[1], "[VoCat] 测试")
+        mock_kimi.assert_not_awaited()
+
+    @patch("apps.qq_ai_bridge.services.vocat_service.call_kimi_text_async", new_callable=AsyncMock)
+    @patch("apps.qq_ai_bridge.services.vocat_service.send_private_msg_async", new_callable=AsyncMock)
+    async def test_model_refusal_without_raw_query_does_not_forward_or_call_llm(self, mock_send_private, mock_kimi):
+        result = await vocat_service.process_vocat_query({"query": "我无法帮你发送 QQ 消息。"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source"], "vocat_model_refusal")
+        self.assertEqual(result["reply"], "本机没有拿到原始语音")
+        mock_send_private.assert_not_awaited()
+        mock_kimi.assert_not_awaited()
+
+    @patch("apps.qq_ai_bridge.services.vocat_service.call_kimi_text_async", new_callable=AsyncMock)
+    @patch("apps.qq_ai_bridge.services.vocat_service.send_private_msg_async", new_callable=AsyncMock)
+    async def test_raw_query_takes_priority_over_model_reply_for_routing(self, mock_send_private, mock_kimi):
+        mock_send_private.return_value = {"ok": True}
+
+        result = await vocat_service.process_vocat_query(
+            {"raw_query": "发 QQ 测试", "query": "我无法帮你发送 QQ 消息。"}
+        )
+
+        self.assertEqual(result["source"], "qq_forward")
+        self.assertEqual(result["query"], "发 QQ 测试")
+        self.assertEqual(result["model_reply"], "我无法帮你发送 QQ 消息。")
+        self.assertEqual(mock_send_private.await_args.args[1], "[VoCat] 测试")
+        mock_kimi.assert_not_awaited()
+
+    @patch("apps.qq_ai_bridge.services.vocat_service.call_kimi_text_async", new_callable=AsyncMock)
+    async def test_repo_docs_query_hits_local_repo_docs(self, mock_kimi):
+        mock_kimi.return_value = "项目启动：运行 start-agent.sh。"
+
+        result = await vocat_service.process_vocat_query({"query": "项目怎么启动"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source"], "local_repo_docs")
+        self.assertIn("项目启动", result["reply"])
+        mock_kimi.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main()
