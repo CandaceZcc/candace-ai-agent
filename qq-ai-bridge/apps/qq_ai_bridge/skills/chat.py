@@ -1,6 +1,10 @@
 from apps.qq_ai_bridge.services.group_chat_service import enqueue_group_text
 from apps.qq_ai_bridge.services.private_chat_service import enqueue_private_text
 from apps.qq_ai_bridge.config.settings import GLOBAL_LISTEN_GROUP_IDS
+from apps.qq_ai_bridge.services.emoji_service import infer_reaction_preferred_order
+from apps.qq_ai_bridge.services.group_strategy import group_strategy_decision, record_group_strategy_reply
+from apps.qq_ai_bridge.services.response_action import ActionKind, ResponseAction, execute_group_action
+from apps.qq_ai_bridge.services.trace_store import add_trace_step
 from apps.qq_ai_bridge.skills.base import Skill, SkillContext, SkillResult
 
 
@@ -48,7 +52,7 @@ class ChatSkill(Skill):
             configured_reply_all = bool(context.group_config.get("reply_all_messages", False))
             fallback_global_listen = int(context.group_id or 0) in GLOBAL_LISTEN_GROUP_IDS
             global_listen = configured_reply_all or fallback_global_listen
-            explicit_trigger = bool(context.mentioned_self or ai_prefix_triggered or bot_alias_triggered)
+            explicit_trigger = bool(context.mentioned_self or ai_prefix_triggered or bot_alias_triggered or _is_reply_to_self(context))
             if _is_addressed_to_someone_else(context, explicit_trigger=explicit_trigger):
                 context.log(
                     f"[ROUTE] 群聊消息未入队 group_id={context.group_id}"
@@ -57,6 +61,66 @@ class ChatSkill(Skill):
                     f" reply_all_messages={bool(context.group_config.get('reply_all_messages', False))}"
                 )
                 return SkillResult(handled=True, source=self.name, status="ignore")
+            strategy_input = {
+                **context.data,
+                "text": query,
+                "explicit_trigger": explicit_trigger,
+                "is_mentioned": context.mentioned_self,
+                "group_id": context.group_id,
+                "self_id": context.self_id,
+            }
+            strategy = group_strategy_decision(strategy_input, context.group_config)
+            context.data["group_strategy"] = strategy
+            trace_id = context.data.get("trace_id")
+            context.log(
+                f"[GROUP_STRATEGY] mode={strategy.get('mode')}"
+                f" reason={strategy.get('reason', '')}"
+                f" delay={strategy.get('delay_ms', 0)}"
+                f" probabilities={strategy.get('probabilities', {})}"
+            )
+            add_trace_step(
+                trace_id,
+                "group_strategy",
+                mode=strategy.get("mode"),
+                reason=strategy.get("reason"),
+                delay_ms=strategy.get("delay_ms"),
+                probabilities=strategy.get("probabilities"),
+                cooldown_hit=strategy.get("cooldown_hit"),
+            )
+            if strategy.get("mode") == "silence":
+                return SkillResult(
+                    handled=True,
+                    source=self.name,
+                    status="ignore",
+                    response_payload={"status": "strategy_silence", "strategy": strategy},
+                )
+            if strategy.get("mode") == "reaction":
+                target_message_id = context.message_id
+                if target_message_id:
+                    action_result = execute_group_action(
+                        context.group_id,
+                        ResponseAction(
+                            kind=ActionKind.REACTION,
+                            reaction_count=1,
+                            preferred_order=infer_reaction_preferred_order(query),
+                            reason=strategy.get("reason", "group_strategy"),
+                        ),
+                        target_message_id=target_message_id,
+                        quiet=not context.should_log,
+                    )
+                    if action_result.get("ok"):
+                        record_group_strategy_reply(context.group_id)
+                    return SkillResult(
+                        handled=True,
+                        source=self.name,
+                        response_payload={"status": "strategy_reaction", "strategy": strategy, "result": action_result},
+                    )
+                return SkillResult(
+                    handled=True,
+                    source=self.name,
+                    status="ignore",
+                    response_payload={"status": "strategy_reaction_missing_message_id", "strategy": strategy},
+                )
             queue_info = enqueue_group_text(
                 context.group_id,
                 context.user_id,
@@ -67,6 +131,8 @@ class ChatSkill(Skill):
                 timestamp=context.timestamp,
                 message_id=context.data.get("message_id"),
                 reply_reference=context.data.get("reply_reference"),
+                strategy=strategy,
+                trace_id=trace_id,
                 log=context.log,
             )
             if queue_info.get("queued"):
@@ -120,6 +186,14 @@ def _is_addressed_to_someone_else(context: SkillContext, *, explicit_trigger: bo
     if reply_reference.get("message_id") and _looks_like_direct_reply_to_other(context.effective_text):
         return True
     return False
+
+
+def _is_reply_to_self(context: SkillContext) -> bool:
+    self_id = str(context.self_id or context.data.get("self_id") or "").strip()
+    reply_reference = context.data.get("reply_reference") or {}
+    if not self_id or not isinstance(reply_reference, dict):
+        return False
+    return str(reply_reference.get("sender_id") or "").strip() == self_id
 
 
 def _looks_like_direct_reply_to_other(text: str) -> bool:

@@ -20,6 +20,7 @@ from apps.qq_ai_bridge.config.settings import GROUP_CONFIG_PATH
 from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
 from apps.qq_ai_bridge.config.settings import GLOBAL_LISTEN_GROUP_IDS
 from apps.qq_ai_bridge.services.emoji_service import infer_reaction_preferred_order
+from apps.qq_ai_bridge.services.group_strategy import normalize_group_strategy_config, record_group_strategy_reply
 from apps.qq_ai_bridge.services.prompt_service import prepare_group_ai_prompt
 from apps.qq_ai_bridge.services.response_action import (
     ActionKind,
@@ -27,8 +28,10 @@ from apps.qq_ai_bridge.services.response_action import (
     execute_group_action,
     parse_llm_response_action,
 )
+from apps.qq_ai_bridge.services.trace_store import add_trace_step
 
 GROUP_DEBOUNCE_MS = 5000
+_DEFAULT_GROUP_DEBOUNCE_MS = GROUP_DEBOUNCE_MS
 GENERATED_GROUP_FILE_DIR = os.path.join(BASE_DATA_DIR, "generated_files", "group")
 _CODE_BLOCK_PATTERN = re.compile(r"```([a-zA-Z0-9_+.-]*)\n(.*?)```", re.DOTALL)
 _CODE_REQUEST_PATTERN = re.compile(
@@ -61,6 +64,8 @@ class PendingGroupMessage:
     message_id: int | None = None
     reply_reference: dict | None = None
     explicit_trigger: bool = False
+    strategy: dict | None = None
+    trace_id: str = ""
 
 
 @dataclass
@@ -120,6 +125,8 @@ def enqueue_group_text(
     timestamp: int = 0,
     message_id: int | None = None,
     reply_reference: dict | None = None,
+    strategy: dict | None = None,
+    trace_id: str | None = None,
     log=print,
 ) -> dict:
     """Queue group text so one group is processed with a shared debounce window."""
@@ -136,7 +143,11 @@ def enqueue_group_text(
         message_id=message_id,
         reply_reference=reply_reference,
         explicit_trigger=bool(explicit_trigger),
+        strategy=strategy if isinstance(strategy, dict) else None,
+        trace_id=str(trace_id or ""),
     )
+    strategy_cfg = normalize_group_strategy_config(group_config)
+    context_window_ms = _context_window_ms(strategy_cfg)
 
     with state.lock:
         configured_reply_all = bool(group_config.get("reply_all_messages", False))
@@ -164,7 +175,7 @@ def enqueue_group_text(
         f" pending_count={pending_count}"
         f" explicit_trigger={explicit_trigger}"
         f" worker_running={worker_running}"
-        f" debounce_ms={GROUP_DEBOUNCE_MS}"
+        f" debounce_ms={context_window_ms}"
     )
     return {
         "queued": True,
@@ -185,6 +196,8 @@ def _get_group_chat_state(group_id) -> GroupChatState:
 
 def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
     state = _get_group_chat_state(group_id)
+    strategy_cfg = normalize_group_strategy_config(group_config)
+    context_window_ms = _context_window_ms(strategy_cfg)
     while True:
         with state.lock:
             if not state.pending:
@@ -194,14 +207,18 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             if _should_flush_head_message_now(state.pending):
                 wait_ms = 0
             else:
-                wait_ms = max(0, int(GROUP_DEBOUNCE_MS - (time.monotonic() - state.last_enqueue_monotonic) * 1000))
+                wait_ms = max(0, int(context_window_ms - (time.monotonic() - state.last_enqueue_monotonic) * 1000))
 
         if wait_ms > 0:
             time.sleep(wait_ms / 1000.0)
             continue
 
         with state.lock:
-            extension_ms = _compute_turn_extension_ms(state.pending, state.debounce_started_monotonic)
+            extension_ms = _compute_turn_extension_ms(
+                state.pending,
+                state.debounce_started_monotonic,
+                max_window_seconds=strategy_cfg["context_window_sec"],
+            )
         if extension_ms > 0:
             time.sleep(extension_ms / 1000.0)
             continue
@@ -225,6 +242,8 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
         merged_text = merged_batch["prompt_text"]
         merged_count = merged_batch["message_count"]
         user_count = merged_batch["user_count"]
+        trace_id = _pick_batch_trace_id(batch)
+        add_trace_step(trace_id, "group_context", group_id=group_id, messages=merged_count, window_sec=strategy_cfg["context_window_sec"])
 
         if not merged_text:
             log(f"[GROUP_CHAT] skip-empty group_id={group_id} merged_count={merged_count}")
@@ -235,6 +254,10 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             debounce_window_ms = int((time.monotonic() - debounce_started_monotonic) * 1000)
 
         log(
+            f"[GROUP_CONTEXT] messages={merged_count} window={strategy_cfg['context_window_sec']}s "
+            f"group_id={group_id}"
+        )
+        log(
             f"[GROUP_CHAT] flushing group_id={group_id}"
             f" merged_message_count={merged_count}"
             f" merged_user_count={user_count}"
@@ -244,13 +267,15 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
         safety_action = _build_group_safety_action(merged_text)
         if safety_action:
             reply_to_message_id = _pick_text_reply_target_message_id(batch, safety_action.text)
-            execute_group_action(
+            action_result = execute_group_action(
                 group_id,
                 safety_action,
                 target_message_id=None,
                 quiet=not should_log_group(group_id),
                 reply_to_message_id=reply_to_message_id,
             )
+            if action_result.get("ok"):
+                record_group_strategy_reply(group_id)
             log(
                 f"[GROUP_CHAT] safety_blocked group_id={group_id}"
                 f" reason={safety_action.reason!r} reply_to_message_id={reply_to_message_id or '-'}"
@@ -266,6 +291,7 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                 quiet=not should_log_group(group_id),
             )
             if action_result.get("ok"):
+                record_group_strategy_reply(group_id)
                 append_group_chat_log(
                     BASE_DATA_DIR,
                     group_id,
@@ -308,6 +334,7 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                 )
                 reacted = int(action_result.get("applied_count", 0))
                 if reacted > 0:
+                    record_group_strategy_reply(group_id)
                     log(
                         f"[GROUP_CHAT] direct_reacted group_id={group_id} "
                         f"message_id={target_message_id} count={reacted}"
@@ -349,6 +376,7 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                         quiet=not should_log_group(group_id),
                     )
                     if action_result.get("ok"):
+                        record_group_strategy_reply(group_id)
                         log(
                             f"[GROUP_CHAT] llm_decision=reaction group_id={group_id}"
                             f" message_id={target_message_id}"
@@ -408,6 +436,7 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                 quiet=not should_log_group(group_id),
             )
             if action_result.get("ok"):
+                record_group_strategy_reply(group_id)
                 log(
                     f"[GROUP_CHAT] llm_action=reaction group_id={group_id}"
                     f" message_id={target_message_id} applied_count={action_result.get('applied_count', 0)}"
@@ -437,9 +466,14 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             )
             continue
         llm_action.text = _humanize_group_reply(llm_action.text, merged_text)
+        strategy = _pick_batch_strategy(batch)
+        delay_ms = int(strategy.get("delay_ms") or 0)
+        if strategy.get("mode") == "delay_text" and delay_ms > 0:
+            log(f"[GROUP_CHAT] strategy_delay group_id={group_id} delay_ms={delay_ms}")
+            time.sleep(delay_ms / 1000.0)
         requested_parts = _detect_requested_parts(batch[-1].text if batch else "")
         reply_to_message_id = _pick_text_reply_target_message_id(batch, llm_action.text)
-        execute_group_action(
+        action_result = execute_group_action(
             group_id,
             llm_action,
             target_message_id=None,
@@ -447,6 +481,8 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             force_parts=requested_parts,
             reply_to_message_id=reply_to_message_id,
         )
+        if action_result.get("ok"):
+            record_group_strategy_reply(group_id)
         append_group_chat_log(
             BASE_DATA_DIR,
             group_id,
@@ -510,6 +546,26 @@ def _merge_pending_group_messages(messages: list[PendingGroupMessage]) -> dict:
         "user_count": len({str(block['user_id']) for block in merged_blocks}),
         "merged_blocks": merged_blocks,
     }
+
+
+def _pick_batch_trace_id(messages: list[PendingGroupMessage]) -> str:
+    for item in reversed(messages or []):
+        if item.trace_id:
+            return item.trace_id
+    return ""
+
+
+def _pick_batch_strategy(messages: list[PendingGroupMessage]) -> dict:
+    for item in reversed(messages or []):
+        if isinstance(item.strategy, dict):
+            return item.strategy
+    return {}
+
+
+def _context_window_ms(strategy_cfg: dict) -> int:
+    if GROUP_DEBOUNCE_MS != _DEFAULT_GROUP_DEBOUNCE_MS:
+        return max(0, int(GROUP_DEBOUNCE_MS))
+    return max(0, int(strategy_cfg.get("context_window_sec") or 5) * 1000)
 
 
 def _should_flush_head_message_now(messages: list[PendingGroupMessage]) -> bool:
@@ -580,11 +636,16 @@ def _looks_like_action_or_question_request(text: str) -> bool:
     )
 
 
-def _compute_turn_extension_ms(messages: list[PendingGroupMessage], debounce_started_monotonic: float) -> int:
+def _compute_turn_extension_ms(
+    messages: list[PendingGroupMessage],
+    debounce_started_monotonic: float,
+    *,
+    max_window_seconds: int = _TURN_EXTENSION_MAX_WINDOW_SECONDS,
+) -> int:
     if len(messages) < 2 or not debounce_started_monotonic:
         return 0
     elapsed = time.monotonic() - debounce_started_monotonic
-    if elapsed >= _TURN_EXTENSION_MAX_WINDOW_SECONDS:
+    if elapsed >= max(1, int(max_window_seconds)):
         return 0
     latest = messages[-1]
     previous = messages[-2]

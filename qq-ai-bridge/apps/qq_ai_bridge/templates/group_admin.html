@@ -485,6 +485,7 @@
 
       .group-primary,
       .group-policy,
+      .group-strategy,
       .group-extensions,
       .group-actions {
         min-width: 0;
@@ -526,6 +527,29 @@
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
+      }
+
+      .group-strategy {
+        grid-column: 1 / -1;
+        padding-top: 4px;
+        border-top: 1px solid var(--border);
+      }
+
+      .strategy-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(120px, 1fr));
+        gap: 12px;
+      }
+
+      .strategy-field {
+        min-width: 0;
+        display: grid;
+        gap: 7px;
+      }
+
+      .strategy-field input[type="range"] {
+        width: 100%;
+        accent-color: var(--accent);
       }
 
       .chip,
@@ -670,7 +694,8 @@
 
         .groups-layout,
         .grid-2,
-        .group-card {
+        .group-card,
+        .strategy-grid {
           grid-template-columns: 1fr;
         }
 
@@ -697,6 +722,7 @@
         .status-grid,
         .filter-inputs,
         .vocat-actions,
+        .strategy-grid,
         .nav-list {
           grid-template-columns: 1fr;
         }
@@ -929,6 +955,16 @@
         private: ["私聊调试", "最近 private chat 相关日志。"],
         system: ["系统配置", "只读展示路径、端口与关键环境变量是否已设置。"],
       };
+      const DEFAULT_STRATEGY = {
+        reply_probability: 0.7,
+        silence_probability: 0.2,
+        reaction_probability: 0.1,
+        delay_min_ms: 300,
+        delay_max_ms: 2000,
+        context_window_sec: 5,
+        require_mention_for_reply: false,
+        cooldown_sec: 3,
+      };
       const LOG_CATEGORIES = ["all", "vocat", "group", "private", "scheduler", "skill", "vision", "reaction", "llm", "napcat", "system"];
       const LOG_LEVELS = ["info", "warning", "error"];
       const state = {
@@ -940,6 +976,7 @@
         logTimer: null,
         traces: [],
         selectedTraceId: "",
+        strategySaveTimers: new Map(),
       };
 
       const $ = (id) => document.getElementById(id);
@@ -1243,6 +1280,7 @@
       }
 
       function normalizeGroup(group) {
+        const rawStrategy = group.strategy || group.strategy_config || {};
         return {
           ...group,
           enabled: group.enabled !== false,
@@ -1255,7 +1293,36 @@
           reaction_decision_mode: ["llm_first", "hybrid", "rule_first"].includes(group.reaction_decision_mode)
             ? group.reaction_decision_mode
             : "llm_first",
+          strategy: normalizeStrategy(rawStrategy),
         };
+      }
+
+      function normalizeStrategy(strategy) {
+        const merged = {...DEFAULT_STRATEGY, ...(strategy || {})};
+        const normalized = {
+          reply_probability: clampNumber(merged.reply_probability, 0, 1, DEFAULT_STRATEGY.reply_probability),
+          silence_probability: clampNumber(merged.silence_probability, 0, 1, DEFAULT_STRATEGY.silence_probability),
+          reaction_probability: clampNumber(merged.reaction_probability, 0, 1, DEFAULT_STRATEGY.reaction_probability),
+          delay_min_ms: clampInteger(merged.delay_min_ms, 0, 60000, DEFAULT_STRATEGY.delay_min_ms),
+          delay_max_ms: clampInteger(merged.delay_max_ms, 0, 60000, DEFAULT_STRATEGY.delay_max_ms),
+          context_window_sec: clampInteger(merged.context_window_sec, 1, 60, DEFAULT_STRATEGY.context_window_sec),
+          require_mention_for_reply: Boolean(merged.require_mention_for_reply),
+          cooldown_sec: clampInteger(merged.cooldown_sec, 0, 3600, DEFAULT_STRATEGY.cooldown_sec),
+        };
+        if (normalized.delay_max_ms < normalized.delay_min_ms) normalized.delay_max_ms = normalized.delay_min_ms;
+        return normalized;
+      }
+
+      function clampNumber(value, min, max, fallback) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return fallback;
+        return Math.min(max, Math.max(min, parsed));
+      }
+
+      function clampInteger(value, min, max, fallback) {
+        const parsed = Number.parseInt(value, 10);
+        if (!Number.isFinite(parsed)) return fallback;
+        return Math.min(max, Math.max(min, parsed));
       }
 
       function renderGroupStats() {
@@ -1329,6 +1396,26 @@
                 ${extensionChip("mute_log", "Mute log", group.mute_log)}
               </div>
             </section>
+            <section class="group-strategy">
+              <div class="section-kicker">策略配置</div>
+              <div class="strategy-grid">
+                ${strategyRange("reply_probability", "回复概率", group.strategy.reply_probability)}
+                ${strategyRange("silence_probability", "沉默概率", group.strategy.silence_probability)}
+                ${strategyRange("reaction_probability", "表情概率", group.strategy.reaction_probability)}
+                ${strategyNumber("delay_min_ms", "最小延迟 ms", group.strategy.delay_min_ms, 0, 60000)}
+                ${strategyNumber("delay_max_ms", "最大延迟 ms", group.strategy.delay_max_ms, 0, 60000)}
+                ${strategyNumber("context_window_sec", "上下文秒", group.strategy.context_window_sec, 1, 60)}
+                ${strategyNumber("cooldown_sec", "冷却秒", group.strategy.cooldown_sec, 0, 3600)}
+                <div class="toggle-row">
+                  <span>必须艾特</span>
+                  <label class="switch">
+                    <input type="checkbox" data-strategy="require_mention_for_reply" ${group.strategy.require_mention_for_reply ? "checked" : ""}>
+                    <span class="slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="status" data-strategy-status></div>
+            </section>
             <section class="group-actions">
               <button class="button danger" type="button" data-action="remove">删除</button>
             </section>
@@ -1342,6 +1429,25 @@
           <label class="chip-toggle">
             <input type="checkbox" data-field="${field}" ${checked ? "checked" : ""}>
             ${escapeHtml(label)}
+          </label>
+        `;
+      }
+
+      function strategyRange(field, label, value) {
+        const display = Number(value || 0).toFixed(2);
+        return `
+          <label class="strategy-field">
+            <span>${escapeHtml(label)} · <span data-strategy-value="${field}">${display}</span></span>
+            <input type="range" min="0" max="1" step="0.05" value="${escapeHtmlAttr(value)}" data-strategy="${field}">
+          </label>
+        `;
+      }
+
+      function strategyNumber(field, label, value, min, max) {
+        return `
+          <label class="strategy-field">
+            <span>${escapeHtml(label)}</span>
+            <input class="input" type="number" min="${min}" max="${max}" value="${escapeHtmlAttr(value)}" data-strategy="${field}">
           </label>
         `;
       }
@@ -1363,6 +1469,25 @@
                 state.groups[index][input.dataset.field] = input.value;
               });
             }
+          });
+          card.querySelectorAll("[data-strategy]").forEach((input) => {
+            const syncStrategy = () => {
+              const field = input.dataset.strategy;
+              const strategy = state.groups[index].strategy || normalizeStrategy({});
+              if (input.type === "checkbox") {
+                strategy[field] = input.checked;
+              } else if (["reply_probability", "silence_probability", "reaction_probability"].includes(field)) {
+                strategy[field] = clampNumber(input.value, 0, 1, DEFAULT_STRATEGY[field]);
+                const valueLabel = card.querySelector(`[data-strategy-value="${field}"]`);
+                if (valueLabel) valueLabel.textContent = Number(strategy[field]).toFixed(2);
+              } else {
+                strategy[field] = clampInteger(input.value, Number(input.min || 0), Number(input.max || 60000), DEFAULT_STRATEGY[field]);
+              }
+              state.groups[index].strategy = normalizeStrategy(strategy);
+              scheduleStrategySave(index, card);
+            };
+            input.addEventListener("input", syncStrategy);
+            input.addEventListener("change", syncStrategy);
           });
           card.querySelectorAll("[data-trigger]").forEach((button) => {
             button.addEventListener("click", () => {
@@ -1391,8 +1516,40 @@
             learn_style: Boolean(group.learn_style),
             capture_all_messages: Boolean(group.capture_all_messages),
             mute_log: Boolean(group.mute_log),
+            strategy: normalizeStrategy(group.strategy),
           })),
         };
+      }
+
+      function scheduleStrategySave(index, card) {
+        const group = state.groups[index];
+        if (!group) return;
+        const groupId = group.group_id;
+        const previous = state.strategySaveTimers.get(groupId);
+        if (previous) clearTimeout(previous);
+        const statusEl = card.querySelector("[data-strategy-status]");
+        if (statusEl) setStatus(statusEl, "策略待保存…");
+        const timer = setTimeout(() => {
+          saveGroupStrategy(index, card).catch((error) => {
+            if (statusEl) setStatus(statusEl, error.message, "error");
+          });
+        }, 400);
+        state.strategySaveTimers.set(groupId, timer);
+      }
+
+      async function saveGroupStrategy(index, card) {
+        const group = state.groups[index];
+        if (!group) return;
+        const statusEl = card.querySelector("[data-strategy-status]");
+        if (statusEl) setStatus(statusEl, "策略保存中…");
+        const payload = await fetchJson("/admin/api/group/update", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({group_id: group.group_id, strategy: normalizeStrategy(group.strategy)}),
+        });
+        state.groups[index].strategy = normalizeStrategy(payload.strategy);
+        state.strategySaveTimers.delete(group.group_id);
+        if (statusEl) setStatus(statusEl, "策略已保存，下一条消息生效。", "ok");
       }
 
       async function loadGroups() {
@@ -1438,6 +1595,7 @@
           bot_can_reply: true,
           trigger_mode: "mention",
           reaction_decision_mode: "llm_first",
+          strategy: normalizeStrategy({}),
         }));
         $("newGroupId").value = "";
         $("newGroupName").value = "";

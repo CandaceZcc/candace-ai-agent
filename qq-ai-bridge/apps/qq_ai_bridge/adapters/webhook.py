@@ -237,11 +237,12 @@ class SkillDispatcher:
             if group_config.get("learn_style", False):
                 capture_group_style("data", group_id, user_id, effective_text, log=print)
 
-            strategy = group_strategy_decision(parsed_data)
+            strategy = group_strategy_decision(parsed_data, group_config)
             parsed_data["group_strategy"] = strategy
             print(
                 f"{trace_prefix(trace_id)}[GROUP_STRATEGY] mode={strategy.get('mode')} "
-                f"reason={strategy.get('reason', '')}"
+                f"reason={strategy.get('reason', '')} delay={strategy.get('delay_ms', 0)} "
+                f"probabilities={strategy.get('probabilities', {})}"
             )
             add_trace_step(
                 trace_id,
@@ -249,6 +250,8 @@ class SkillDispatcher:
                 mode=strategy.get("mode"),
                 reason=strategy.get("reason"),
                 delay_ms=strategy.get("delay_ms"),
+                probabilities=strategy.get("probabilities"),
+                cooldown_hit=strategy.get("cooldown_hit"),
             )
 
         context = SkillContext(

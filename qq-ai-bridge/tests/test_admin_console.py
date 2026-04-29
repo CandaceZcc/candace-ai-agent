@@ -5,7 +5,13 @@ import unittest
 
 sys.path.insert(0, "qq-ai-bridge")
 
-from apps.qq_ai_bridge.adapters.admin_ui import mask_sensitive, parse_log_line, parse_multi_filter_values, tail_lines
+from apps.qq_ai_bridge.adapters.admin_ui import (
+    _normalize_strategy_payload,
+    mask_sensitive,
+    parse_log_line,
+    parse_multi_filter_values,
+    tail_lines,
+)
 
 
 class AdminConsoleHelpersTest(unittest.TestCase):
@@ -66,6 +72,28 @@ class AdminConsoleHelpersTest(unittest.TestCase):
         self.assertEqual(len(lines), 1000)
         self.assertEqual(lines[0], "line-105")
         self.assertEqual(lines[-1], "line-1104")
+
+    def test_normalize_strategy_payload_rejects_invalid_probability(self):
+        with self.assertRaises(ValueError):
+            _normalize_strategy_payload({"reply_probability": 2})
+
+    def test_normalize_strategy_payload_preserves_valid_values(self):
+        strategy = _normalize_strategy_payload(
+            {
+                "reply_probability": 0.6,
+                "silence_probability": 0.3,
+                "reaction_probability": 0.1,
+                "delay_min_ms": 500,
+                "delay_max_ms": 4000,
+                "context_window_sec": 8,
+                "require_mention_for_reply": True,
+                "cooldown_sec": 5,
+            }
+        )
+
+        self.assertEqual(strategy["reply_probability"], 0.6)
+        self.assertEqual(strategy["delay_max_ms"], 4000)
+        self.assertTrue(strategy["require_mention_for_reply"])
 
 
 if __name__ == "__main__":

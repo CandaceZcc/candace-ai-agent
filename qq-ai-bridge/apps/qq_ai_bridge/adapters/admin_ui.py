@@ -26,6 +26,7 @@ from apps.qq_ai_bridge.services.vocat_command_queue import (
     get_vocat_queue_status,
     get_vocat_runtime_status,
 )
+from apps.qq_ai_bridge.services.group_strategy import DEFAULT_GROUP_STRATEGY, normalize_group_strategy_config
 from apps.qq_ai_bridge.services.trace_store import get_trace, list_traces
 
 admin_ui_bp = Blueprint("admin_ui", __name__)
@@ -56,6 +57,8 @@ _EDITABLE_GROUP_FIELDS = (
     "mute_log",
 )
 _REACTION_DECISION_MODES = {"llm_first", "hybrid", "rule_first"}
+_STRATEGY_PROBABILITY_FIELDS = ("reply_probability", "silence_probability", "reaction_probability")
+_STRATEGY_INT_FIELDS = ("delay_min_ms", "delay_max_ms", "context_window_sec", "cooldown_sec")
 _SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b("
     r"token|api[_-]?key|authorization|vocat_webhook_token|kimi_api_key|"
@@ -91,6 +94,7 @@ def _serialize_group_store() -> dict:
         item["trigger_mode"] = "all" if item["reply_all_messages"] else "mention"
         mode = str(item.get("reaction_decision_mode", "llm_first") or "llm_first").strip().lower()
         item["reaction_decision_mode"] = mode if mode in _REACTION_DECISION_MODES else "llm_first"
+        item["strategy"] = normalize_group_strategy_config(item)
         groups.append(item)
 
     groups.sort(key=lambda item: (not item.get("enabled", True), item.get("name") or item["group_id"]))
@@ -127,12 +131,50 @@ def _normalize_group_payload(raw: dict, existing: dict) -> tuple[str, dict]:
     reaction_mode = str(raw.get("reaction_decision_mode", merged.get("reaction_decision_mode", "llm_first")) or "llm_first")
     reaction_mode = reaction_mode.strip().lower()
     merged["reaction_decision_mode"] = reaction_mode if reaction_mode in _REACTION_DECISION_MODES else "llm_first"
+    merged["strategy"] = _normalize_strategy_payload(raw.get("strategy", raw.get("strategy_config", merged.get("strategy", merged.get("strategy_config", {})))))
+    merged.pop("strategy_config", None)
 
     for field in _EDITABLE_GROUP_FIELDS:
         if field in raw and field != "reply_all_messages":
             merged[field] = bool(raw.get(field))
 
     return group_id, merged
+
+
+def _normalize_strategy_payload(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    strategy = DEFAULT_GROUP_STRATEGY.copy()
+    for field in _STRATEGY_PROBABILITY_FIELDS:
+        if field not in raw:
+            continue
+        try:
+            value = float(raw.get(field))
+        except (TypeError, ValueError):
+            raise ValueError(f"{field} 必须是数字")
+        if value < 0 or value > 1:
+            raise ValueError(f"{field} 必须在 0 到 1 之间")
+        strategy[field] = value
+    for field in _STRATEGY_INT_FIELDS:
+        if field not in raw:
+            continue
+        try:
+            value = int(raw.get(field))
+        except (TypeError, ValueError):
+            raise ValueError(f"{field} 必须是整数")
+        minimum = 0 if field in {"delay_min_ms", "delay_max_ms", "cooldown_sec"} else 1
+        maximum = 60000 if field in {"delay_min_ms", "delay_max_ms"} else 3600
+        if field == "context_window_sec":
+            maximum = 60
+        if value < minimum or value > maximum:
+            raise ValueError(f"{field} 必须在 {minimum} 到 {maximum} 之间")
+        strategy[field] = value
+    strategy["require_mention_for_reply"] = bool(raw.get("require_mention_for_reply", strategy["require_mention_for_reply"]))
+    if strategy["delay_max_ms"] < strategy["delay_min_ms"]:
+        raise ValueError("delay_max_ms 必须大于等于 delay_min_ms")
+    if sum(float(strategy[field]) for field in _STRATEGY_PROBABILITY_FIELDS) <= 0:
+        raise ValueError("策略概率不能全部为 0")
+    return strategy
 
 
 def _clamp_log_limit(raw: str | int | None, default: int = DEFAULT_LOG_LIMIT) -> int:
@@ -403,6 +445,31 @@ def save_group_admin_data():
 
     save_group_config_store(GROUP_CONFIG_PATH, next_store)
     return jsonify({"ok": True, **_serialize_group_store()})
+
+
+@admin_ui_bp.post("/admin/api/group/update")
+def update_group_strategy():
+    payload = request.get_json(silent=True) or {}
+    group_id = str(payload.get("group_id") or "").strip()
+    if not group_id or not group_id.isdigit():
+        return jsonify({"ok": False, "error": "group_id 必须是纯数字"}), 400
+    if "strategy" not in payload:
+        return jsonify({"ok": False, "error": "strategy 必填"}), 400
+    try:
+        strategy = _normalize_strategy_payload(payload.get("strategy"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    store = load_group_config_store(GROUP_CONFIG_PATH)
+    existing = store.get(group_id)
+    if not isinstance(existing, dict):
+        return jsonify({"ok": False, "error": "group not found"}), 404
+    merged = existing.copy()
+    merged["strategy"] = strategy
+    merged.pop("strategy_config", None)
+    store[group_id] = merged
+    save_group_config_store(GROUP_CONFIG_PATH, store)
+    return jsonify({"ok": True, "group_id": group_id, "strategy": strategy})
 
 
 @admin_ui_bp.get("/admin/api/summary")
