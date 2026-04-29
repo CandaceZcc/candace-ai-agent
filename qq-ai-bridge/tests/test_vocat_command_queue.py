@@ -26,6 +26,25 @@ class VocatCommandQueueTest(unittest.TestCase):
         self.assertEqual(queue.select_vocat_expression("稍等，我查一下"), "dizzy")
         self.assertEqual(queue.select_vocat_expression("这也太离谱了"), "angry")
 
+    def test_runtime_status_records_webhook_poll_ack(self):
+        queued = queue.enqueue_vocat_expression("blink", source="test")
+        command = queue.poll_vocat_command()
+
+        queue.record_vocat_poll(command=command, queue_size=queue.get_vocat_queue_status()["queue_size"])
+        queue.record_vocat_webhook(query="测试", reply="收到", expression="happy", source="test", remote_addr="127.0.0.1")
+        ack = queue.ack_vocat_command(queued["command_id"])
+        queue.record_vocat_ack(queued["command_id"], ack)
+
+        status = queue.get_vocat_runtime_status()
+        self.assertTrue(status["ok"])
+        self.assertTrue(status["device_online"])
+        self.assertEqual(status["last_query"], "测试")
+        self.assertEqual(status["last_reply"], "收到")
+        self.assertEqual(status["last_expression"], "happy")
+        self.assertEqual(status["last_command_id"], queued["command_id"])
+        self.assertGreaterEqual(status["poll_count"], 1)
+        self.assertGreaterEqual(status["ack_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,22 @@ from apps.qq_ai_bridge.config.settings import VOCAT_COMMAND_QUEUE_MAX
 
 _QUEUE_LOCK = threading.Lock()
 _QUEUE: list[dict[str, Any]] = []
+_STATUS_LOCK = threading.Lock()
+_STATUS: dict[str, Any] = {
+    "last_poll_at": None,
+    "last_ack_at": None,
+    "last_webhook_at": None,
+    "last_query": "",
+    "last_reply": "",
+    "last_expression": "",
+    "last_source": "",
+    "last_remote_addr": "",
+    "last_command_id": "",
+    "last_command_type": "",
+    "last_ack_ok": None,
+    "poll_count": 0,
+    "ack_count": 0,
+}
 
 _EXPRESSION_ALIASES = {
     "happy": "happy",
@@ -140,6 +156,68 @@ def get_vocat_queue_status() -> dict[str, Any]:
         }
 
 
+def record_vocat_webhook(
+    *,
+    query: str = "",
+    reply: str = "",
+    expression: str | int | None = None,
+    source: str = "",
+    remote_addr: str = "",
+) -> dict[str, Any]:
+    with _STATUS_LOCK:
+        _STATUS.update(
+            {
+                "last_webhook_at": _utc_now(),
+                "last_query": _preview(query, 180),
+                "last_reply": _preview(reply, 240),
+                "last_expression": normalize_vocat_expression(expression),
+                "last_source": str(source or ""),
+                "last_remote_addr": str(remote_addr or ""),
+            }
+        )
+        return dict(_STATUS)
+
+
+def record_vocat_poll(*, command: dict[str, Any] | None = None, queue_size: int = 0) -> dict[str, Any]:
+    with _STATUS_LOCK:
+        _STATUS["last_poll_at"] = _utc_now()
+        _STATUS["poll_count"] = int(_STATUS.get("poll_count") or 0) + 1
+        if command:
+            _STATUS["last_command_id"] = str(command.get("id") or "")
+            _STATUS["last_command_type"] = str(command.get("type") or "")
+            _STATUS["last_expression"] = normalize_vocat_expression(command.get("expression"))
+        _STATUS["queue_size"] = max(0, int(queue_size or 0))
+        return dict(_STATUS)
+
+
+def record_vocat_ack(command_id: str = "", result: dict[str, Any] | None = None) -> dict[str, Any]:
+    result = result or {}
+    with _STATUS_LOCK:
+        _STATUS["last_ack_at"] = _utc_now()
+        _STATUS["ack_count"] = int(_STATUS.get("ack_count") or 0) + 1
+        _STATUS["last_command_id"] = str(command_id or "")
+        _STATUS["last_ack_ok"] = bool(result.get("ok"))
+        if "queue_size" in result:
+            _STATUS["queue_size"] = max(0, int(result.get("queue_size") or 0))
+        return dict(_STATUS)
+
+
+def get_vocat_runtime_status(*, online_window_seconds: int = 15) -> dict[str, Any]:
+    queue_status = get_vocat_queue_status()
+    with _STATUS_LOCK:
+        status = dict(_STATUS)
+    last_poll_at = status.get("last_poll_at")
+    status.update(
+        {
+            "ok": True,
+            "queue_size": queue_status["queue_size"],
+            "device_online": _is_recent_utc(last_poll_at, online_window_seconds),
+            "online_window_seconds": online_window_seconds,
+        }
+    )
+    return status
+
+
 def _new_command(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": uuid.uuid4().hex,
@@ -166,3 +244,23 @@ def _enqueue(command: dict[str, Any]) -> dict[str, Any]:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _preview(text: str, limit: int) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rstrip() + "..."
+
+
+def _is_recent_utc(raw: str | None, window_seconds: int) -> bool:
+    if not raw:
+        return False
+    try:
+        parsed = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+    return 0 <= delta.total_seconds() <= max(1, int(window_seconds))

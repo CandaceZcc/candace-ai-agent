@@ -1,117 +1,343 @@
 # Candace AI Agent
 
-一个运行在 Ubuntu 实体机上的 QQ 个人助手 / 机器人项目。
+QQ、NapCat、VoCat、PC Agent 和一台 Ubuntu 主机拼出来的个人助手项目。
 
-这个仓库现在主要围绕 **QQ webhook + Python bot + skill routing + scheduler/reminder** 持续往前搭。它想做的不是一个单纯“接个大模型来聊天”的机器人，而是一个能慢慢长成型的个人自动化助手：先把消息链路、主动提醒、技能路由和基础自动化骨架打稳，再一点点往浏览器自动化、桌面陪伴设备、更多本地 skill 这些方向扩展。
+它现在已经能收 QQ 消息、跑本地技能、主动提醒、看图读文件、控制 VoCat 播报和表情，也有一个本地 Web 控制台可以看状态和日志。整体还在边用边修，很多地方保留了开发期的直白日志，排查起来比较方便。
 
----
+## 现在能做什么
 
-## 项目简介
+### QQ AI Bridge
 
-当前系统主要通过 NapCat webhook 接收 QQ 消息，由本地 Python 服务完成：
+核心服务在 `qq-ai-bridge/`，入口是 Flask / Waitress：
 
-- 私聊 / 群聊消息解析
-- skill 路由与分发
-- 定时提醒与主动消息发送
-- 本地 JSON 持久化
-- 按需接入 OpenClaw / OCAI 等模型工作流
+```text
+qq-ai-bridge/bridge.py
+```
 
-现在这套结构里，能本地处理的结构化问题会尽量本地处理，比如天气、提醒查询、课程查询这类；更自由的对话再交给 OCAI。这样一方面结果更稳，另一方面也能少浪费一些 token。
+它负责接收 NapCat webhook，然后按消息内容分流：
 
-从定位上看，它更像一个**正在持续建设中的个人项目**，而不是一个已经打磨完的大平台。后面很适合继续接浏览器自动化、桌宠、ESP32 设备和更多自动化能力。
+- 私聊回复
+- 群聊触发回复
+- 图片理解
+- 文件理解
+- 天气查询
+- 提醒和日程
+- 桌面 / 浏览器 agent 指令
+- VoCat 语音入口
+- 表情回应和 reaction 跟随
 
----
+群聊里可以按群配置决定是否启用、是否全局触发、是否只在艾特时触发，也可以单独开关 Vision、风格学习、消息采样和日志静音。
 
-## 当前功能
+### Web 控制台
 
-目前已经做出来、而且基本能稳定跑的能力，大致包括：
+bridge 自带一个本地控制台，不需要额外端口：
 
-- QQ 私聊消息接收与回复
-- QQ 群聊按规则触发回复
-- Skill 路由机制，不同类型消息走不同处理逻辑
-- 天气、提醒、课程、组合查询这类结构化问题优先走本地 skill
-- 定时提醒与主动私聊消息发送
-- reminders / scheduler state 的本地 JSON 持久化
-- 基础日志与调试输出
-- 面向自动化扩展的项目结构骨架
+```text
+http://127.0.0.1:5000/admin
+```
 
-其中提醒系统已经不只是“用户发来消息我再回复”这种被动模式了。现在可以：
+目前有这些页面：
 
-- 在 QQ 私聊里手动添加提醒
-- 到时间后由本地 scheduler 主动发 QQ 私聊
-- 跑固定的每日提醒，比如睡觉提醒、明天课程提醒
+- `/admin`：总览，显示 bridge、NapCat、VoCat、队列和消息计数
+- `/admin/groups`：群聊配置
+- `/admin/logs`：日志中心，支持 category / level 多选过滤
+- `/admin/vocat`：VoCat 状态和手动测试
+- `/admin/private`：私聊调试
+- `/admin/system`：只读配置状态
 
-当前阶段的重点，还是先把消息链路、提醒系统、技能路由和自动化基础这些东西打稳。
+日志中心读的是固定文件：
 
----
+```text
+/home/cancade/candace-ai-agent/.runtime/logs/bridge.log
+```
 
-## 项目结构概览
+前端不会直接读文件，走后端 API；返回前会把 token、api key、Authorization 这类内容打码。
 
-仓库目前可以大致理解为：
+### VoCat
+
+VoCat 现在接进了 bridge，主要当语音和表情终端用。
+
+设备侧负责唤醒、收音、播报和显示 EAF 表情；本机 bridge 负责理解请求、调用 QQ / 日程 / Markdown / 本地技能，再把结果回给设备。
+
+当前接口：
+
+```text
+POST /vocat/webhook
+GET  /vocat/poll
+POST /vocat/ack
+GET  /vocat/queue
+POST /vocat/queue
+GET  /vocat/status
+```
+
+已支持：
+
+- 语音请求转到本机 bridge
+- bridge 返回 `reply` 和 `expression`
+- 设备轮询本机 TTS / 表情命令
+- QQ 私聊 `#说 <文本>` 让设备播报
+- QQ 私聊 `#表情 <happy|angry|blink|dizzy|sleep>` 切设备表情
+- VoCat 语音请求同步文本回复到 QQ
+- 读取仓库内 Markdown，例如 `读取 README.md`
+
+当前表情名：
+
+```text
+happy
+angry
+blink
+dizzy
+sleep
+```
+
+VoCat 相关细节见：
+
+```text
+docs/vocat-function-report.md
+```
+
+### Scheduler / Reminder
+
+本地 scheduler 会随 bridge 启动。
+
+目前可以：
+
+- QQ 私聊添加提醒
+- 到点后主动发 QQ 私聊
+- 查询提醒列表
+- 查询今明日程
+- 每日睡觉提醒
+- 明日课程提醒
+- 必要时把提醒播报到 VoCat
+
+数据主要存在本地 JSON 里，方便直接看、直接改、直接备份。
+
+### PC Agent
+
+`pc-agent/` 是本机桌面自动化侧的服务，默认给 bridge 调用。
+
+它主要承接：
+
+- 截屏
+- OCR
+- 鼠标键盘动作
+- 桌面任务执行
+- 后续浏览器自动化
+
+默认地址：
+
+```text
+http://127.0.0.1:5050
+```
+
+## 项目目录
 
 ```text
 candace-ai-agent/
-├── qq-ai-bridge/      # QQ webhook bridge、技能路由、提醒与主动消息
-├── pc-agent/          # 桌面自动化 / PC 侧能力的实验与扩展方向
-├── docs/              # 独立文档网站内容（MkDocs）
-├── mkdocs.yml         # MkDocs 配置
-├── requirements.txt   # Python 依赖
+├── qq-ai-bridge/              # QQ bridge、NapCat、skills、VoCat、控制台
+│   ├── apps/qq_ai_bridge/
+│   │   ├── adapters/          # webhook、NapCat、admin UI、VoCat controller
+│   │   ├── services/          # chat、vision、file、scheduler、VoCat queue 等
+│   │   ├── skills/            # chat / weather / reminder / schedule / vision 等
+│   │   ├── config/
+│   │   └── templates/
+│   ├── data/                  # bridge 运行数据
+│   ├── tests/
+│   └── bridge.py
+├── pc-agent/                  # 本机桌面自动化服务
+├── docs/                      # 安装、排错、架构、VoCat 报告
+├── data/                      # 项目级数据目录
+├── .runtime/logs/             # bridge / agent 日志
+├── requirements.txt
 └── README.md
 ```
 
-其中：
+## 启动
 
-- `qq-ai-bridge/` 是当前最核心的部分，QQ 消息接入、skill 路由、提醒和主动消息基本都在这里
-- `pc-agent/` 主要承接桌面自动化相关方向
-- `docs/` 用来放完整安装、运行和排错文档
-
----
-
-## 未来计划
-
-### 1. Playwright 浏览器自动化
-
-后面希望把浏览器自动化能力更系统地建立在 Playwright 上，而不是长期依赖 OCR + 坐标点击。这样会更适合：
-
-- 保留登录态
-- 执行稳定的网页流程
-- 为学校系统、网页助手、内容抓取等能力打基础
-
-### 2. 基于 ESP32 的桌宠 / 桌面陪伴设备
-
-另一个我很想继续做的方向，是把这个项目从“聊天机器人”往硬件端延伸，比如：
-
-- 基于 ESP32 的小型桌宠设备
-- 结合屏幕、网络、状态展示与消息推送
-- 让这个项目逐步变成桌面陪伴式个人助手
-
----
-
-## 简要安装步骤
-
-README 这里只保留很简短的说明，完整安装过程放在独立文档站里。
-
-1. 克隆仓库并进入目录
-2. 安装 Python 依赖
-3. 配置 NapCat webhook 与项目环境变量 / 配置文件
-4. 按需接入 OpenClaw / OCAI
-5. 启动 `qq-ai-bridge` 服务
-
-一个最简启动过程通常类似：
+先进入仓库：
 
 ```bash
-git clone <your-repo-url>
-cd candace-ai-agent
-python3 -m pip install -r requirements.txt
-cd qq-ai-bridge
-python3 bridge.py
+cd /home/cancade/candace-ai-agent
+source .venv/bin/activate
 ```
 
-在此之前，请先确保 QQ / NapCat / webhook 已经准备好。
+安装依赖：
 
----
+```bash
+python3 -m pip install -r requirements.txt
+```
 
-## 完整安装文档链接
+启动 QQ bridge：
 
-📖 完整安装指南：  
+```bash
+python3 -u qq-ai-bridge/bridge.py
+```
+
+启动后打开：
+
+```text
+http://127.0.0.1:5000/admin
+```
+
+如果需要 PC Agent：
+
+```bash
+cd /home/cancade/candace-ai-agent/pc-agent
+source .venv/bin/activate
+python3 agent.py
+```
+
+## 配置
+
+配置模板在：
+
+```text
+qq-ai-bridge/.env.example
+```
+
+推荐把真实密钥放在：
+
+```text
+~/.candace/qq-ai-bridge.env
+```
+
+或者：
+
+```text
+qq-ai-bridge/.local.env
+```
+
+bridge 启动时会按顺序读取：
+
+```text
+qq-ai-bridge/.env
+.env
+qq-ai-bridge/.local.env
+~/.candace/qq-ai-bridge.env
+```
+
+常用配置项：
+
+- `NAPCAT_HTTP`
+- `NAPCAT_TOKEN`
+- `OWNER_QQ`
+- `VISION_API_URL`
+- `VISION_API_KEY`
+- `KIMI_API_KEY`
+- `VOCAT_WEBHOOK_TOKEN`
+- `VOCAT_TRUSTED_DEVICE_IPS`
+- `PC_BROWSER_AGENT_URL`
+
+控制台里只显示 set / unset，不会把 key 直接铺出来。
+
+## 常用接口
+
+### 管理后台
+
+```text
+GET /admin
+GET /admin/groups
+GET /admin/logs
+GET /admin/vocat
+GET /admin/api/summary
+GET /admin/api/logs
+GET /admin/api/vocat/status
+```
+
+日志过滤示例：
+
+```bash
+curl -sS 'http://127.0.0.1:5000/admin/api/logs?category=group,vocat&level=info,warning&limit=100' | python3 -m json.tool
+```
+
+### VoCat
+
+```text
+GET  /vocat/webhook
+POST /vocat/webhook
+GET  /vocat/poll
+POST /vocat/ack
+GET  /vocat/queue
+POST /vocat/queue
+GET  /vocat/status
+```
+
+测试播报：
+
+```bash
+curl -sS -X POST http://127.0.0.1:5000/vocat/queue \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"tts","text":"测试播报","expression":"happy"}' | python3 -m json.tool
+```
+
+测试表情：
+
+```bash
+curl -sS -X POST http://127.0.0.1:5000/vocat/queue \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"expression","expression":"blink"}' | python3 -m json.tool
+```
+
+## 日志
+
+常看这几个文件：
+
+```text
+.runtime/logs/bridge.log
+.runtime/logs/agent.log
+.runtime/logs/openmaic.log
+```
+
+常见前缀：
+
+```text
+[SYSTEM]
+[WEBHOOK]
+[GROUP_CHAT]
+[PRIVATE_CHAT]
+[SEND_GROUP]
+[SEND_PRIVATE]
+[SKILL]
+[VISION]
+[REACTION]
+[SCHEDULER]
+[VOCAT]
+[VOCAT_EXPR]
+[OCAI]
+```
+
+排查时从 webhook 开始看，再看 skill 命中、NapCat 返回、VoCat poll / ack。日志写得比较直，哪里没接上通常能顺着前缀找到。
+
+## 测试
+
+运行全部单测：
+
+```bash
+source .venv/bin/activate
+python -m unittest discover -s qq-ai-bridge/tests -p 'test_*.py'
+```
+
+只看控制台和 VoCat 队列相关测试：
+
+```bash
+python -m unittest qq-ai-bridge/tests/test_admin_console.py qq-ai-bridge/tests/test_vocat_command_queue.py
+```
+
+## 当前开发重点
+
+近期主要在这几块上继续推进：
+
+- QQ AI Bridge 控制台
+- VoCat 语音、表情和本机队列
+- 群聊触发和 reaction 行为
+- 图片 / 文件理解
+- reminder / schedule
+- pc-agent 和浏览器自动化
+
+这个仓库更像一个每天都在长一点的本机工作台。能跑的东西先接起来，出问题就看日志，能拆出去的逻辑再慢慢拆。
+
+完整文档站：
+
+```text
 https://candacezcc.github.io/candace-ai-agent/
+```

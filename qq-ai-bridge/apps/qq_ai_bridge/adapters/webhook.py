@@ -52,7 +52,11 @@ from apps.qq_ai_bridge.services.vocat_command_queue import (
     enqueue_vocat_expression,
     enqueue_vocat_tts,
     get_vocat_queue_status,
+    get_vocat_runtime_status,
     poll_vocat_command,
+    record_vocat_ack,
+    record_vocat_poll,
+    record_vocat_webhook,
 )
 from apps.qq_ai_bridge.skills.base import SkillContext
 from apps.qq_ai_bridge.skills.registry import build_skill_registry
@@ -530,6 +534,13 @@ def vocat_webhook():
         return jsonify(payload), status
     try:
         result = _run_async(process_vocat_query(data))
+        record_vocat_webhook(
+            query=data.get("query") or data.get("text") or data.get("message") or "",
+            reply=result.get("reply", ""),
+            expression=result.get("expression"),
+            source=result.get("source", ""),
+            remote_addr=remote_addr,
+        )
         return jsonify(result)
     except Exception as exc:
         print(f"[VOCAT] webhook processing failed: {exc}")
@@ -547,8 +558,10 @@ def vocat_poll():
 
     device_name = request.args.get("device_name") or request.args.get("device") or ""
     command = poll_vocat_command(device_name)
+    queue_size = get_vocat_queue_status()["queue_size"]
+    record_vocat_poll(command=command, queue_size=queue_size)
     if not command:
-        return jsonify({"ok": True, "has_command": False, "queue": get_vocat_queue_status()["queue_size"]})
+        return jsonify({"ok": True, "has_command": False, "queue": queue_size})
     print(
         f"[VOCAT] poll deliver command_id={command.get('id')} type={command.get('type')} "
         f"source={command.get('source', '')}"
@@ -567,6 +580,7 @@ def vocat_ack():
     data = request.get_json(silent=True) or {}
     command_id = data.get("command_id") or data.get("id") or request.values.get("command_id")
     result = ack_vocat_command(str(command_id or ""))
+    record_vocat_ack(str(command_id or ""), result)
     print(f"[VOCAT] ack command_id={command_id} result={result}")
     return jsonify(result)
 
@@ -591,6 +605,16 @@ def vocat_queue_status():
             )
         return jsonify(result)
     return jsonify(get_vocat_queue_status())
+
+
+@webhook_bp.route("/vocat/status", methods=["GET"])
+def vocat_status():
+    """Return VoCat pull-control runtime status."""
+    authorized, error_response = _authorized_vocat_request()
+    if not authorized:
+        payload, status = error_response
+        return jsonify(payload), status
+    return jsonify(get_vocat_runtime_status())
 
 
 def register_routes(app):

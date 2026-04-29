@@ -3,24 +3,23 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>NapCat 群配置</title>
+    <link rel="icon" href="data:,">
+    <title>QQ AI Bridge 控制台</title>
     <style>
       :root {
-        --bg: #0f1117;
-        --bg-soft: #171a22;
-        --bg-elevated: #1c202b;
-        --bg-active: #252b38;
-        --line: #2e3645;
-        --line-soft: #232a37;
-        --text: #edf2ff;
-        --muted: #9ca8c1;
-        --accent: #49a6ff;
-        --accent-soft: rgba(73, 166, 255, 0.14);
-        --success: #59d48a;
-        --warn: #ffb454;
-        --danger: #ff6b81;
-        --radius: 16px;
-        --shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+        --bg: #070913;
+        --panel: rgba(17, 24, 39, 0.72);
+        --panel-strong: rgba(20, 28, 48, 0.88);
+        --border: rgba(255, 255, 255, 0.08);
+        --text: #eef3ff;
+        --muted: #9aa8c2;
+        --accent: #60a5fa;
+        --accent-2: #8b5cf6;
+        --danger: #fb7185;
+        --success: #34d399;
+        --warning: #fbbf24;
+        --shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
+        --radius: 18px;
         --font-body: "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif;
         --font-mono: "IBM Plex Mono", "SFMono-Regular", monospace;
       }
@@ -29,7 +28,8 @@
         box-sizing: border-box;
       }
 
-      html, body {
+      html,
+      body {
         margin: 0;
         min-height: 100%;
       }
@@ -38,8 +38,12 @@
         font-family: var(--font-body);
         color: var(--text);
         background:
-          radial-gradient(circle at top left, rgba(73, 166, 255, 0.12), transparent 26%),
-          linear-gradient(180deg, #12151c 0%, #0d1016 100%);
+          radial-gradient(circle at 18% 8%, rgba(96, 165, 250, 0.22), transparent 28%),
+          radial-gradient(circle at 82% 12%, rgba(139, 92, 246, 0.20), transparent 30%),
+          radial-gradient(circle at 60% 92%, rgba(20, 184, 166, 0.10), transparent 30%),
+          linear-gradient(135deg, #070913 0%, #0c1020 44%, #050713 100%);
+        background-attachment: fixed;
+        font-size: 14px;
       }
 
       button,
@@ -48,238 +52,279 @@
         font: inherit;
       }
 
+      button {
+        cursor: pointer;
+      }
+
       .layout {
         min-height: 100vh;
         display: grid;
-        grid-template-columns: 260px minmax(0, 1fr);
+        grid-template-columns: 212px minmax(0, 1fr);
       }
 
       .sidebar {
-        border-right: 1px solid var(--line-soft);
-        background: rgba(10, 12, 17, 0.88);
-        padding: 22px 16px;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        padding: 18px 12px;
+        border-right: 1px solid var(--border);
+        background: rgba(5, 8, 18, 0.62);
+        backdrop-filter: blur(18px);
       }
 
       .brand {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 10px 12px;
-        margin-bottom: 22px;
-        border-radius: 14px;
-        background: linear-gradient(180deg, rgba(73, 166, 255, 0.08), rgba(73, 166, 255, 0.03));
-        border: 1px solid rgba(73, 166, 255, 0.14);
-      }
-
-      .brand-mark {
-        width: 40px;
-        height: 40px;
-        border-radius: 12px;
-        display: grid;
-        place-items: center;
-        font-weight: 700;
-        background: linear-gradient(180deg, #51acff, #2b7dff);
-        color: white;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.28);
+        padding: 12px 10px 16px;
+        margin-bottom: 12px;
       }
 
       .brand-title {
-        font-size: 15px;
-        font-weight: 700;
+        font-size: 17px;
+        font-weight: 750;
+        letter-spacing: 0;
       }
 
       .brand-subtitle {
-        margin-top: 2px;
+        margin-top: 5px;
         color: var(--muted);
         font-size: 12px;
-      }
-
-      .nav-section {
-        margin-bottom: 18px;
-      }
-
-      .nav-label {
-        padding: 0 12px;
-        margin-bottom: 8px;
-        color: #7e8aa5;
-        font-size: 11px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
       }
 
       .nav-list {
         display: grid;
-        gap: 6px;
+        gap: 8px;
       }
 
       .nav-item {
+        width: 100%;
+        min-height: 44px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 11px 12px;
+        gap: 10px;
+        padding: 0 11px;
+        border: 1px solid transparent;
         border-radius: 12px;
         color: var(--muted);
         background: transparent;
-        border: 1px solid transparent;
+        text-align: left;
       }
 
       .nav-item.active {
-        color: var(--text);
-        background: var(--bg-active);
-        border-color: #3a4355;
+        color: white;
+        border-color: rgba(255, 255, 255, 0.14);
+        background: linear-gradient(135deg, rgba(96, 165, 250, 0.34), rgba(139, 92, 246, 0.32));
+        box-shadow: 0 12px 30px rgba(37, 99, 235, 0.16);
       }
 
-      .nav-item .pill {
-        min-width: 26px;
-        height: 22px;
-        padding: 0 8px;
-        border-radius: 999px;
+      .pill,
+      .badge,
+      .state-badge {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 12px;
-        color: var(--text);
-        background: rgba(255,255,255,0.06);
-      }
-
-      .sidebar-note {
-        margin-top: 22px;
-        padding: 14px 12px;
-        border-radius: 14px;
-        border: 1px solid var(--line);
-        background: rgba(255,255,255,0.02);
-      }
-
-      .sidebar-note-title {
-        font-size: 13px;
-        font-weight: 700;
-        margin-bottom: 6px;
-      }
-
-      .sidebar-note-copy {
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.06);
         color: var(--muted);
-        font-size: 12px;
-        line-height: 1.6;
+        white-space: nowrap;
+      }
+
+      .pill {
+        min-width: 24px;
+        min-height: 20px;
+        padding: 0 7px;
+        font-size: 11px;
+      }
+
+      .main-shell {
+        min-width: 0;
+        padding: 24px;
       }
 
       .main {
-        padding: 22px;
+        width: 100%;
+        max-width: 1400px;
+        margin: 0 auto;
       }
 
       .topbar {
+        min-height: 78px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 16px;
+        gap: 18px;
         margin-bottom: 18px;
+        padding: 18px 20px;
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        background: rgba(10, 16, 30, 0.58);
+        backdrop-filter: blur(12px);
+        box-shadow: var(--shadow);
       }
 
       .topbar-title {
-        font-size: 24px;
-        font-weight: 700;
+        font-size: 26px;
+        line-height: 1.15;
+        font-weight: 780;
+        letter-spacing: 0;
       }
 
       .topbar-copy {
-        margin-top: 4px;
+        margin-top: 7px;
         color: var(--muted);
-        font-size: 14px;
+        font-size: 13px;
       }
 
-      .topbar-actions {
+      .row,
+      .actions {
         display: flex;
-        gap: 10px;
+        align-items: center;
         flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .button,
+      .input,
+      select.input {
+        min-height: 40px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        color: var(--text);
+        background: rgba(15, 23, 42, 0.82);
+        outline: none;
       }
 
       .button {
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        padding: 10px 16px;
-        cursor: pointer;
-        color: var(--text);
-        background: linear-gradient(180deg, #262d3a, #1d2330);
-        transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 0 14px;
+        transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
       }
 
       .button:hover {
         transform: translateY(-1px);
+        border-color: rgba(96, 165, 250, 0.45);
       }
 
       .button.primary {
-        border-color: rgba(73, 166, 255, 0.46);
-        background: linear-gradient(180deg, #4ca9ff, #2f80ff);
-      }
-
-      .button.ghost {
-        background: linear-gradient(180deg, #202633, #1a1f2a);
+        border-color: rgba(96, 165, 250, 0.42);
+        background: linear-gradient(135deg, rgba(96, 165, 250, 0.92), rgba(139, 92, 246, 0.92));
       }
 
       .button.danger {
-        border-color: rgba(255, 107, 129, 0.36);
-        background: linear-gradient(180deg, #ff788d, #dc4962);
+        border-color: rgba(251, 113, 133, 0.36);
+        background: rgba(127, 29, 49, 0.72);
+        color: #ffe4e9;
       }
 
-      .cards {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 14px;
-        margin-bottom: 18px;
+      .button:disabled {
+        opacity: 0.58;
+        cursor: default;
+        transform: none;
       }
 
-      .card,
-      .panel {
-        border: 1px solid var(--line);
+      .input {
+        width: 100%;
+        min-width: 0;
+        padding: 0 12px;
+      }
+
+      .input:focus,
+      .button:focus-visible,
+      .chip:focus-visible,
+      .nav-item:focus-visible {
+        border-color: rgba(96, 165, 250, 0.74);
+        box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.14);
+      }
+
+      .view {
+        display: none;
+      }
+
+      .view.active {
+        display: block;
+      }
+
+      .panel,
+      .metric,
+      .group-card,
+      .log-entry,
+      .kv {
+        border: 1px solid var(--border);
         border-radius: var(--radius);
-        background: linear-gradient(180deg, rgba(28, 32, 43, 0.95), rgba(20, 23, 31, 0.96));
+        background: var(--panel);
+        backdrop-filter: blur(12px);
         box-shadow: var(--shadow);
       }
 
-      .card {
-        padding: 16px;
-      }
-
-      .card-label {
-        color: var(--muted);
-        font-size: 12px;
-        margin-bottom: 10px;
-      }
-
-      .card-value {
-        font-size: 28px;
-        font-weight: 700;
-      }
-
-      .card-foot {
-        margin-top: 8px;
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .workspace {
+      .metrics {
         display: grid;
-        grid-template-columns: 320px minmax(0, 1fr);
-        gap: 18px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+
+      .metric {
+        min-height: 112px;
+        padding: 17px;
+      }
+
+      .metric-label,
+      .kv-label,
+      .field label,
+      .section-kicker {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .metric-value {
+        margin-top: 10px;
+        font-size: 27px;
+        line-height: 1;
+        font-weight: 780;
+      }
+
+      .metric-foot {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 16px;
+      }
+
+      .panel {
+        overflow: hidden;
       }
 
       .panel-head {
+        min-height: 62px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
         padding: 16px 18px;
-        border-bottom: 1px solid var(--line-soft);
+        border-bottom: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.025);
       }
 
       .panel-title {
-        font-size: 15px;
-        font-weight: 700;
-      }
-
-      .panel-copy {
-        margin-top: 4px;
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.6;
+        font-size: 17px;
+        font-weight: 740;
       }
 
       .panel-body {
         padding: 18px;
+      }
+
+      .field {
+        display: grid;
+        gap: 7px;
       }
 
       .form-grid {
@@ -287,41 +332,8 @@
         gap: 12px;
       }
 
-      .field {
-        display: grid;
-        gap: 8px;
-      }
-
-      .field label {
-        font-size: 13px;
-        color: var(--muted);
-      }
-
-      .input {
-        width: 100%;
-        min-width: 0;
-        color: var(--text);
-        background: #161b24;
-        border: 1px solid #30394a;
-        border-radius: 12px;
-        padding: 11px 12px;
-      }
-
-      .input:focus {
-        outline: none;
-        border-color: rgba(73, 166, 255, 0.64);
-        box-shadow: 0 0 0 3px rgba(73, 166, 255, 0.12);
-      }
-
-      .helper {
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.6;
-      }
-
       .status {
-        min-height: 24px;
-        margin-top: 12px;
+        min-height: 22px;
         color: var(--muted);
         font-size: 13px;
       }
@@ -334,88 +346,32 @@
         color: var(--danger);
       }
 
-      .table-wrap {
-        overflow: hidden;
-        border-radius: 14px;
-        border: 1px solid var(--line-soft);
-      }
-
-      table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-
-      thead th {
-        text-align: left;
-        font-size: 12px;
-        color: #8793ab;
-        letter-spacing: 0.04em;
-        font-weight: 600;
-        padding: 14px 16px;
-        background: #171b24;
-        border-bottom: 1px solid var(--line-soft);
-      }
-
-      tbody td {
-        padding: 16px;
-        border-bottom: 1px solid var(--line-soft);
-        vertical-align: middle;
-      }
-
-      tbody tr:last-child td {
-        border-bottom: 0;
-      }
-
-      tbody tr:hover {
-        background: rgba(255,255,255,0.02);
-      }
-
-      .group-cell {
+      .status-grid {
         display: grid;
-        gap: 5px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
       }
 
-      .group-name {
-        font-size: 15px;
-        font-weight: 700;
+      .kv {
+        min-width: 0;
+        padding: 12px;
+        box-shadow: none;
+        background: rgba(15, 23, 42, 0.58);
       }
 
-      .group-id {
-        color: var(--muted);
-        font-size: 12px;
+      .kv-value {
+        margin-top: 7px;
+        overflow-wrap: anywhere;
         font-family: var(--font-mono);
-      }
-
-      .tag-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-
-      .tag {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-height: 28px;
-        padding: 0 10px;
-        border-radius: 999px;
-        font-size: 12px;
-        color: var(--muted);
-        border: 1px solid #31394a;
-        background: #1a202b;
-      }
-
-      .tag.success {
-        color: #dfffea;
-        border-color: rgba(89, 212, 138, 0.26);
-        background: rgba(89, 212, 138, 0.12);
+        font-size: 13px;
       }
 
       .switch {
         position: relative;
-        width: 48px;
-        height: 28px;
         display: inline-block;
+        width: 46px;
+        height: 26px;
+        flex: 0 0 auto;
       }
 
       .switch input {
@@ -428,9 +384,8 @@
         position: absolute;
         inset: 0;
         border-radius: 999px;
-        background: #2a3140;
-        border: 1px solid #394356;
-        transition: 160ms ease;
+        border: 1px solid rgba(255, 255, 255, 0.13);
+        background: rgba(148, 163, 184, 0.18);
       }
 
       .slider::before {
@@ -438,81 +393,299 @@
         position: absolute;
         left: 4px;
         top: 4px;
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        background: #dce8ff;
-        transition: 160ms ease;
+        width: 16px;
+        height: 16px;
+        border-radius: 999px;
+        background: #e5ecff;
+        transition: transform 150ms ease;
       }
 
       .switch input:checked + .slider {
-        background: rgba(73, 166, 255, 0.3);
-        border-color: rgba(73, 166, 255, 0.5);
+        background: linear-gradient(135deg, rgba(52, 211, 153, 0.52), rgba(96, 165, 250, 0.42));
       }
 
       .switch input:checked + .slider::before {
-        transform: translateX(19px);
-        background: white;
+        transform: translateX(20px);
       }
 
       .segmented {
-        display: inline-grid;
+        width: 100%;
+        min-width: 188px;
+        display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 4px;
-        padding: 4px;
-        background: #171d27;
-        border: 1px solid #31394a;
-        border-radius: 12px;
+        gap: 5px;
+        padding: 5px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: rgba(15, 23, 42, 0.74);
       }
 
       .segmented button {
+        min-height: 36px;
         border: 0;
-        min-width: 92px;
-        padding: 9px 10px;
-        border-radius: 9px;
-        background: transparent;
+        border-radius: 10px;
         color: var(--muted);
-        cursor: pointer;
+        background: transparent;
       }
 
       .segmented button.active {
         color: white;
-        background: linear-gradient(180deg, #4ca9ff, #2d7fff);
+        background: linear-gradient(135deg, rgba(96, 165, 250, 0.86), rgba(139, 92, 246, 0.78));
       }
 
-      .table-actions {
+      .badge,
+      .state-badge {
+        min-height: 24px;
+        padding: 0 9px;
+        font-size: 12px;
+      }
+
+      .state-badge.success {
+        color: #d1fae5;
+        border-color: rgba(52, 211, 153, 0.26);
+        background: rgba(52, 211, 153, 0.12);
+      }
+
+      .state-badge.disabled {
+        color: #cbd5e1;
+        background: rgba(148, 163, 184, 0.10);
+      }
+
+      .badge.error {
+        color: #ffe4e9;
+        border-color: rgba(251, 113, 133, 0.28);
+        background: rgba(251, 113, 133, 0.12);
+      }
+
+      .badge.warning {
+        color: #fef3c7;
+        border-color: rgba(251, 191, 36, 0.28);
+        background: rgba(251, 191, 36, 0.12);
+      }
+
+      .groups-layout {
+        display: grid;
+        grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);
+        gap: 16px;
+        align-items: start;
+      }
+
+      .group-list {
+        display: grid;
+        gap: 14px;
+      }
+
+      .group-card {
+        display: grid;
+        grid-template-columns: minmax(220px, 1.4fr) minmax(320px, 1.2fr) minmax(220px, 0.9fr) auto;
+        gap: 16px;
+        align-items: start;
+        padding: 16px;
+      }
+
+      .group-primary,
+      .group-policy,
+      .group-extensions,
+      .group-actions {
+        min-width: 0;
+        display: grid;
+        gap: 12px;
+      }
+
+      .group-meta {
         display: flex;
-        justify-content: flex-end;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .group-id {
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 12px;
+      }
+
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 40px;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: rgba(15, 23, 42, 0.48);
+      }
+
+      .select-field {
+        min-width: 220px;
+      }
+
+      .chip-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .chip,
+      .chip-toggle {
+        min-height: 34px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        padding: 0 11px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--muted);
+        background: rgba(15, 23, 42, 0.62);
+        user-select: none;
+      }
+
+      .chip {
+        cursor: pointer;
+      }
+
+      .chip.active,
+      .chip-toggle:has(input:checked) {
+        color: white;
+        border-color: rgba(96, 165, 250, 0.42);
+        background: linear-gradient(135deg, rgba(96, 165, 250, 0.38), rgba(139, 92, 246, 0.32));
+      }
+
+      .chip-toggle input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .log-toolbar {
+        display: grid;
+        gap: 14px;
+      }
+
+      .filter-line {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .filter-inputs {
+        display: grid;
+        grid-template-columns: minmax(180px, 1.2fr) minmax(150px, 0.7fr) minmax(150px, 0.7fr) minmax(110px, 0.4fr) auto;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .log-list,
+      .private-log-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .log-entry {
+        box-shadow: none;
+        overflow: hidden;
+      }
+
+      .log-entry summary {
+        list-style: none;
+        padding: 13px 14px;
+        cursor: pointer;
+      }
+
+      .log-entry summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .log-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-bottom: 8px;
+      }
+
+      .log-line {
+        color: #d9e3f7;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        line-height: 1.55;
+        overflow-wrap: anywhere;
+      }
+
+      .fields {
+        padding: 0 14px 14px;
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+
+      .vocat-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
       }
 
       .empty {
-        padding: 42px 18px;
+        padding: 28px 12px;
         text-align: center;
         color: var(--muted);
       }
 
-      @media (max-width: 1100px) {
+      @media (max-width: 1500px) {
+        .groups-layout {
+          grid-template-columns: 1fr;
+        }
+
+        .groups-layout > .panel {
+          max-width: 430px;
+        }
+      }
+
+      @media (max-width: 1360px) {
+        .metrics {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 1200px) {
         .layout {
           grid-template-columns: 1fr;
         }
 
         .sidebar {
-          display: none;
+          position: sticky;
+          z-index: 5;
+          height: auto;
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
         }
 
-        .cards,
-        .workspace {
+        .nav-list {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .groups-layout,
+        .grid-2,
+        .group-card {
           grid-template-columns: 1fr;
+        }
+
+        .groups-layout > .panel {
+          max-width: none;
+        }
+
+        .filter-inputs {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
 
-      @media (max-width: 720px) {
-        .main {
+      @media (max-width: 760px) {
+        .main-shell {
           padding: 14px;
-        }
-
-        .cards {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
         .topbar {
@@ -520,12 +693,12 @@
           flex-direction: column;
         }
 
-        .table-wrap {
-          overflow-x: auto;
-        }
-
-        table {
-          min-width: 840px;
+        .metrics,
+        .status-grid,
+        .filter-inputs,
+        .vocat-actions,
+        .nav-list {
+          grid-template-columns: 1fr;
         }
       }
     </style>
@@ -534,353 +707,214 @@
     <main class="layout">
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark">NC</div>
-          <div>
-            <div class="brand-title">NapCat Control</div>
-            <div class="brand-subtitle">Candace QQ Bridge</div>
-          </div>
+          <div class="brand-title">QQ AI Bridge</div>
+          <div class="brand-subtitle">Candace Console</div>
         </div>
-
-        <section class="nav-section">
-          <div class="nav-label">System</div>
-          <div class="nav-list">
-            <div class="nav-item">
-              <span>概览</span>
-              <span class="pill">01</span>
-            </div>
-            <div class="nav-item active">
-              <span>群聊配置</span>
-              <span class="pill" id="navGroupCount">0</span>
-            </div>
-            <div class="nav-item">
-              <span>Webhook</span>
-              <span class="pill">/qq</span>
-            </div>
-          </div>
-        </section>
-
-        <section class="nav-section">
-          <div class="nav-label">Policy</div>
-          <div class="nav-list">
-            <div class="nav-item">
-              <span>白名单</span>
-              <span class="pill" id="navWhitelistCount">0</span>
-            </div>
-            <div class="nav-item">
-              <span>全局触发</span>
-              <span class="pill" id="navAllModeCount">0</span>
-            </div>
-            <div class="nav-item">
-              <span>艾特触发</span>
-              <span class="pill" id="navMentionModeCount">0</span>
-            </div>
-          </div>
-        </section>
-
-        <div class="sidebar-note">
-          <div class="sidebar-note-title">当前页面作用</div>
-          <div class="sidebar-note-copy">
-            在这里配置群聊白名单，并决定机器人是全群响应，还是仅在被艾特时触发。
-          </div>
-        </div>
+        <nav class="nav-list">
+          <button class="nav-item" data-nav="dashboard" type="button"><span>概览</span><span class="pill" id="navBridge">--</span></button>
+          <button class="nav-item" data-nav="vocat" type="button"><span>VoCat</span><span class="pill" id="navVocat">--</span></button>
+          <button class="nav-item" data-nav="logs" type="button"><span>日志中心</span><span class="pill">log</span></button>
+          <button class="nav-item" data-nav="groups" type="button"><span>群聊配置</span><span class="pill" id="navGroupCount">0</span></button>
+          <button class="nav-item" data-nav="private" type="button"><span>私聊调试</span><span class="pill">dm</span></button>
+          <button class="nav-item" data-nav="system" type="button"><span>系统配置</span><span class="pill">env</span></button>
+        </nav>
       </aside>
 
-      <section class="main">
-        <header class="topbar">
-          <div>
-            <div class="topbar-title">群聊白名单与回复规则</div>
-            <div class="topbar-copy">按 NapCat 控制台的面板逻辑整理。左边看概览，右边直接改配置。</div>
-          </div>
-          <div class="topbar-actions">
-            <button class="button ghost" id="reloadButton" type="button">重新读取</button>
-            <button class="button primary" id="saveButton" type="button">保存配置</button>
-          </div>
-        </header>
-
-        <section class="cards" id="stats"></section>
-
-        <section class="workspace">
-          <article class="panel">
-            <div class="panel-head">
-              <div class="panel-title">新增群聊</div>
-              <div class="panel-copy">把群号加入白名单，默认规则为“仅艾特触发”。</div>
+      <section class="main-shell">
+        <section class="main">
+          <header class="topbar">
+            <div>
+              <div class="topbar-title" id="pageTitle">概览</div>
+              <div class="topbar-copy" id="pageSubtitle">Bridge、NapCat、VoCat 与日志状态。</div>
             </div>
-            <div class="panel-body">
-              <div class="form-grid">
-                <div class="field">
-                  <label for="newGroupId">群号</label>
-                  <input class="input" id="newGroupId" type="text" inputmode="numeric" placeholder="例如 437966130">
+            <div class="actions">
+              <button class="button" id="refreshCurrentButton" type="button">刷新</button>
+            </div>
+          </header>
+
+          <section class="view" id="view-dashboard">
+            <div class="metrics" id="dashboardMetrics"></div>
+            <div class="grid-2">
+              <article class="panel">
+                <div class="panel-head">
+                  <div class="panel-title">最近 Warning / Error</div>
                 </div>
-                <div class="field">
-                  <label for="newGroupName">群名称</label>
-                  <input class="input" id="newGroupName" type="text" placeholder="例如 Candace 测试群">
+                <div class="panel-body">
+                  <div class="log-list" id="dashboardWarnings"></div>
                 </div>
-                <button class="button ghost" id="addButton" type="button">添加到当前列表</button>
-                <div class="helper">保存后会写入 `qq-ai-bridge/config/groups.json`。</div>
-                <div class="status" id="statusText"></div>
+              </article>
+              <article class="panel">
+                <div class="panel-head">
+                  <div class="panel-title">VoCat 快照</div>
+                </div>
+                <div class="panel-body">
+                  <div class="status-grid" id="dashboardVocat"></div>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="view" id="view-vocat">
+            <div class="metrics" id="vocatMetrics"></div>
+            <div class="grid-2">
+              <article class="panel">
+                <div class="panel-head">
+                  <div class="panel-title">状态</div>
+                  <button class="button" id="refreshVocatButton" type="button">刷新状态</button>
+                </div>
+                <div class="panel-body">
+                  <div class="status-grid" id="vocatStatusGrid"></div>
+                </div>
+              </article>
+              <article class="panel">
+                <div class="panel-head">
+                  <div class="panel-title">手动测试</div>
+                </div>
+                <div class="panel-body">
+                  <div class="form-grid">
+                    <div class="field">
+                      <label for="vocatTtsText">播报文本</label>
+                      <input class="input" id="vocatTtsText" type="text" value="VoCat 控制台测试播报">
+                    </div>
+                    <button class="button primary" id="sendVocatTtsButton" type="button">测试播报</button>
+                    <div class="vocat-actions">
+                      <button class="button" data-expression="happy" type="button">happy</button>
+                      <button class="button" data-expression="angry" type="button">angry</button>
+                      <button class="button" data-expression="blink" type="button">blink</button>
+                      <button class="button" data-expression="dizzy" type="button">dizzy</button>
+                      <button class="button" data-expression="sleep" type="button">sleep</button>
+                    </div>
+                    <div class="status" id="vocatActionStatus"></div>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="view" id="view-logs">
+            <article class="panel">
+              <div class="panel-head">
+                <div>
+                  <div class="panel-title">日志中心</div>
+                  <div class="section-kicker">bridge.log · tail limit 1000</div>
+                </div>
+                <div class="actions">
+                  <label class="chip-toggle">
+                    <input id="logsAutoRefresh" type="checkbox">
+                    自动刷新
+                  </label>
+                  <button class="button" id="refreshLogsButton" type="button">刷新日志</button>
+                </div>
               </div>
-            </div>
-          </article>
+              <div class="panel-body">
+                <div class="log-toolbar">
+                  <div class="filter-line" id="logCategoryChips"></div>
+                  <div class="filter-line" id="logLevelChips"></div>
+                  <div class="filter-inputs">
+                    <input class="input" id="logKeyword" type="search" placeholder="keyword">
+                    <input class="input" id="logGroupId" type="text" placeholder="group_id">
+                    <input class="input" id="logUserId" type="text" placeholder="user_id">
+                    <select class="input" id="logLimit">
+                      <option value="100">100</option>
+                      <option value="300" selected>300</option>
+                      <option value="500">500</option>
+                      <option value="1000">1000</option>
+                    </select>
+                    <button class="button primary" id="applyLogFiltersButton" type="button">应用</button>
+                  </div>
+                </div>
+                <div class="status" id="logsStatus"></div>
+                <div class="log-list" id="logsList"></div>
+              </div>
+            </article>
+          </section>
 
-          <article class="panel">
-            <div class="panel-head">
-              <div class="panel-title">群规则表</div>
-              <div class="panel-copy">白名单控制是否接入机器人；触发规则控制“全局回复”还是“仅艾特回复”。</div>
+          <section class="view" id="view-groups">
+            <div class="metrics" id="groupStats"></div>
+            <div class="groups-layout">
+              <article class="panel">
+                <div class="panel-head">
+                  <div class="panel-title">新增群聊</div>
+                </div>
+                <div class="panel-body">
+                  <div class="form-grid">
+                    <div class="field">
+                      <label for="newGroupId">群号</label>
+                      <input class="input" id="newGroupId" type="text" inputmode="numeric" placeholder="437966130">
+                    </div>
+                    <div class="field">
+                      <label for="newGroupName">群名称</label>
+                      <input class="input" id="newGroupName" type="text" placeholder="Candace 测试群">
+                    </div>
+                    <button class="button" id="addGroupButton" type="button">添加群</button>
+                    <button class="button" id="reloadGroupsButton" type="button">重新读取</button>
+                    <button class="button primary" id="saveGroupsButton" type="button">保存配置</button>
+                    <div class="status" id="groupStatus"></div>
+                  </div>
+                </div>
+              </article>
+              <section class="group-list" id="groupsContainer"></section>
             </div>
-            <div class="panel-body">
-              <div class="table-wrap" id="groupsContainer"></div>
+          </section>
+
+          <section class="view" id="view-private">
+            <article class="panel">
+              <div class="panel-head">
+                <div class="panel-title">私聊记录 / 调试</div>
+                <button class="button" id="refreshPrivateButton" type="button">刷新私聊日志</button>
+              </div>
+              <div class="panel-body">
+                <div class="private-log-list" id="privateLogs"></div>
+              </div>
+            </article>
+          </section>
+
+          <section class="view" id="view-system">
+            <div class="grid-2">
+              <article class="panel">
+                <div class="panel-head">
+                  <div class="panel-title">运行配置</div>
+                </div>
+                <div class="panel-body">
+                  <div class="status-grid" id="systemConfigGrid"></div>
+                </div>
+              </article>
+              <article class="panel">
+                <div class="panel-head">
+                  <div class="panel-title">Env 搜索路径</div>
+                </div>
+                <div class="panel-body">
+                  <div class="log-list" id="envPathList"></div>
+                </div>
+              </article>
             </div>
-          </article>
+          </section>
         </section>
       </section>
     </main>
 
     <script>
+      const INITIAL_SECTION = "{{ initial_section | default('dashboard') }}";
+      const SECTION_META = {
+        dashboard: ["概览", "Bridge、NapCat、VoCat 与日志状态。"],
+        vocat: ["VoCat 状态", "设备 pull、ack、webhook 与本机测试队列。"],
+        logs: ["日志中心", "多选类别、级别与字段过滤 bridge.log。"],
+        groups: ["群聊配置", "白名单、触发规则、表情决策和机器人回复开关。"],
+        private: ["私聊调试", "最近 private chat 相关日志。"],
+        system: ["系统配置", "只读展示路径、端口与关键环境变量是否已设置。"],
+      };
+      const LOG_CATEGORIES = ["all", "vocat", "group", "private", "scheduler", "skill", "vision", "reaction", "llm", "napcat", "system"];
+      const LOG_LEVELS = ["info", "warning", "error"];
       const state = {
+        current: "dashboard",
         groups: [],
-        meta: null,
+        summary: null,
+        logCategories: new Set(["all"]),
+        logLevels: new Set(),
+        logTimer: null,
       };
 
-      const statsEl = document.getElementById("stats");
-      const groupsContainerEl = document.getElementById("groupsContainer");
-      const statusEl = document.getElementById("statusText");
-      const saveButton = document.getElementById("saveButton");
-      const reloadButton = document.getElementById("reloadButton");
-      const addButton = document.getElementById("addButton");
-      const newGroupIdInput = document.getElementById("newGroupId");
-      const newGroupNameInput = document.getElementById("newGroupName");
-
-      function setStatus(message, kind = "") {
-        statusEl.textContent = message || "";
-        statusEl.className = kind ? `status ${kind}` : "status";
-      }
-
-      function renderStats() {
-        const enabledCount = state.groups.filter((group) => group.enabled).length;
-        const allReplyCount = state.groups.filter((group) => group.enabled && group.trigger_mode === "all").length;
-        const mentionCount = state.groups.filter((group) => group.enabled && group.trigger_mode === "mention").length;
-        const totalCount = state.groups.length;
-
-        statsEl.innerHTML = [
-          statCard("已录入群聊", String(totalCount), "当前配置中的全部群"),
-          statCard("白名单群数", String(enabledCount), "只有这些群会被机器人处理"),
-          statCard("全局触发", String(allReplyCount), "会自动响应普通群消息"),
-          statCard("艾特触发", String(mentionCount), "需要 @ 机器人才会回复"),
-        ].join("");
-
-        document.getElementById("navGroupCount").textContent = String(totalCount);
-        document.getElementById("navWhitelistCount").textContent = String(enabledCount);
-        document.getElementById("navAllModeCount").textContent = String(allReplyCount);
-        document.getElementById("navMentionModeCount").textContent = String(mentionCount);
-      }
-
-      function statCard(label, value, foot) {
-        return `
-          <section class="card">
-            <div class="card-label">${escapeHtml(label)}</div>
-            <div class="card-value">${escapeHtml(value)}</div>
-            <div class="card-foot">${escapeHtml(foot)}</div>
-          </section>
-        `;
-      }
-
-      function renderGroups() {
-        if (!state.groups.length) {
-          groupsContainerEl.innerHTML = `<div class="empty">还没有群配置，先在左边填一个群号。</div>`;
-          return;
-        }
-
-        groupsContainerEl.innerHTML = `
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 25%">群聊</th>
-                <th style="width: 12%">白名单</th>
-                <th style="width: 20%">回复规则</th>
-                <th style="width: 18%">表情决策</th>
-                <th style="width: 12%">机器人回复</th>
-                <th style="width: 13%"></th>
-              </tr>
-            </thead>
-            <tbody>
-              ${state.groups.map((group, index) => `
-                <tr data-index="${index}">
-                  <td>
-                    <div class="group-cell">
-                      <input class="input" type="text" value="${escapeHtmlAttr(group.name || "")}" data-field="name" placeholder="群名称">
-                      <div class="group-id">${escapeHtml(group.group_id)}</div>
-                      <div class="tag-row">
-                        <span class="tag ${group.enabled ? "success" : ""}">${group.enabled ? "已启用" : "未启用"}</span>
-                        <span class="tag">${group.trigger_mode === "all" ? "全局触发" : "艾特触发"}</span>
-                      </div>
-                    </div>
-                  </td>
-                  <td>
-                    <label class="switch">
-                      <input type="checkbox" data-field="enabled" ${group.enabled ? "checked" : ""}>
-                      <span class="slider"></span>
-                    </label>
-                  </td>
-                  <td>
-                    <div class="segmented">
-                      <button type="button" class="${group.trigger_mode === "mention" ? "active" : ""}" data-trigger="mention">仅艾特</button>
-                      <button type="button" class="${group.trigger_mode === "all" ? "active" : ""}" data-trigger="all">全局</button>
-                    </div>
-                  </td>
-                  <td>
-                    <select class="input" data-field="reaction_decision_mode">
-                      <option value="llm_first" ${group.reaction_decision_mode === "llm_first" ? "selected" : ""}>LLM优先</option>
-                      <option value="hybrid" ${group.reaction_decision_mode === "hybrid" ? "selected" : ""}>混合</option>
-                      <option value="rule_first" ${group.reaction_decision_mode === "rule_first" ? "selected" : ""}>规则优先</option>
-                    </select>
-                  </td>
-                  <td>
-                    <label class="switch">
-                      <input type="checkbox" data-field="bot_can_reply" ${group.bot_can_reply !== false ? "checked" : ""}>
-                      <span class="slider"></span>
-                    </label>
-                  </td>
-                  <td>
-                    <div class="table-actions">
-                      <button class="button danger" type="button" data-action="remove">移除</button>
-                    </div>
-                  </td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        `;
-      }
-
-      function bindEvents() {
-        groupsContainerEl.querySelectorAll("tbody tr").forEach((row) => {
-          const index = Number(row.dataset.index);
-
-          row.querySelectorAll("[data-field]").forEach((input) => {
-            const sync = () => {
-              const field = input.dataset.field;
-              state.groups[index][field] = input.type === "checkbox" ? input.checked : input.value;
-              renderStats();
-              renderGroups();
-              bindEvents();
-            };
-            input.addEventListener("change", sync);
-            if (input.type !== "checkbox") {
-              input.addEventListener("input", () => {
-                state.groups[index][input.dataset.field] = input.value;
-              });
-            }
-          });
-
-          row.querySelectorAll("[data-trigger]").forEach((button) => {
-            button.addEventListener("click", () => {
-              state.groups[index].trigger_mode = button.dataset.trigger;
-              renderStats();
-              renderGroups();
-              bindEvents();
-            });
-          });
-
-          row.querySelector('[data-action="remove"]').addEventListener("click", () => {
-            state.groups.splice(index, 1);
-            renderStats();
-            renderGroups();
-            bindEvents();
-          });
-        });
-      }
-
-      function collectPayload() {
-        return {
-          groups: state.groups.map((group) => ({
-            group_id: group.group_id,
-            name: group.name || "",
-            enabled: Boolean(group.enabled),
-            trigger_mode: group.trigger_mode === "all" ? "all" : "mention",
-            reaction_decision_mode: group.reaction_decision_mode || "llm_first",
-            bot_can_reply: group.bot_can_reply !== false,
-          })),
-        };
-      }
-
-      async function loadData() {
-        setStatus("正在读取群配置…");
-        const response = await fetch("/api/admin/groups");
-        const payload = await response.json();
-        if (!response.ok || !payload.ok) {
-          throw new Error(payload.error || "读取失败");
-        }
-        state.groups = (payload.groups || []).map((group) => ({
-          ...group,
-          enabled: group.enabled !== false,
-          bot_can_reply: group.bot_can_reply !== false,
-          trigger_mode: group.trigger_mode === "all" ? "all" : "mention",
-          reaction_decision_mode: ["llm_first", "hybrid", "rule_first"].includes(group.reaction_decision_mode)
-            ? group.reaction_decision_mode
-            : "llm_first",
-        }));
-        state.meta = payload.meta || null;
-        renderStats();
-        renderGroups();
-        bindEvents();
-        setStatus("配置已加载。", "ok");
-      }
-
-      async function saveData() {
-        setStatus("正在保存…");
-        saveButton.disabled = true;
-        const response = await fetch("/api/admin/groups", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(collectPayload()),
-        });
-        const payload = await response.json();
-        saveButton.disabled = false;
-        if (!response.ok || !payload.ok) {
-          throw new Error(payload.error || "保存失败");
-        }
-        state.groups = (payload.groups || []).map((group) => ({
-          ...group,
-          enabled: group.enabled !== false,
-          bot_can_reply: group.bot_can_reply !== false,
-          trigger_mode: group.trigger_mode === "all" ? "all" : "mention",
-          reaction_decision_mode: ["llm_first", "hybrid", "rule_first"].includes(group.reaction_decision_mode)
-            ? group.reaction_decision_mode
-            : "llm_first",
-        }));
-        state.meta = payload.meta || null;
-        renderStats();
-        renderGroups();
-        bindEvents();
-        setStatus("已保存到 groups.json。", "ok");
-      }
-
-      function addGroup() {
-        const groupId = newGroupIdInput.value.trim();
-        const groupName = newGroupNameInput.value.trim();
-        if (!/^\d+$/.test(groupId)) {
-          setStatus("群号必须是纯数字。", "error");
-          return;
-        }
-        if (state.groups.some((group) => group.group_id === groupId)) {
-          setStatus("这个群已经在列表里了。", "error");
-          return;
-        }
-        state.groups.unshift({
-          group_id: groupId,
-          name: groupName,
-          enabled: true,
-          bot_can_reply: true,
-          trigger_mode: "mention",
-          reaction_decision_mode: "llm_first",
-        });
-        newGroupIdInput.value = "";
-        newGroupNameInput.value = "";
-        renderStats();
-        renderGroups();
-        bindEvents();
-        setStatus("已加入待保存列表。", "ok");
-      }
+      const $ = (id) => document.getElementById(id);
 
       function escapeHtml(value) {
         return String(value ?? "")
@@ -895,11 +929,506 @@
         return escapeHtml(value).replaceAll("`", "&#96;");
       }
 
-      saveButton.addEventListener("click", () => saveData().catch((error) => setStatus(error.message, "error")));
-      reloadButton.addEventListener("click", () => loadData().catch((error) => setStatus(error.message, "error")));
-      addButton.addEventListener("click", addGroup);
+      function setStatus(element, message, kind = "") {
+        element.textContent = message || "";
+        element.className = kind ? `status ${kind}` : "status";
+      }
 
-      loadData().catch((error) => setStatus(error.message, "error"));
+      async function fetchJson(url, options = {}) {
+        const response = await fetch(url, options);
+        const payload = await response.json();
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.error || `HTTP ${response.status}`);
+        }
+        return payload;
+      }
+
+      function metric(label, value, foot = "") {
+        return `
+          <article class="metric">
+            <div class="metric-label">${escapeHtml(label)}</div>
+            <div class="metric-value">${escapeHtml(value)}</div>
+            <div class="metric-foot">${escapeHtml(foot)}</div>
+          </article>
+        `;
+      }
+
+      function kv(label, value) {
+        const rendered = value === true ? "true" : value === false ? "false" : value ?? "";
+        return `
+          <div class="kv">
+            <div class="kv-label">${escapeHtml(label)}</div>
+            <div class="kv-value">${escapeHtml(rendered)}</div>
+          </div>
+        `;
+      }
+
+      function renderLogEntries(entries, container) {
+        if (!entries.length) {
+          container.innerHTML = `<div class="empty">没有匹配日志。</div>`;
+          return;
+        }
+        container.innerHTML = entries.map((entry) => {
+          const fields = entry.fields || {};
+          const fieldText = Object.keys(fields).length ? JSON.stringify(fields, null, 2) : "{}";
+          return `
+            <details class="log-entry">
+              <summary>
+                <div class="log-meta">
+                  <span class="badge">${escapeHtml(entry.category)}</span>
+                  <span class="badge ${escapeHtml(entry.level)}">${escapeHtml(entry.level)}</span>
+                  ${Object.entries(fields).slice(0, 5).map(([key, value]) => `<span class="badge">${escapeHtml(key)}=${escapeHtml(value)}</span>`).join("")}
+                </div>
+                <div class="log-line">${escapeHtml(entry.raw)}</div>
+              </summary>
+              <div class="fields">${escapeHtml(fieldText)}</div>
+            </details>
+          `;
+        }).join("");
+      }
+
+      function renderDashboard(summary) {
+        $("dashboardMetrics").innerHTML = [
+          metric("Bridge", summary.bridge_running ? "running" : "down", "当前请求可返回"),
+          metric("NapCat", summary.napcat_available ? "online" : "offline", "get_login_info"),
+          metric("VoCat", summary.vocat_online ? "online" : "offline", "最近 15 秒 poll"),
+          metric("队列", String(summary.queue_size ?? 0), "待执行命令"),
+          metric("群聊消息", String(summary.today_group_messages ?? 0), "bridge.log 可见计数"),
+          metric("私聊消息", String(summary.today_private_messages ?? 0), "bridge.log 可见计数"),
+        ].join("");
+        renderLogEntries(summary.recent_warnings || [], $("dashboardWarnings"));
+        renderVocatGrid(summary.vocat || {}, $("dashboardVocat"));
+        renderSystemConfig(summary.config || {});
+        $("navBridge").textContent = summary.bridge_running ? "on" : "off";
+        $("navVocat").textContent = summary.vocat_online ? "on" : "off";
+      }
+
+      function renderVocatGrid(status, target) {
+        target.innerHTML = [
+          kv("device_online", Boolean(status.device_online)),
+          kv("queue_size", status.queue_size ?? 0),
+          kv("last_poll_at", status.last_poll_at || ""),
+          kv("last_ack_at", status.last_ack_at || ""),
+          kv("last_webhook_at", status.last_webhook_at || ""),
+          kv("last_query", status.last_query || ""),
+          kv("last_reply", status.last_reply || ""),
+          kv("last_expression", status.last_expression || ""),
+          kv("poll_count", status.poll_count ?? 0),
+          kv("ack_count", status.ack_count ?? 0),
+          kv("last_command_id", status.last_command_id || ""),
+          kv("last_source", status.last_source || ""),
+        ].join("");
+      }
+
+      function renderVocatMetrics(status) {
+        $("vocatMetrics").innerHTML = [
+          metric("在线", status.device_online ? "online" : "offline", "last_poll_at"),
+          metric("队列", String(status.queue_size ?? 0), "pending"),
+          metric("Poll", String(status.poll_count ?? 0), "current runtime"),
+          metric("Ack", String(status.ack_count ?? 0), "current runtime"),
+        ].join("");
+      }
+
+      function renderSystemConfig(config) {
+        $("systemConfigGrid").innerHTML = [
+          kv("bridge_host", config.bridge_host || ""),
+          kv("bridge_port", config.bridge_port || ""),
+          kv("vocat_webhook_enabled", Boolean(config.vocat_webhook_enabled)),
+          kv("vocat_webhook_token_set", Boolean(config.vocat_webhook_token_set)),
+          kv("VISION_API_URL", config.vision_api_url_set ? "set" : "unset"),
+          kv("VISION_API_KEY", config.vision_api_key_set ? "set" : "unset"),
+          kv("OWNER_QQ", config.owner_qq || ""),
+          kv("NAPCAT_HTTP", config.napcat_http_set ? "set" : "unset"),
+          kv("NAPCAT_TOKEN", config.napcat_token_set ? "set" : "unset"),
+          kv("KIMI_API_KEY", config.kimi_api_key_set ? "set" : "unset"),
+          kv("OPENROUTER_API_KEY", config.openrouter_api_key_set ? "set" : "unset"),
+          kv("MOONSHOT_API_KEY", config.moonshot_api_key_set ? "set" : "unset"),
+          kv("log_path", config.log_path || ""),
+        ].join("");
+        $("envPathList").innerHTML = (config.env_paths || []).map((item) => `
+          <div class="kv">
+            <div class="kv-label">${escapeHtml(item.label)} · ${item.exists ? "exists" : "missing"}</div>
+            <div class="kv-value">${escapeHtml(item.path)}</div>
+          </div>
+        `).join("");
+      }
+
+      async function loadSummary() {
+        const summary = await fetchJson("/admin/api/summary");
+        state.summary = summary;
+        renderDashboard(summary);
+      }
+
+      async function loadVocatStatus() {
+        const status = await fetchJson("/admin/api/vocat/status");
+        renderVocatGrid(status, $("vocatStatusGrid"));
+        renderVocatMetrics(status);
+        $("navVocat").textContent = status.device_online ? "on" : "off";
+      }
+
+      async function queueVocatTts() {
+        const text = $("vocatTtsText").value.trim();
+        if (!text) {
+          setStatus($("vocatActionStatus"), "播报文本不能为空。", "error");
+          return;
+        }
+        const payload = await fetchJson("/vocat/queue", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({type: "tts", text, expression: "happy", source: "admin_console"}),
+        });
+        setStatus($("vocatActionStatus"), `已入队 command_id=${payload.command_id || ""}`, "ok");
+        await loadVocatStatus();
+      }
+
+      async function queueVocatExpression(expression) {
+        const payload = await fetchJson("/vocat/queue", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({type: "expression", expression, source: "admin_console"}),
+        });
+        setStatus($("vocatActionStatus"), `已入队 ${expression} command_id=${payload.command_id || ""}`, "ok");
+        await loadVocatStatus();
+      }
+
+      function renderChipFilters() {
+        $("logCategoryChips").innerHTML = LOG_CATEGORIES.map((category) => `
+          <button class="chip ${state.logCategories.has(category) ? "active" : ""}" data-log-category="${category}" type="button">${category}</button>
+        `).join("");
+        $("logLevelChips").innerHTML = LOG_LEVELS.map((level) => `
+          <button class="chip ${state.logLevels.has(level) ? "active" : ""}" data-log-level="${level}" type="button">${level}</button>
+        `).join("");
+
+        document.querySelectorAll("[data-log-category]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const category = button.dataset.logCategory;
+            if (category === "all") {
+              state.logCategories = new Set(["all"]);
+            } else {
+              state.logCategories.delete("all");
+              if (state.logCategories.has(category)) state.logCategories.delete(category);
+              else state.logCategories.add(category);
+              if (!state.logCategories.size) state.logCategories.add("all");
+            }
+            renderChipFilters();
+            loadLogs().catch((error) => setStatus($("logsStatus"), error.message, "error"));
+          });
+        });
+
+        document.querySelectorAll("[data-log-level]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const level = button.dataset.logLevel;
+            if (state.logLevels.has(level)) state.logLevels.delete(level);
+            else state.logLevels.add(level);
+            renderChipFilters();
+            loadLogs().catch((error) => setStatus($("logsStatus"), error.message, "error"));
+          });
+        });
+      }
+
+      function selectedCategoriesParam() {
+        if (state.logCategories.has("all") || !state.logCategories.size) return "all";
+        return Array.from(state.logCategories).join(",");
+      }
+
+      function selectedLevelsParam() {
+        if (!state.logLevels.size) return "all";
+        return Array.from(state.logLevels).join(",");
+      }
+
+      async function loadLogs() {
+        const params = new URLSearchParams({
+          category: selectedCategoriesParam(),
+          level: selectedLevelsParam(),
+          limit: $("logLimit").value,
+          keyword: $("logKeyword").value.trim(),
+          group_id: $("logGroupId").value.trim(),
+          user_id: $("logUserId").value.trim(),
+        });
+        setStatus($("logsStatus"), "读取中…");
+        const payload = await fetchJson(`/admin/api/logs?${params.toString()}`);
+        renderLogEntries(payload.entries || [], $("logsList"));
+        setStatus($("logsStatus"), `已读取 ${payload.entries.length} 条。`, "ok");
+      }
+
+      async function loadPrivateLogs() {
+        const payload = await fetchJson("/admin/api/logs?category=private&limit=100");
+        renderLogEntries(payload.entries || [], $("privateLogs"));
+      }
+
+      function setGroupStatus(message, kind = "") {
+        setStatus($("groupStatus"), message, kind);
+      }
+
+      function normalizeGroup(group) {
+        return {
+          ...group,
+          enabled: group.enabled !== false,
+          bot_can_reply: group.bot_can_reply !== false,
+          enable_vision: Boolean(group.enable_vision),
+          learn_style: Boolean(group.learn_style),
+          capture_all_messages: Boolean(group.capture_all_messages),
+          mute_log: Boolean(group.mute_log),
+          trigger_mode: group.trigger_mode === "all" ? "all" : "mention",
+          reaction_decision_mode: ["llm_first", "hybrid", "rule_first"].includes(group.reaction_decision_mode)
+            ? group.reaction_decision_mode
+            : "llm_first",
+        };
+      }
+
+      function renderGroupStats() {
+        const enabled = state.groups.filter((group) => group.enabled).length;
+        const allMode = state.groups.filter((group) => group.enabled && group.trigger_mode === "all").length;
+        const mentionMode = state.groups.filter((group) => group.enabled && group.trigger_mode === "mention").length;
+        $("groupStats").innerHTML = [
+          metric("已录入群聊", String(state.groups.length), "groups.json"),
+          metric("白名单", String(enabled), "enabled"),
+          metric("全局触发", String(allMode), "reply_all_messages"),
+          metric("艾特触发", String(mentionMode), "mention"),
+        ].join("");
+        $("navGroupCount").textContent = String(state.groups.length);
+      }
+
+      function renderGroups() {
+        renderGroupStats();
+        if (!state.groups.length) {
+          $("groupsContainer").innerHTML = `<div class="empty">还没有群配置。</div>`;
+          return;
+        }
+        $("groupsContainer").innerHTML = state.groups.map((group, index) => `
+          <article class="group-card" data-index="${index}">
+            <section class="group-primary">
+              <div class="field">
+                <label>群名称</label>
+                <input class="input" type="text" value="${escapeHtmlAttr(group.name || "")}" data-field="name" placeholder="群名称">
+              </div>
+              <div class="group-meta">
+                <span class="group-id">${escapeHtml(group.group_id)}</span>
+                <span class="state-badge ${group.enabled ? "success" : "disabled"}">${group.enabled ? "enabled" : "disabled"}</span>
+              </div>
+              <div class="toggle-row">
+                <span>白名单</span>
+                <label class="switch">
+                  <input type="checkbox" data-field="enabled" ${group.enabled ? "checked" : ""}>
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </section>
+            <section class="group-policy">
+              <div>
+                <div class="section-kicker">回复规则</div>
+                <div class="segmented" style="margin-top: 8px;">
+                  <button type="button" class="${group.trigger_mode === "mention" ? "active" : ""}" data-trigger="mention">仅艾特</button>
+                  <button type="button" class="${group.trigger_mode === "all" ? "active" : ""}" data-trigger="all">全局</button>
+                </div>
+              </div>
+              <div class="field select-field">
+                <label>表情决策</label>
+                <select class="input" data-field="reaction_decision_mode">
+                  <option value="llm_first" ${group.reaction_decision_mode === "llm_first" ? "selected" : ""}>LLM优先</option>
+                  <option value="hybrid" ${group.reaction_decision_mode === "hybrid" ? "selected" : ""}>混合</option>
+                  <option value="rule_first" ${group.reaction_decision_mode === "rule_first" ? "selected" : ""}>规则优先</option>
+                </select>
+              </div>
+              <div class="toggle-row">
+                <span>机器人回复</span>
+                <label class="switch">
+                  <input type="checkbox" data-field="bot_can_reply" ${group.bot_can_reply ? "checked" : ""}>
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </section>
+            <section class="group-extensions">
+              <div class="section-kicker">扩展能力</div>
+              <div class="chip-grid">
+                ${extensionChip("enable_vision", "Vision", group.enable_vision)}
+                ${extensionChip("learn_style", "Learn", group.learn_style)}
+                ${extensionChip("capture_all_messages", "Capture", group.capture_all_messages)}
+                ${extensionChip("mute_log", "Mute log", group.mute_log)}
+              </div>
+            </section>
+            <section class="group-actions">
+              <button class="button danger" type="button" data-action="remove">删除</button>
+            </section>
+          </article>
+        `).join("");
+        bindGroupCardEvents();
+      }
+
+      function extensionChip(field, label, checked) {
+        return `
+          <label class="chip-toggle">
+            <input type="checkbox" data-field="${field}" ${checked ? "checked" : ""}>
+            ${escapeHtml(label)}
+          </label>
+        `;
+      }
+
+      function bindGroupCardEvents() {
+        $("groupsContainer").querySelectorAll(".group-card").forEach((card) => {
+          const index = Number(card.dataset.index);
+          card.querySelectorAll("[data-field]").forEach((input) => {
+            const sync = () => {
+              const field = input.dataset.field;
+              state.groups[index][field] = input.type === "checkbox" ? input.checked : input.value;
+              if (input.type === "checkbox" || input.tagName === "SELECT") {
+                renderGroups();
+              }
+            };
+            input.addEventListener("change", sync);
+            if (input.type !== "checkbox") {
+              input.addEventListener("input", () => {
+                state.groups[index][input.dataset.field] = input.value;
+              });
+            }
+          });
+          card.querySelectorAll("[data-trigger]").forEach((button) => {
+            button.addEventListener("click", () => {
+              state.groups[index].trigger_mode = button.dataset.trigger;
+              renderGroups();
+            });
+          });
+          card.querySelector('[data-action="remove"]').addEventListener("click", () => {
+            state.groups.splice(index, 1);
+            renderGroups();
+            setGroupStatus("已从当前列表移除，保存后生效。", "ok");
+          });
+        });
+      }
+
+      function collectGroupPayload() {
+        return {
+          groups: state.groups.map((group) => ({
+            group_id: group.group_id,
+            name: group.name || "",
+            enabled: Boolean(group.enabled),
+            trigger_mode: group.trigger_mode === "all" ? "all" : "mention",
+            reaction_decision_mode: group.reaction_decision_mode || "llm_first",
+            bot_can_reply: group.bot_can_reply !== false,
+            enable_vision: Boolean(group.enable_vision),
+            learn_style: Boolean(group.learn_style),
+            capture_all_messages: Boolean(group.capture_all_messages),
+            mute_log: Boolean(group.mute_log),
+          })),
+        };
+      }
+
+      async function loadGroups() {
+        setGroupStatus("正在读取群配置…");
+        const payload = await fetchJson("/api/admin/groups");
+        state.groups = (payload.groups || []).map(normalizeGroup);
+        renderGroups();
+        setGroupStatus("配置已加载。", "ok");
+      }
+
+      async function saveGroups() {
+        setGroupStatus("正在保存…");
+        $("saveGroupsButton").disabled = true;
+        try {
+          const payload = await fetchJson("/api/admin/groups", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(collectGroupPayload()),
+          });
+          state.groups = (payload.groups || []).map(normalizeGroup);
+          renderGroups();
+          setGroupStatus("已保存。", "ok");
+        } finally {
+          $("saveGroupsButton").disabled = false;
+        }
+      }
+
+      function addGroup() {
+        const groupId = $("newGroupId").value.trim();
+        const name = $("newGroupName").value.trim();
+        if (!/^\d+$/.test(groupId)) {
+          setGroupStatus("群号必须是纯数字。", "error");
+          return;
+        }
+        if (state.groups.some((group) => group.group_id === groupId)) {
+          setGroupStatus("这个群已经在列表里。", "error");
+          return;
+        }
+        state.groups.unshift(normalizeGroup({
+          group_id: groupId,
+          name,
+          enabled: true,
+          bot_can_reply: true,
+          trigger_mode: "mention",
+          reaction_decision_mode: "llm_first",
+        }));
+        $("newGroupId").value = "";
+        $("newGroupName").value = "";
+        renderGroups();
+        setGroupStatus("已加入待保存列表。", "ok");
+      }
+
+      function showSection(section) {
+        state.current = SECTION_META[section] ? section : "dashboard";
+        document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
+        $(`view-${state.current}`).classList.add("active");
+        document.querySelectorAll("[data-nav]").forEach((button) => {
+          button.classList.toggle("active", button.dataset.nav === state.current);
+        });
+        $("pageTitle").textContent = SECTION_META[state.current][0];
+        $("pageSubtitle").textContent = SECTION_META[state.current][1];
+        if (state.current === "dashboard") loadSummary().catch(console.error);
+        if (state.current === "vocat") loadVocatStatus().catch((error) => setStatus($("vocatActionStatus"), error.message, "error"));
+        if (state.current === "logs") loadLogs().catch((error) => setStatus($("logsStatus"), error.message, "error"));
+        if (state.current === "groups" && !state.groups.length) loadGroups().catch((error) => setGroupStatus(error.message, "error"));
+        if (state.current === "private") loadPrivateLogs().catch(console.error);
+        if (state.current === "system") {
+          if (state.summary) renderSystemConfig(state.summary.config || {});
+          else loadSummary().catch(console.error);
+        }
+      }
+
+      function refreshCurrent() {
+        if (state.current === "dashboard") return loadSummary();
+        if (state.current === "vocat") return loadVocatStatus();
+        if (state.current === "logs") return loadLogs();
+        if (state.current === "groups") return loadGroups();
+        if (state.current === "private") return loadPrivateLogs();
+        if (state.current === "system") return loadSummary();
+      }
+
+      function setupEvents() {
+        document.querySelectorAll("[data-nav]").forEach((button) => {
+          button.addEventListener("click", () => showSection(button.dataset.nav));
+        });
+        $("refreshCurrentButton").addEventListener("click", () => refreshCurrent().catch(console.error));
+        $("refreshVocatButton").addEventListener("click", () => loadVocatStatus().catch((error) => setStatus($("vocatActionStatus"), error.message, "error")));
+        $("sendVocatTtsButton").addEventListener("click", () => queueVocatTts().catch((error) => setStatus($("vocatActionStatus"), error.message, "error")));
+        document.querySelectorAll("[data-expression]").forEach((button) => {
+          button.addEventListener("click", () => queueVocatExpression(button.dataset.expression).catch((error) => setStatus($("vocatActionStatus"), error.message, "error")));
+        });
+        $("refreshLogsButton").addEventListener("click", () => loadLogs().catch((error) => setStatus($("logsStatus"), error.message, "error")));
+        $("applyLogFiltersButton").addEventListener("click", () => loadLogs().catch((error) => setStatus($("logsStatus"), error.message, "error")));
+        ["logKeyword", "logGroupId", "logUserId"].forEach((id) => {
+          $(id).addEventListener("keydown", (event) => {
+            if (event.key === "Enter") loadLogs().catch((error) => setStatus($("logsStatus"), error.message, "error"));
+          });
+        });
+        $("logsAutoRefresh").addEventListener("change", (event) => {
+          if (state.logTimer) {
+            clearInterval(state.logTimer);
+            state.logTimer = null;
+          }
+          if (event.target.checked) {
+            state.logTimer = setInterval(() => {
+              if (state.current === "logs") loadLogs().catch(console.error);
+            }, 5000);
+          }
+        });
+        $("reloadGroupsButton").addEventListener("click", () => loadGroups().catch((error) => setGroupStatus(error.message, "error")));
+        $("saveGroupsButton").addEventListener("click", () => saveGroups().catch((error) => setGroupStatus(error.message, "error")));
+        $("addGroupButton").addEventListener("click", addGroup);
+        $("refreshPrivateButton").addEventListener("click", () => loadPrivateLogs().catch(console.error));
+      }
+
+      renderChipFilters();
+      setupEvents();
+      Promise.allSettled([loadSummary(), loadGroups()]).finally(() => showSection(INITIAL_SECTION));
     </script>
   </body>
 </html>

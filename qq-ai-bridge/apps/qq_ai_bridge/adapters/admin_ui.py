@@ -1,14 +1,49 @@
-"""Admin UI routes for managing group whitelist and reply policy."""
+"""Admin UI routes for the QQ AI Bridge console."""
 
 from __future__ import annotations
 
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import requests
 from flask import Blueprint, jsonify, render_template, request
 
 from storage_utils import load_group_config_store, save_group_config_store
 
-from apps.qq_ai_bridge.config.settings import GROUP_CONFIG_PATH
+from apps.qq_ai_bridge.config.settings import (
+    GROUP_CONFIG_PATH,
+    NAPCAT_HTTP,
+    NAPCAT_TOKEN,
+    OWNER_QQ,
+    QQ_AI_BRIDGE_ROOT,
+    REPO_ROOT,
+    VOCAT_WEBHOOK_TOKEN,
+)
+from apps.qq_ai_bridge.services.vocat_command_queue import (
+    get_vocat_queue_status,
+    get_vocat_runtime_status,
+)
 
 admin_ui_bp = Blueprint("admin_ui", __name__)
+BRIDGE_LOG_PATH = (REPO_ROOT / ".runtime" / "logs" / "bridge.log").resolve()
+MAX_LOG_LIMIT = 1000
+DEFAULT_LOG_LIMIT = 300
+LOG_CATEGORIES = {
+    "all",
+    "system",
+    "group",
+    "private",
+    "vocat",
+    "scheduler",
+    "skill",
+    "vision",
+    "reaction",
+    "llm",
+    "napcat",
+}
 
 _EDITABLE_GROUP_FIELDS = (
     "capture_all_messages",
@@ -20,6 +55,25 @@ _EDITABLE_GROUP_FIELDS = (
     "mute_log",
 )
 _REACTION_DECISION_MODES = {"llm_first", "hybrid", "rule_first"}
+_SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b("
+    r"token|api[_-]?key|authorization|vocat_webhook_token|kimi_api_key|"
+    r"openrouter_api_key|moonshot_api_key|access_token"
+    r")\b([\"']?\s*[:=]\s*[\"']?)([^\"'\s,&}]+)"
+)
+_BEARER_PATTERN = re.compile(r"(?i)\b(bearer)\s+([A-Za-z0-9._~+\-/=]+)")
+_FIELD_PATTERNS: dict[str, re.Pattern[str]] = {
+    "group_id": re.compile(r"\bgroup_id['\"]?\s*[=:]\s*['\"]?([^'\",\s}]+)"),
+    "user_id": re.compile(r"\buser_id['\"]?\s*[=:]\s*['\"]?([^'\",\s}]+)"),
+    "nick": re.compile(r"\bnick['\"]?\s*[=:]\s*['\"]([^'\"]*)"),
+    "text": re.compile(r"\btext['\"]?\s*[=:]\s*['\"]([^'\"]*)"),
+    "query": re.compile(r"\bquery['\"]?\s*[=:]\s*['\"]([^'\"]*)"),
+    "command_id": re.compile(r"\bcommand_id['\"]?\s*[=:]\s*['\"]?([^'\",\s}]+)"),
+    "queue_size": re.compile(r"\bqueue(?:_size)?['\"]?\s*[=:]\s*['\"]?(\d+)"),
+    "duration_ms": re.compile(r"\bduration_ms['\"]?\s*[=:]\s*['\"]?(\d+)"),
+    "status": re.compile(r"\bstatus['\"]?\s*[=:]\s*['\"]?([^'\",\s}]+)"),
+    "retcode": re.compile(r"\bretcode['\"]?\s*[=:]\s*['\"]?(-?\d+)"),
+}
 
 
 def _serialize_group_store() -> dict:
@@ -80,17 +134,249 @@ def _normalize_group_payload(raw: dict, existing: dict) -> tuple[str, dict]:
     return group_id, merged
 
 
+def _clamp_log_limit(raw: str | int | None, default: int = DEFAULT_LOG_LIMIT) -> int:
+    try:
+        value = int(raw or default)
+    except (TypeError, ValueError):
+        value = default
+    return min(MAX_LOG_LIMIT, max(1, value))
+
+
+def tail_lines(path: str | os.PathLike[str], limit: int = DEFAULT_LOG_LIMIT) -> list[str]:
+    limit = _clamp_log_limit(limit)
+    target = Path(path).resolve()
+    if not target.is_file():
+        return []
+
+    block_size = 8192
+    data = b""
+    with target.open("rb") as fp:
+        fp.seek(0, os.SEEK_END)
+        position = fp.tell()
+        while position > 0 and data.count(b"\n") <= limit:
+            read_size = min(block_size, position)
+            position -= read_size
+            fp.seek(position)
+            data = fp.read(read_size) + data
+
+    return [line.decode("utf-8", "replace") for line in data.splitlines()[-limit:]]
+
+
+def mask_sensitive(value: Any) -> str:
+    text = str(value or "")
+    text = _BEARER_PATTERN.sub(r"\1 [MASKED]", text)
+    text = _SENSITIVE_ASSIGNMENT_PATTERN.sub(r"\1\2[MASKED]", text)
+    return re.sub(r"(?i)(access_token=)[^&\s]+", r"\1[MASKED]", text)
+
+
+def parse_log_line(raw: str) -> dict[str, Any]:
+    masked = mask_sensitive(raw)
+    lowered = masked.lower()
+    category = "system"
+    if "[vocat]" in lowered or "[vocat_expr]" in lowered or "poll deliver" in lowered or "ack command_id" in lowered or "/vocat/webhook" in lowered:
+        category = "vocat"
+    elif "[vision]" in lowered:
+        category = "vision"
+    elif "[reaction]" in lowered or "[reaction_follow]" in lowered:
+        category = "reaction"
+    elif "[ocai]" in lowered or "[kimi]" in lowered or "prompt_tokens" in lowered or "completion_tokens" in lowered:
+        category = "llm"
+    elif "[webhook] recv private" in lowered or "[private_chat]" in lowered or "[send_private]" in lowered:
+        category = "private"
+    elif "[webhook] recv group" in lowered or "[group_chat]" in lowered or "[send_group]" in lowered or "[route] 群聊" in masked:
+        category = "group"
+    elif "[scheduler]" in lowered or "[daily]" in lowered or "[schedule]" in lowered or "reminder" in lowered:
+        category = "scheduler"
+    elif (
+        "[skill]" in lowered
+        or "image_understanding" in lowered
+        or "file_understanding" in lowered
+        or "desktop_agent" in lowered
+        or "browser_agent" in lowered
+        or "weather" in lowered
+        or "overview" in lowered
+        or "schedule" in lowered
+    ):
+        category = "skill"
+    elif "napcat 返回" in masked or "retcode" in lowered or "send_group" in lowered or "send_private" in lowered:
+        category = "napcat"
+
+    level = "info"
+    if re.search(r"(?i)\b(error|exception|traceback|failed|fatal)\b", masked):
+        level = "error"
+    elif re.search(r"(?i)\b(warning|warn)\b", masked):
+        level = "warning"
+
+    fields = {}
+    for name, pattern in _FIELD_PATTERNS.items():
+        match = pattern.search(masked)
+        if match:
+            fields[name] = match.group(1)
+
+    return {"category": category, "level": level, "raw": masked, "fields": fields}
+
+
+def parse_multi_filter_values(raw_values: list[str], allowed_values: set[str]) -> set[str]:
+    values: set[str] = set()
+    for raw in raw_values:
+        for item in str(raw or "").split(","):
+            normalized = item.strip().lower()
+            if not normalized:
+                continue
+            if normalized == "all":
+                return set()
+            if normalized in allowed_values:
+                values.add(normalized)
+    return values
+
+
+def _filtered_log_entries() -> list[dict[str, Any]]:
+    categories = parse_multi_filter_values(
+        request.args.getlist("category") + request.args.getlist("categories"),
+        LOG_CATEGORIES - {"all"},
+    )
+    levels = parse_multi_filter_values(
+        request.args.getlist("level") + request.args.getlist("levels"),
+        {"info", "warning", "error"},
+    )
+    keyword = str(request.args.get("keyword") or "").strip().lower()
+    group_id = str(request.args.get("group_id") or "").strip()
+    user_id = str(request.args.get("user_id") or "").strip()
+    limit = _clamp_log_limit(request.args.get("limit"))
+
+    entries = [parse_log_line(line) for line in tail_lines(BRIDGE_LOG_PATH, limit)]
+    filtered = []
+    for entry in entries:
+        fields = entry.get("fields", {})
+        raw_lower = entry["raw"].lower()
+        if categories and entry["category"] not in categories:
+            continue
+        if levels and entry["level"] not in levels:
+            continue
+        if keyword and keyword not in raw_lower:
+            continue
+        if group_id and fields.get("group_id") != group_id:
+            continue
+        if user_id and fields.get("user_id") != user_id:
+            continue
+        filtered.append(entry)
+    return filtered
+
+
+def _probe_napcat_available() -> bool:
+    try:
+        response = requests.post(
+            f"{NAPCAT_HTTP.rstrip('/')}/get_login_info",
+            params={"access_token": NAPCAT_TOKEN},
+            json={},
+            timeout=2,
+        )
+        if not response.ok:
+            return False
+        payload = response.json()
+        return payload.get("retcode") in {0, "0"} or bool(payload.get("data"))
+    except Exception:
+        return False
+
+
+def _masked_id(value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) <= 4:
+        return "*" * len(text)
+    return f"{text[:3]}****{text[-3:]}"
+
+
+def _env_candidates() -> list[dict[str, Any]]:
+    paths = (
+        ("bridge", QQ_AI_BRIDGE_ROOT / ".env"),
+        ("repo", REPO_ROOT / ".env"),
+        ("bridge_local", QQ_AI_BRIDGE_ROOT / ".local.env"),
+        ("candace_home", Path.home() / ".candace" / "qq-ai-bridge.env"),
+    )
+    return [{"label": label, "path": str(path), "exists": path.exists()} for label, path in paths]
+
+
+def _system_config_summary() -> dict[str, Any]:
+    return {
+        "env_paths": _env_candidates(),
+        "bridge_host": os.getenv("BRIDGE_HOST", "0.0.0.0").strip() or "0.0.0.0",
+        "bridge_port": os.getenv("BRIDGE_PORT", "5000").strip() or "5000",
+        "vocat_webhook_enabled": True,
+        "vocat_webhook_token_set": bool(VOCAT_WEBHOOK_TOKEN),
+        "vision_api_url_set": bool(os.getenv("VISION_API_URL", "").strip()),
+        "vision_api_key_set": bool(os.getenv("VISION_API_KEY", "").strip()),
+        "owner_qq": _masked_id(OWNER_QQ),
+        "napcat_http_set": bool(NAPCAT_HTTP),
+        "napcat_token_set": bool(NAPCAT_TOKEN),
+        "kimi_api_key_set": bool(os.getenv("KIMI_API_KEY", "").strip()),
+        "openrouter_api_key_set": bool(os.getenv("OPENROUTER_API_KEY", "").strip()),
+        "moonshot_api_key_set": bool(os.getenv("MOONSHOT_API_KEY", "").strip()),
+        "log_path": str(BRIDGE_LOG_PATH),
+    }
+
+
+def _build_summary() -> dict[str, Any]:
+    queue_status = get_vocat_queue_status()
+    vocat_status = get_vocat_runtime_status()
+    entries = [parse_log_line(line) for line in tail_lines(BRIDGE_LOG_PATH, MAX_LOG_LIMIT)]
+    recent_warnings = [entry for entry in entries if entry["level"] in {"warning", "error"}][-10:]
+    return {
+        "ok": True,
+        "bridge_running": True,
+        "napcat_available": _probe_napcat_available(),
+        "vocat_online": bool(vocat_status.get("device_online")),
+        "queue_size": queue_status.get("queue_size", 0),
+        "today_group_messages": sum(1 for entry in entries if "[WEBHOOK] recv group" in entry["raw"]),
+        "today_private_messages": sum(1 for entry in entries if "[WEBHOOK] recv private" in entry["raw"]),
+        "today_vocat_poll": sum(1 for entry in entries if "poll deliver" in entry["raw"]),
+        "today_vocat_ack": sum(1 for entry in entries if "ack command_id" in entry["raw"]),
+        "recent_warnings": recent_warnings,
+        "vocat": vocat_status,
+        "config": _system_config_summary(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@admin_ui_bp.get("/admin")
+def admin_console_page():
+    return render_template("group_admin.html", initial_section="dashboard")
+
+
 @admin_ui_bp.get("/admin/groups")
 def group_admin_page():
-    return render_template("group_admin.html")
+    return render_template("group_admin.html", initial_section="groups")
+
+
+@admin_ui_bp.get("/admin/logs")
+def admin_logs_page():
+    return render_template("group_admin.html", initial_section="logs")
+
+
+@admin_ui_bp.get("/admin/vocat")
+def admin_vocat_page():
+    return render_template("group_admin.html", initial_section="vocat")
+
+
+@admin_ui_bp.get("/admin/private")
+def admin_private_page():
+    return render_template("group_admin.html", initial_section="private")
+
+
+@admin_ui_bp.get("/admin/system")
+def admin_system_page():
+    return render_template("group_admin.html", initial_section="system")
 
 
 @admin_ui_bp.get("/api/admin/groups")
+@admin_ui_bp.get("/admin/api/groups")
 def get_group_admin_data():
     return jsonify({"ok": True, **_serialize_group_store()})
 
 
 @admin_ui_bp.post("/api/admin/groups")
+@admin_ui_bp.post("/admin/api/groups")
 def save_group_admin_data():
     payload = request.get_json(silent=True) or {}
     groups_payload = payload.get("groups", [])
@@ -111,6 +397,29 @@ def save_group_admin_data():
 
     save_group_config_store(GROUP_CONFIG_PATH, next_store)
     return jsonify({"ok": True, **_serialize_group_store()})
+
+
+@admin_ui_bp.get("/admin/api/summary")
+def get_admin_summary():
+    return jsonify(_build_summary())
+
+
+@admin_ui_bp.get("/admin/api/logs")
+def get_admin_logs():
+    limit = _clamp_log_limit(request.args.get("limit"))
+    return jsonify(
+        {
+            "ok": True,
+            "log_path": str(BRIDGE_LOG_PATH),
+            "limit": limit,
+            "entries": _filtered_log_entries(),
+        }
+    )
+
+
+@admin_ui_bp.get("/admin/api/vocat/status")
+def get_admin_vocat_status():
+    return jsonify(get_vocat_runtime_status())
 
 
 def register_admin_routes(app):
