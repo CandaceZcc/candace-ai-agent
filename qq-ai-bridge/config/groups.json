@@ -1,4 +1,41 @@
 {
+  "default": {
+    "capture_all_messages": false,
+    "bot_can_reply": true,
+    "learn_style": false,
+    "reply_all_messages": false,
+    "enable_vision": true,
+    "follow_group_reactions": false,
+    "reaction_follow_probability": 0.5,
+    "reaction_notice_log": false,
+    "ignore": false,
+    "mute_log": false,
+    "persona_intensity": 30
+  },
+  "1041622553": {
+    "name": "OTTO_Sample_Manager",
+    "enabled": true,
+    "ignore": false,
+    "reply_all_messages": true,
+    "reaction_decision_mode": "llm_first",
+    "bot_can_reply": true,
+    "follow_group_reactions": true,
+    "reaction_notice_log": true,
+    "capture_all_messages": true,
+    "learn_style": true,
+    "enable_vision": true,
+    "mute_log": false,
+    "strategy": {
+      "reply_probability": 0.85,
+      "silence_probability": 0.1,
+      "reaction_probability": 0.5,
+      "delay_min_ms": 300,
+      "delay_max_ms": 2000,
+      "context_window_sec": 5,
+      "require_mention_for_reply": false,
+      "cooldown_sec": 3
+    }
+  },
   "397281906": {
     "name": "南北绿豆批发群",
     "enabled": true,
@@ -7,8 +44,8 @@
     "reaction_decision_mode": "llm_first",
     "strategy": {
       "reply_probability": 0.2,
-      "silence_probability": 0.95,
-      "reaction_probability": 0.05,
+      "silence_probability": 0.5,
+      "reaction_probability": 0.5,
       "delay_min_ms": 300,
       "delay_max_ms": 2000,
       "context_window_sec": 5,
@@ -22,6 +59,30 @@
     "follow_group_reactions": false,
     "reaction_notice_log": false,
     "mute_log": false
+  },
+  "610463880": {
+    "name": "测试群",
+    "enabled": true,
+    "ignore": false,
+    "reply_all_messages": true,
+    "reaction_decision_mode": "llm_first",
+    "bot_can_reply": true,
+    "capture_all_messages": true,
+    "learn_style": true,
+    "enable_vision": true,
+    "mute_log": false,
+    "strategy": {
+      "reply_probability": 0.7,
+      "silence_probability": 0.2,
+      "reaction_probability": 0.1,
+      "delay_min_ms": 300,
+      "delay_max_ms": 2000,
+      "context_window_sec": 5,
+      "require_mention_for_reply": false,
+      "cooldown_sec": 3
+    },
+    "follow_group_reactions": false,
+    "reaction_notice_log": false
   },
   "437966130": {
     "name": "群聊",
@@ -37,8 +98,8 @@
     "reaction_decision_mode": "llm_first",
     "strategy": {
       "reply_probability": 0.85,
-      "silence_probability": 0.65,
-      "reaction_probability": 0.05,
+      "silence_probability": 0.1,
+      "reaction_probability": 0.6,
       "delay_min_ms": 300,
       "delay_max_ms": 2000,
       "context_window_sec": 5,
@@ -48,29 +109,31 @@
     "follow_group_reactions": false,
     "reaction_notice_log": false
   },
-  "610463880": {
-    "name": "测试群",
+  "1065429760": {
+    "name": "麦麦の小屋",
     "enabled": true,
-    "ignore": false,
-    "reply_all_messages": true,
-    "reaction_decision_mode": "llm_first",
-    "bot_can_reply": true,
     "capture_all_messages": true,
+    "bot_can_reply": true,
     "learn_style": true,
+    "reply_all_messages": true,
+    "persona_intensity": 55,
     "enable_vision": true,
+    "ignore": false,
     "mute_log": false,
+    "reaction_decision_mode": "llm_first",
     "strategy": {
-      "reply_probability": 0.7,
-      "silence_probability": 0.25,
-      "reaction_probability": 0.05,
+      "reply_probability": 0.85,
+      "silence_probability": 0.1,
+      "reaction_probability": 0.5,
       "delay_min_ms": 300,
       "delay_max_ms": 2000,
       "context_window_sec": 5,
       "require_mention_for_reply": false,
       "cooldown_sec": 3
     },
-    "follow_group_reactions": false,
-    "reaction_notice_log": false
+    "follow_group_reactions": true,
+    "reaction_notice_log": true,
+    "reaction_follow_probability": 0.65
   },
   "674070498": {
     "name": "mute group",
@@ -121,55 +184,6 @@
       "cooldown_sec": 3
     }
   },
-  "1041622553": {
-    "name": "OTTO_Sample_Manager",
-    "enabled": true,
-    "ignore": false,
-    "reply_all_messages": true,
-    "reaction_decision_mode": "llm_first",
-    "bot_can_reply": true,
-    "follow_group_reactions": true,
-    "reaction_notice_log": true,
-    "capture_all_messages": true,
-    "learn_style": true,
-    "enable_vision": true,
-    "mute_log": false,
-    "strategy": {
-      "reply_probability": 0.85,
-      "silence_probability": 0.55,
-      "reaction_probability": 0.05,
-      "delay_min_ms": 300,
-      "delay_max_ms": 2000,
-      "context_window_sec": 5,
-      "require_mention_for_reply": false,
-      "cooldown_sec": 3
-    }
-  },
-  "1065429760": {
-    "name": "麦麦の小屋",
-    "enabled": true,
-    "capture_all_messages": true,
-    "bot_can_reply": true,
-    "learn_style": true,
-    "reply_all_messages": true,
-    "persona_intensity": 55,
-    "enable_vision": true,
-    "ignore": false,
-    "mute_log": false,
-    "reaction_decision_mode": "llm_first",
-    "strategy": {
-      "reply_probability": 0.7,
-      "silence_probability": 0.55,
-      "reaction_probability": 0.05,
-      "delay_min_ms": 300,
-      "delay_max_ms": 2000,
-      "context_window_sec": 5,
-      "require_mention_for_reply": false,
-      "cooldown_sec": 3
-    },
-    "follow_group_reactions": true,
-    "reaction_notice_log": true
-  },
   "1084330702": {
     "name": "活全家大合作",
     "enabled": false,
@@ -193,18 +207,5 @@
       "require_mention_for_reply": false,
       "cooldown_sec": 3
     }
-  },
-  "default": {
-    "capture_all_messages": false,
-    "bot_can_reply": true,
-    "learn_style": false,
-    "reply_all_messages": false,
-    "enable_vision": true,
-    "follow_group_reactions": false,
-    "reaction_follow_probability": 0.5,
-    "reaction_notice_log": false,
-    "ignore": false,
-    "mute_log": false,
-    "persona_intensity": 30
   }
 }

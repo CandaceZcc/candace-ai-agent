@@ -2,24 +2,65 @@
 
 import asyncio
 import json
+import re
 import subprocess
 import time
 from typing import Any
 
 import requests
-
-from apps.qq_ai_bridge.config.settings import AI_CMD
 from apps.qq_ai_bridge.config.settings import (
+    AI_CMD,
     KIMI_API_KEY,
     KIMI_BASE_URL,
     KIMI_MODEL,
     KIMI_TIMEOUT_SECONDS,
 )
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_OPENCLAW_DIAGNOSTIC_TOKENS = (
+    "[plugins]",
+    "plugins.allow is empty",
+    "discovered non-bundled plugins may auto-load",
+    "To trust them explicitly, set plugins.allow",
+)
+_LOCAL_DIAGNOSTIC_TOKENS = (
+    "/home/",
+    ".openclaw",
+    "node_modules",
+)
+
+
+def _strip_cli_diagnostics(raw_output: str) -> str:
+    """Remove local CLI diagnostics that should never become QQ replies."""
+    cleaned = _ANSI_ESCAPE_RE.sub("", str(raw_output or ""))
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    lines: list[str] = []
+    for line in cleaned.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _is_cli_diagnostic_line(stripped):
+            continue
+        lines.append(stripped)
+    return "\n".join(lines).strip()
+
+
+def _is_cli_diagnostic_line(line: str) -> bool:
+    normalized = line.strip()
+    if not normalized:
+        return True
+    if any(token in normalized for token in _OPENCLAW_DIAGNOSTIC_TOKENS):
+        return True
+    if any(token in normalized for token in _LOCAL_DIAGNOSTIC_TOKENS) and (
+        "openclaw" in normalized.lower() or "plugin" in normalized.lower()
+    ):
+        return True
+    return False
+
 
 def _extract_output_and_usage(raw_output: str) -> tuple[str, dict[str, Any] | None]:
     """Try to parse CLI JSON output without breaking plain-text responses."""
-    stripped = (raw_output or "").strip()
+    stripped = _strip_cli_diagnostics(raw_output)
     if not stripped:
         return "", None
 
@@ -63,13 +104,35 @@ def call_ai(text: str, metadata: dict[str, Any] | None = None) -> str:
     started_at = time.monotonic()
 
     try:
-        result = subprocess.check_output(
+        result = subprocess.run(
             [AI_CMD, text],
-            stderr=subprocess.STDOUT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             timeout=180,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
         )
-        raw_output = result.decode("utf-8", errors="ignore")
+        raw_output = result.stdout or ""
+        raw_error = result.stderr or ""
         output, usage = _extract_output_and_usage(raw_output)
+        diagnostic_error = _strip_cli_diagnostics(raw_error)
+
+        if result.returncode != 0:
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            error_text = diagnostic_error or output or "无可见错误输出。"
+            print(
+                "[OCAI] error"
+                f" user_id={user_id}"
+                f" duration_ms={duration_ms}"
+                f" returncode={result.returncode}"
+            )
+            print(f"[OCAI] stderr/stdout:\n{error_text}")
+            return f"ocai 调用失败：\n{error_text}"
+
+        if diagnostic_error:
+            print(f"[OCAI] diagnostic stderr ignored:\n{diagnostic_error[:500]}")
 
         if not output:
             output = "ocai 没有返回内容。"
@@ -135,7 +198,11 @@ def _extract_kimi_text(payload: dict[str, Any]) -> str:
     return ""
 
 
-def call_kimi_text(prompt: str, system_prompt: str | None = None, timeout_seconds: int | None = None) -> str:
+def call_kimi_text(
+    prompt: str,
+    system_prompt: str | None = None,
+    timeout_seconds: int | None = None,
+) -> str:
     """Call Kimi chat completions and return plain text output."""
     if not KIMI_API_KEY:
         return "Kimi API 未配置。请设置 KIMI_API_KEY。"
@@ -164,12 +231,17 @@ def call_kimi_text(prompt: str, system_prompt: str | None = None, timeout_second
         text = _extract_kimi_text(data)
         duration_ms = int((time.monotonic() - started_at) * 1000)
         usage = data.get("usage") if isinstance(data, dict) else {}
+        prompt_tokens = usage.get("prompt_tokens", "na") if isinstance(usage, dict) else "na"
+        completion_tokens = (
+            usage.get("completion_tokens", "na") if isinstance(usage, dict) else "na"
+        )
+        total_tokens = usage.get("total_tokens", "na") if isinstance(usage, dict) else "na"
         print(
             "[KIMI] success"
             f" duration_ms={duration_ms}"
-            f" prompt_tokens={usage.get('prompt_tokens', 'na') if isinstance(usage, dict) else 'na'}"
-            f" completion_tokens={usage.get('completion_tokens', 'na') if isinstance(usage, dict) else 'na'}"
-            f" total_tokens={usage.get('total_tokens', 'na') if isinstance(usage, dict) else 'na'}"
+            f" prompt_tokens={prompt_tokens}"
+            f" completion_tokens={completion_tokens}"
+            f" total_tokens={total_tokens}"
         )
         return text or "Kimi 没有返回内容。"
     except requests.RequestException as exc:

@@ -675,6 +675,105 @@ class ImageUnderstandingTests(unittest.TestCase):
         self.assertEqual(logged_payload["social_intent"], "ask_identify")
         self.assertEqual(logged_payload["source"], "image_understanding:full_text")
 
+    @patch("apps.qq_ai_bridge.skills.image_understanding.append_group_chat_log")
+    @patch("apps.qq_ai_bridge.skills.image_understanding.send_group_msg")
+    @patch("apps.qq_ai_bridge.skills.image_understanding.react_message_with_multiple_emojis")
+    @patch(
+        "apps.qq_ai_bridge.skills.image_understanding._should_react_to_passive_low_info",
+        return_value=False,
+    )
+    @patch("apps.qq_ai_bridge.skills.image_understanding.call_ai", return_value="键盘保卫战。")
+    @patch(
+        "apps.qq_ai_bridge.skills.image_understanding.run_vision_pipeline",
+        return_value="图里是一只灰白猫趴在粉色机械键盘上。",
+    )
+    @patch(
+        "apps.qq_ai_bridge.skills.image_understanding.classify_group_image_social",
+        return_value=ImageSocialClassification(
+            "low_info",
+            "showoff",
+            "reaction",
+            0.69,
+            "image_only",
+            emoji_name="lollipop",
+        ),
+    )
+    def test_owner_passive_low_info_group_image_can_send_text_reply(
+        self,
+        _mock_social,
+        mock_vision,
+        mock_call_ai,
+        _mock_sample,
+        mock_react,
+        mock_send,
+        mock_append_log,
+    ):
+        context = self._group_image_context(message_id=8890)
+        context.group_id = 1065429760
+        context.user_id = 273007866
+
+        result = ImageUnderstandingSkill().handle(context)
+
+        self.assertTrue(result.handled)
+        mock_vision.assert_called_once()
+        mock_call_ai.assert_called_once()
+        mock_react.assert_not_called()
+        mock_send.assert_called_once()
+        self.assertEqual(mock_send.call_args.args[1], "键盘保卫战。")
+        logged_payload = mock_append_log.call_args.args[2]
+        self.assertEqual(logged_payload["assistant"], "键盘保卫战。")
+        self.assertEqual(logged_payload["source"], "image_understanding:reaction")
+
+    @patch("apps.qq_ai_bridge.skills.image_understanding.append_group_chat_log")
+    @patch("apps.qq_ai_bridge.skills.image_understanding.send_group_msg")
+    @patch("apps.qq_ai_bridge.skills.image_understanding.react_message_with_multiple_emojis")
+    @patch(
+        "apps.qq_ai_bridge.skills.image_understanding._should_react_to_passive_low_info",
+        return_value=False,
+    )
+    @patch("apps.qq_ai_bridge.skills.image_understanding.call_ai")
+    @patch(
+        "apps.qq_ai_bridge.skills.image_understanding.run_vision_pipeline",
+        return_value="我这边暂时看不了图，稍后再试试。",
+    )
+    @patch(
+        "apps.qq_ai_bridge.skills.image_understanding.classify_group_image_social",
+        return_value=ImageSocialClassification(
+            "low_info",
+            "showoff",
+            "reaction",
+            0.69,
+            "image_only",
+            emoji_name="lollipop",
+        ),
+    )
+    def test_owner_passive_group_image_vision_unavailable_stays_silent(
+        self,
+        _mock_social,
+        mock_vision,
+        mock_call_ai,
+        _mock_sample,
+        mock_react,
+        mock_send,
+        mock_append_log,
+    ):
+        context = self._group_image_context(message_id=8891)
+        context.group_id = 1065429760
+        context.user_id = 273007866
+
+        result = ImageUnderstandingSkill().handle(context)
+
+        self.assertTrue(result.handled)
+        self.assertEqual(result.status, "ignore")
+        mock_vision.assert_called_once()
+        mock_call_ai.assert_not_called()
+        mock_react.assert_not_called()
+        mock_send.assert_not_called()
+        self.assertEqual(
+            mock_append_log.call_args.args[2]["source"],
+            "image_understanding:no_reply",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

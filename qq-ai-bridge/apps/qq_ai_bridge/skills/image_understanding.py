@@ -16,6 +16,7 @@ from apps.qq_ai_bridge.adapters.napcat_client import react_message_with_multiple
 from apps.qq_ai_bridge.config.settings import (
     BASE_DATA_DIR,
     GLOBAL_LISTEN_GROUP_IDS,
+    OWNER_QQ,
     VISION_GROUP_COOLDOWN_SECONDS,
     VISION_GROUP_PASSIVE_READ_INTERVAL_SECONDS,
 )
@@ -109,6 +110,7 @@ class ImageUnderstandingSkill:
             context.log("[VISION] image present but group trigger not met")
             return SkillResult(handled=True, source=self.name, status="ignore")
 
+        reply = ""
         social = classify_group_image_social(image_urls, vision_text, vision_log)
         context.log(
             "[VISION] social classification: "
@@ -158,62 +160,115 @@ class ImageUnderstandingSkill:
                     f"action={vision_decision.action} emoji={vision_decision.emoji_name or '-'} "
                     f"reason={vision_decision.reason} preview={vision_reply[:80]!r}"
                 )
-            passive_low_info_result = _handle_passive_low_info_sample(
+            if _should_uplift_owner_passive_group_image_to_text(
                 context,
                 social,
-                vision_text,
                 vision_reply,
-                target_message_id,
-                enabled=global_passive,
-            )
-            if passive_low_info_result is not None:
-                return passive_low_info_result
-            if vision_decision.action == "no_reply":
-                _append_group_image_context_log(context, social, vision_text, vision_reply, source_action="no_reply")
-                context.log(f"[VISION] image decision chose no_reply reason={vision_decision.reason}")
-                return SkillResult(handled=True, source=self.name, status="ignore")
-            if vision_decision.action == "text":
-                reply = vision_decision.reply or social.short_text or _fallback_group_image_reply(vision_reply, social, vision_text)
-                reply = _generate_group_image_critique_reply(vision_reply, social, vision_text, fallback=reply)
-            elif target_message_id:
-                preferred_order = (
-                    (vision_decision.emoji_name,) if vision_decision.emoji_name else ()
-                ) + (
-                    (social.emoji_name,) if social.emoji_name else ()
-                ) + infer_reaction_preferred_order(f"{vision_text}\n{social.reason}\n{vision_decision.reason}")
-                deduped_order = tuple(dict.fromkeys(name for name in preferred_order if name))
-                reaction_result = react_message_with_multiple_emojis(
-                    target_message_id,
-                    count=1,
-                    quiet=not context.should_log,
-                    preferred_order=deduped_order,
-                    preserve_order=bool(vision_decision.emoji_name or social.emoji_name),
+                global_passive=global_passive,
+            ):
+                fallback = (
+                    vision_decision.reply
+                    or social.short_text
+                    or _fallback_group_image_reply(vision_reply, social, vision_text)
                 )
-                if reaction_result.get("ok"):
+                reply = _generate_group_image_critique_reply(
+                    vision_reply,
+                    social,
+                    vision_text,
+                    fallback=fallback,
+                )
+                reply = _sanitize_group_vision_reply(reply, has_text=True, force_reply=True)
+                context.log("[VISION] owner passive image uplifted to text reply")
+            if not reply:
+                passive_low_info_result = _handle_passive_low_info_sample(
+                    context,
+                    social,
+                    vision_text,
+                    vision_reply,
+                    target_message_id,
+                    enabled=global_passive,
+                )
+                if passive_low_info_result is not None:
+                    return passive_low_info_result
+                if vision_decision.action == "no_reply":
+                    _append_group_image_context_log(
+                        context,
+                        social,
+                        vision_text,
+                        vision_reply,
+                        source_action="no_reply",
+                    )
+                    context.log(
+                        f"[VISION] image decision chose no_reply reason={vision_decision.reason}"
+                    )
+                    return SkillResult(handled=True, source=self.name, status="ignore")
+                if vision_decision.action == "text":
+                    reply = (
+                        vision_decision.reply
+                        or social.short_text
+                        or _fallback_group_image_reply(vision_reply, social, vision_text)
+                    )
+                    reply = _generate_group_image_critique_reply(
+                        vision_reply,
+                        social,
+                        vision_text,
+                        fallback=reply,
+                    )
+                elif target_message_id:
+                    preferred_order = (
+                        (vision_decision.emoji_name,) if vision_decision.emoji_name else ()
+                    ) + (
+                        (social.emoji_name,) if social.emoji_name else ()
+                    ) + infer_reaction_preferred_order(
+                        f"{vision_text}\n{social.reason}\n{vision_decision.reason}"
+                    )
+                    deduped_order = tuple(dict.fromkeys(name for name in preferred_order if name))
+                    reaction_result = react_message_with_multiple_emojis(
+                        target_message_id,
+                        count=1,
+                        quiet=not context.should_log,
+                        preferred_order=deduped_order,
+                        preserve_order=bool(vision_decision.emoji_name or social.emoji_name),
+                    )
+                    if reaction_result.get("ok"):
+                        _append_group_image_context_log(
+                            context,
+                            social,
+                            vision_text,
+                            vision_reply,
+                            source_action="reaction",
+                            assistant=f"[reaction:{_first_reaction_name(reaction_result)}]",
+                        )
+                        context.log(
+                            "[VISION] reply sent (group reaction) "
+                            f"emoji={_first_reaction_name(reaction_result)} target={target_message_id}"
+                        )
+                        return SkillResult(
+                            handled=True,
+                            source=self.name,
+                            response_payload={"status": "ok", "source": "vision_reaction"},
+                        )
+                else:
+                    reply = _generate_group_image_critique_reply(
+                        vision_reply,
+                        social,
+                        vision_text,
+                        fallback=(
+                            vision_decision.reply
+                            or social.short_text
+                            or _fallback_group_image_reply(vision_reply, social, vision_text)
+                        ),
+                    )
+                if vision_decision.action == "reaction" and not social.short_text:
                     _append_group_image_context_log(
                         context,
                         social,
                         vision_text,
                         vision_reply,
                         source_action="reaction",
-                        assistant=f"[reaction:{_first_reaction_name(reaction_result)}]",
                     )
-                    context.log(
-                        "[VISION] reply sent (group reaction) "
-                        f"emoji={_first_reaction_name(reaction_result)} target={target_message_id}"
-                    )
-                    return SkillResult(handled=True, source=self.name, response_payload={"status": "ok", "source": "vision_reaction"})
-            else:
-                reply = _generate_group_image_critique_reply(
-                    vision_reply,
-                    social,
-                    vision_text,
-                    fallback=vision_decision.reply or social.short_text or _fallback_group_image_reply(vision_reply, social, vision_text),
-                )
-            if vision_decision.action == "reaction" and not social.short_text:
-                _append_group_image_context_log(context, social, vision_text, vision_reply, source_action="reaction")
-                context.log("[VISION] reaction path had no target and no short_text fallback")
-                return SkillResult(handled=True, source=self.name, status="ignore")
+                    context.log("[VISION] reaction path had no target and no short_text fallback")
+                    return SkillResult(handled=True, source=self.name, status="ignore")
         elif social.suggested_action == "short_text":
             context.log("[VISION] vision service called (group short_text)")
             vision_reply = run_vision_pipeline(image_urls, vision_text, vision_log)
@@ -466,6 +521,30 @@ def _is_low_info_social(social) -> bool:
     image_type = str(getattr(social, "image_type", "") or "").strip().lower()
     suggested_action = str(getattr(social, "suggested_action", "") or "").strip()
     return image_type in {"low_info", "meme", "anime", "unknown"} and suggested_action in {"reaction", "short_text"}
+
+
+def _should_uplift_owner_passive_group_image_to_text(
+    context: SkillContext,
+    social,
+    vision_reply: str,
+    *,
+    global_passive: bool,
+) -> bool:
+    if not global_passive:
+        return False
+    if int(context.user_id or 0) != int(OWNER_QQ):
+        return False
+    if not _is_low_info_social(social):
+        return False
+    return _has_usable_vision_reply(vision_reply)
+
+
+def _has_usable_vision_reply(vision_reply: str) -> bool:
+    text = str(vision_reply or "").strip()
+    if not text:
+        return False
+    unavailable_tokens = ("暂时看不了图", "暂时没拿到", "没识别出明确内容", "视觉服务暂不可用")
+    return not any(token in text for token in unavailable_tokens)
 
 
 def _should_react_to_passive_low_info(context: SkillContext, social, vision_reply: str = "") -> bool:
