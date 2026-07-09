@@ -37,6 +37,7 @@ from apps.qq_ai_bridge.services.group_chat_service import (
     _should_silence_trivial_global_message,
     _should_use_reaction_instead,
 )
+from apps.qq_ai_bridge.services.prompt_service import prepare_group_ai_prompt
 from apps.qq_ai_bridge.services.response_action import ActionKind, ResponseAction
 
 
@@ -154,7 +155,7 @@ class GroupChatServiceTests(unittest.TestCase):
 
     def test_should_use_reaction_instead_for_low_value_message(self):
         self.assertTrue(_should_use_reaction_instead("哈哈", "收到"))
-        self.assertTrue(_should_use_reaction_instead("正常消息", "[[NO_REPLY]]"))
+        self.assertFalse(_should_use_reaction_instead("正常消息", "[[NO_REPLY]]"))
         self.assertFalse(_should_use_reaction_instead("你们怎么看这个方案？", "收到"))
 
     def test_explicit_trigger_no_reply_fallback_keeps_mentions_from_going_silent(self):
@@ -337,7 +338,7 @@ class GroupChatServiceTests(unittest.TestCase):
         mock_call_ai.assert_not_called()
 
     @patch("apps.qq_ai_bridge.services.group_chat_service.call_ai")
-    def test_group_response_mode_local_reacts_to_goodnight_hint(self, mock_call_ai):
+    def test_group_response_mode_local_silences_goodnight_hint(self, mock_call_ai):
         decision = _decide_group_response_mode_with_llm(
             merged_text="睡觉了",
             batch=[PendingGroupMessage(user_id=1, sender_name="u", text="睡觉了", timestamp=1, explicit_trigger=False)],
@@ -345,8 +346,8 @@ class GroupChatServiceTests(unittest.TestCase):
             log=lambda *_args: None,
         )
 
-        self.assertEqual(decision["mode"], "reaction")
-        self.assertEqual(decision["reason"], "goodnight_reaction_hint")
+        self.assertEqual(decision["mode"], "silence")
+        self.assertEqual(decision["reason"], "trivial_global_message")
         mock_call_ai.assert_not_called()
 
     @patch("apps.qq_ai_bridge.services.group_chat_service.call_ai")
@@ -407,6 +408,18 @@ class GroupChatServiceTests(unittest.TestCase):
         )
         self.assertFalse(result["queued"])
         self.assertEqual(result["reason"], "group_not_triggered")
+
+    def test_group_prompt_treats_no_reply_as_silence_not_reaction(self):
+        payload = prepare_group_ai_prompt(
+            123456,
+            "哈哈",
+            group_config={"reply_all_messages": True},
+            log=lambda *_args: None,
+        )
+
+        self.assertIn("[[NO_REPLY]]", payload["prompt"])
+        self.assertIn("保持沉默", payload["prompt"])
+        self.assertNotIn("系统会改为贴表情", payload["prompt"])
 
     def test_enqueue_group_text_accepts_reply_reference(self):
         group_id = 123456

@@ -17,7 +17,6 @@ from apps.qq_ai_bridge.config.settings import (
     BASE_DATA_DIR,
     GROUP_UPLOAD_DIR,
     MAX_FILE_CONTENT_LEN,
-    OWNER_NAME,
     PRIVATE_COMPACT_MAX_CHARS,
     PRIVATE_COMPACT_MAX_TURNS,
     PRIVATE_CONTEXT_SOFT_LIMIT_SECONDS,
@@ -325,8 +324,8 @@ def prepare_group_ai_prompt(
     openclaw_rules = _load_openclaw_group_rules(log=log)
 
     baseline_persona = (
-        "底线人格：你是QQ群里的真人群友风格助手。自然、简洁、克制，不装客服，不演戏。"
-        "允许轻吐槽，但不做人身攻击，不煽动对立。"
+        "底线人格：你是QQ群里的真人群友风格助手。自然、简洁、克制，会读空气，"
+        "不装客服，不演戏。允许轻吐槽，但不做人身攻击，不煽动对立。"
     )
     identity_boundary = (
         "身份边界：你是机盖宁/QQ AI Bridge，不是 Candace 本人。"
@@ -340,8 +339,8 @@ def prepare_group_ai_prompt(
     )
     silent_strategy = (
         "沉默策略：不是每条都要回复。"
-        "低价值消息可输出 [[NO_REPLY]]（系统会改为贴表情）；"
-        "普通接话优先 8~14 字口语短句；"
+        "低价值消息、接不上气氛的消息可输出 [[NO_REPLY]] 保持沉默；"
+        "普通接话优先 8~14 字口语短句，像群友随手一句，不要客服腔；"
         "明确提问（含问号/怎么/为什么）给结构化回答（结论 + 一句理由）。"
     )
     private_forward_boundary = (

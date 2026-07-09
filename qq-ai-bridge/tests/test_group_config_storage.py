@@ -68,6 +68,26 @@ class GroupConfigStorageTests(unittest.TestCase):
             self.assertTrue(cfg["reply_all_messages"])
             self.assertTrue(cfg["enable_vision"])
 
+    def test_saved_new_global_group_is_whitelisted_and_listens_all_messages(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "groups.json")
+            save_group_config_store(
+                config_path,
+                {
+                    "default": {"reply_all_messages": False},
+                    "123456": {
+                        "name": "测试群",
+                        "enabled": True,
+                        "ignore": False,
+                        "reply_all_messages": True,
+                    },
+                },
+            )
+
+            self.assertTrue(is_group_whitelisted(config_path, 123456))
+            cfg = load_group_config(config_path, 123456)
+            self.assertTrue(cfg["reply_all_messages"])
+
     def test_store_loader_normalizes_default_section(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = os.path.join(temp_dir, "groups.json")

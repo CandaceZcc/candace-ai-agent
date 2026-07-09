@@ -263,7 +263,7 @@ BROWSER_AGENT_LOOP_PROMPT = """
 
 KIMI_API_KEY = os.getenv("KIMI_API_KEY", "").strip()
 KIMI_BASE_URL = os.getenv("KIMI_BASE_URL", "https://api.moonshot.cn/v1").strip() or "https://api.moonshot.cn/v1"
-KIMI_MODEL = os.getenv("KIMI_MODEL", "moonshot-v1-8k").strip() or "moonshot-v1-8k"
+KIMI_MODEL = os.getenv("KIMI_MODEL", "kimi-k2.6").strip() or "kimi-k2.6"
 KIMI_TIMEOUT_SECONDS = max(5, _get_int_env("KIMI_TIMEOUT_SECONDS", 25))
 
 VOCAT_WEBHOOK_TOKEN = os.getenv("VOCAT_WEBHOOK_TOKEN", "").strip()

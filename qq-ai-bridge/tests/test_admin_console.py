@@ -136,6 +136,27 @@ class AdminConsoleHelpersTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             _normalize_group_payload({"group_id": "123456", "reaction_follow_probability": 2}, {})
 
+    def test_normalize_group_payload_enables_new_global_listen_group(self):
+        group_id, group = _normalize_group_payload(
+            {
+                "group_id": "123456",
+                "name": "测试群",
+                "enabled": True,
+                "trigger_mode": "all",
+                "strategy": {
+                    "reply_probability": 1,
+                    "silence_probability": 0,
+                    "reaction_probability": 0,
+                },
+            },
+            {},
+        )
+
+        self.assertEqual(group_id, "123456")
+        self.assertTrue(group["enabled"])
+        self.assertFalse(group["ignore"])
+        self.assertTrue(group["reply_all_messages"])
+
 
 if __name__ == "__main__":
     unittest.main()

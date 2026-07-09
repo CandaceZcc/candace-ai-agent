@@ -1,10 +1,8 @@
 from apps.qq_ai_bridge.services.group_chat_service import enqueue_group_text
 from apps.qq_ai_bridge.services.private_chat_service import enqueue_private_text
 from apps.qq_ai_bridge.config.settings import GLOBAL_LISTEN_GROUP_IDS
-from apps.qq_ai_bridge.services.emoji_service import infer_reaction_preferred_order
-from apps.qq_ai_bridge.services.group_strategy import group_strategy_decision, record_group_strategy_reply
+from apps.qq_ai_bridge.services.group_strategy import group_strategy_decision
 from apps.qq_ai_bridge.services.private_admin_service import maybe_handle_private_admin_command
-from apps.qq_ai_bridge.services.response_action import ActionKind, ResponseAction, execute_group_action
 from apps.qq_ai_bridge.services.trace_store import add_trace_step
 from apps.qq_ai_bridge.skills.base import Skill, SkillContext, SkillResult
 
@@ -130,33 +128,6 @@ class ChatSkill(Skill):
                     source=self.name,
                     status="ignore",
                     response_payload={"status": "strategy_silence", "strategy": strategy},
-                )
-            if strategy.get("mode") == "reaction":
-                target_message_id = context.message_id
-                if target_message_id:
-                    action_result = execute_group_action(
-                        context.group_id,
-                        ResponseAction(
-                            kind=ActionKind.REACTION,
-                            reaction_count=1,
-                            preferred_order=infer_reaction_preferred_order(query),
-                            reason=strategy.get("reason", "group_strategy"),
-                        ),
-                        target_message_id=target_message_id,
-                        quiet=not context.should_log,
-                    )
-                    if action_result.get("ok"):
-                        record_group_strategy_reply(context.group_id)
-                    return SkillResult(
-                        handled=True,
-                        source=self.name,
-                        response_payload={"status": "strategy_reaction", "strategy": strategy, "result": action_result},
-                    )
-                return SkillResult(
-                    handled=True,
-                    source=self.name,
-                    status="ignore",
-                    response_payload={"status": "strategy_reaction_missing_message_id", "strategy": strategy},
                 )
             queue_info = enqueue_group_text(
                 context.group_id,

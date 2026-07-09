@@ -22,8 +22,11 @@ class GroupStrategyTests(unittest.TestCase):
 
         self.assertEqual(strategy, DEFAULT_GROUP_STRATEGY)
 
+    def test_default_strategy_keeps_reaction_probability_low(self):
+        self.assertEqual(DEFAULT_GROUP_STRATEGY["reaction_probability"], 0.03)
+
     @patch("apps.qq_ai_bridge.services.group_strategy.random.uniform", return_value=0.95)
-    def test_weighted_probability_can_select_reaction(self, _mock_random):
+    def test_weighted_probability_can_select_reaction_for_non_filler_ambient(self, _mock_random):
         result = group_strategy_decision(
             {"text": "普通聊天", "group_id": "123", "allow_ambient": True},
             {
@@ -37,6 +40,22 @@ class GroupStrategyTests(unittest.TestCase):
 
         self.assertEqual(result["mode"], "reaction")
         self.assertEqual(result["probabilities"]["reaction"], 1.0)
+
+    @patch("apps.qq_ai_bridge.services.group_strategy.random.uniform", return_value=0.95)
+    def test_short_filler_global_message_does_not_select_reaction(self, _mock_random):
+        result = group_strategy_decision(
+            {"text": "哈哈", "group_id": "123", "allow_ambient": True},
+            {
+                "strategy": {
+                    "reply_probability": 0.0,
+                    "silence_probability": 0.0,
+                    "reaction_probability": 1.0,
+                }
+            },
+        )
+
+        self.assertEqual(result["mode"], "silence")
+        self.assertEqual(result["reason"], "ambient_filler_silence")
 
     def test_require_mention_for_reply_forces_silence(self):
         result = group_strategy_decision(

@@ -27,6 +27,12 @@ def log_vision_config_status(log=print) -> None:
     placeholders = _detect_placeholder_values(cfg)
     for item in placeholders:
         log(f"[VISION][CONFIG][WARNING] {item} is using a placeholder value and must be replaced with a real value")
+    legacy_models = _detect_legacy_vision_model_values(cfg)
+    for model in legacy_models:
+        log(
+            "[VISION][CONFIG][WARNING] legacy vision model "
+            f"{model!r} detected; recommended Moonshot multimodal model is 'kimi-k2.6'"
+        )
 
 
 # run_vision_pipeline：调用视觉模型识图
@@ -199,3 +205,13 @@ def _detect_placeholder_values(cfg: dict) -> list[str]:
         if value in placeholder_map[env_name]:
             hits.append(env_name)
     return hits
+
+
+def _detect_legacy_vision_model_values(cfg: dict) -> list[str]:
+    legacy_models = {
+        "moonshot-v1-32k-vision-preview",
+        "moonshot-v1-8k-vision-preview",
+        "moonshot-v1-128k-vision-preview",
+    }
+    model = str(cfg.get("model", "")).strip()
+    return [model] if model in legacy_models else []

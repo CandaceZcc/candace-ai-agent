@@ -45,12 +45,14 @@ QQ_EMOJI_NAME_TO_ID: dict[str, int] = {
 
 DEFAULT_EMOJI_SEQUENCE: tuple[str, ...] = ("笑哭", "棒棒糖", "西瓜", "尴尬", "惊讶", "舔屏", "续标识")
 DEFAULT_REACTION_ORDER: tuple[str, ...] = (
-    "laugh_cry",
     "button_marker",
     "lollipop",
     "watermelon",
     "awkward",
     "surprised",
+    "red_button",
+    "question",
+    "laugh_cry",
     "lick_screen",
 )
 _EMOJI_REQUEST_PATTERN = re.compile(r"(贴|发|来个|来一个|给我).{0,4}(表情|emoji|face)")
@@ -128,6 +130,12 @@ def infer_reaction_preferred_order(text: str, default_order: tuple[str, ...] = D
         explicit_choice = _infer_explicit_reaction_name(normalized)
         if explicit_choice:
             first_choice = explicit_choice
+        elif any(token in normalized for token in ("晚安", "睡觉了", "睡了", "困了", "先睡")):
+            first_choice = "lollipop"
+        elif any(token in normalized for token in ("?", "？", "吗", "怎么", "为什么", "啥", "什么")):
+            first_choice = "question"
+        elif any(token in normalized for token in ("尴尬", "无语", "蚌埠住", "绷不住")):
+            first_choice = "awkward"
         elif is_message_reaction_request(normalized):
             first_choice = "button_marker"
         elif _LLM_REACTION_HINT_PATTERN.search(normalized):

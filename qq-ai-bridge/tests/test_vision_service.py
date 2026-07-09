@@ -4,7 +4,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, "qq-ai-bridge")
 
-from apps.qq_ai_bridge.services.vision_service import VISION_USER_DOWNLOAD_FALLBACK, run_vision_pipeline
+from apps.qq_ai_bridge.services.vision_service import (
+    VISION_USER_DOWNLOAD_FALLBACK,
+    log_vision_config_status,
+    run_vision_pipeline,
+)
 
 
 class VisionServiceTests(unittest.TestCase):
@@ -19,6 +23,22 @@ class VisionServiceTests(unittest.TestCase):
         self.assertTrue(any("[VISION][image_download_retry]" in item for item in logs))
         self.assertTrue(any("[VISION][image_url_unreachable]" in item for item in logs))
         self.assertFalse(any("[traceback]" in item for item in logs))
+
+    @patch(
+        "apps.qq_ai_bridge.services.vision_service.read_vision_config",
+        return_value={
+            "api_url": "https://api.moonshot.cn/v1/chat/completions",
+            "api_key": "sk-test",
+            "model": "moonshot-v1-32k-vision-preview",
+        },
+    )
+    def test_log_vision_config_warns_legacy_moonshot_vision_model(self, _mock_config):
+        logs: list[str] = []
+
+        log_vision_config_status(logs.append)
+
+        self.assertTrue(any("legacy vision model" in item for item in logs))
+        self.assertTrue(any("kimi-k2.6" in item for item in logs))
 
 
 if __name__ == "__main__":

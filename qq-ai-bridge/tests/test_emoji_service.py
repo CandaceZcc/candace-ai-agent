@@ -98,6 +98,19 @@ class EmojiServiceTests(unittest.TestCase):
         self.assertEqual(infer_reaction_preferred_order("贴个尴尬")[0], "awkward")
         self.assertEqual(infer_reaction_preferred_order("贴个惊讶")[0], "surprised")
 
+    def test_infer_reaction_default_order_is_not_laugh_cry_first(self):
+        order = infer_reaction_preferred_order("普通聊天")
+
+        self.assertNotEqual(order[0], "laugh_cry")
+        self.assertIn("laugh_cry", order)
+
+    def test_infer_reaction_keeps_explicit_laugh_cry_request(self):
+        self.assertEqual(infer_reaction_preferred_order("给这条消息贴个笑哭")[0], "laugh_cry")
+
+    def test_infer_reaction_contextual_goodnight_and_question(self):
+        self.assertEqual(infer_reaction_preferred_order("晚安我先睡了")[0], "lollipop")
+        self.assertEqual(infer_reaction_preferred_order("这是什么情况？")[0], "question")
+
 
 if __name__ == "__main__":
     unittest.main()

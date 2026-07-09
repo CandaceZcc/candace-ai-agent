@@ -71,6 +71,45 @@ class ChatSkillTests(unittest.TestCase):
         self.assertFalse(mock_enqueue.call_args.kwargs["explicit_trigger"])
         self.assertTrue(any("explicit_trigger=False" in item for item in logs))
 
+    @patch("apps.qq_ai_bridge.skills.chat.group_strategy_decision")
+    @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text")
+    def test_strategy_reaction_is_queued_instead_of_sent_immediately(
+        self,
+        mock_enqueue,
+        mock_strategy,
+    ):
+        mock_strategy.return_value = {
+            "mode": "reaction",
+            "reason": "ambient_reply",
+            "probabilities": {"reply": 0, "silence": 0, "reaction": 1},
+        }
+        mock_enqueue.return_value = {"queued": True}
+        context = SkillContext(
+            data={"message_id": 123},
+            post_type="message",
+            message_type="group",
+            user_id=1,
+            self_id=2,
+            group_id=810938203,
+            group_config={"reply_all_messages": True, "bot_can_reply": True},
+            should_log=True,
+            msg="普通群聊",
+            normalized_msg="普通群聊",
+            effective_text="普通群聊",
+            mentioned_self=False,
+            image_inputs={},
+            file_info=None,
+            logger=lambda *_args: None,
+            timestamp=10,
+            nick="u",
+        )
+
+        result = ChatSkill().handle(context)
+
+        self.assertTrue(result.handled)
+        self.assertTrue(mock_enqueue.called)
+        self.assertEqual(result.response_payload["status"], "enqueued")
+
     @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text")
     def test_forwarded_private_context_is_not_queued_without_trigger(self, mock_enqueue):
         logs = []

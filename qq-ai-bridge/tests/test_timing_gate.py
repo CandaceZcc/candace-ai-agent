@@ -9,7 +9,7 @@ from apps.qq_ai_bridge.services.timing_gate import evaluate_group_timing_gate
 
 
 class TimingGateTests(unittest.TestCase):
-    def test_timing_gate_prefers_reaction_for_short_filler(self):
+    def test_timing_gate_prefers_silence_for_short_filler(self):
         decision = evaluate_group_timing_gate(
             123,
             [PendingGroupMessage(user_id=1, sender_name="a", text="哈哈", timestamp=1)],
@@ -17,7 +17,8 @@ class TimingGateTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(decision)
-        self.assertEqual(decision.mode, ReplyMode.REACTION)
+        self.assertFalse(decision.should_reply)
+        self.assertEqual(decision.mode, ReplyMode.NO_REPLY)
 
 
 if __name__ == "__main__":

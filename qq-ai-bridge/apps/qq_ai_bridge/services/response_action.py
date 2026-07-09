@@ -12,7 +12,7 @@ from apps.qq_ai_bridge.adapters.napcat_client import (
     send_group_msg,
     send_private_msg,
 )
-from apps.qq_ai_bridge.services.emoji_service import build_face_sequence
+from apps.qq_ai_bridge.services.emoji_service import DEFAULT_REACTION_ORDER, build_face_sequence
 
 
 class ActionKind(str, Enum):
@@ -32,6 +32,11 @@ class ResponseAction:
 
 _LEGACY_EMOJI_TAG_PATTERN = re.compile(r"\[emoji:[^\]]+\]", re.IGNORECASE)
 _MARKDOWN_BULLET_PATTERN = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)、]\s+)")
+_UPSTREAM_ERROR_PATTERN = re.compile(
+    r"(api\s+rate\s+limit\s+reached|rate\s+limit|too\s+many\s+requests|"
+    r"insufficient[_\s-]?quota|quota\s+exceeded|429\b)",
+    re.IGNORECASE,
+)
 
 
 # parse_llm_response_action：解析模型动作协议
@@ -45,6 +50,8 @@ def parse_llm_response_action(raw_text: str, *, surface: str = "group") -> Respo
     text = str(raw_text or "").strip()
     if not text:
         return ResponseAction(kind=ActionKind.NO_REPLY, reason="empty_reply")
+    if _UPSTREAM_ERROR_PATTERN.search(text):
+        return ResponseAction(kind=ActionKind.NO_REPLY, reason="upstream_api_error")
     if "[[NO_REPLY]]" in text:
         return ResponseAction(kind=ActionKind.NO_REPLY, reason="explicit_no_reply_token")
     if _LEGACY_EMOJI_TAG_PATTERN.search(text):
@@ -164,7 +171,7 @@ def execute_group_action(
             target_message_id,
             count=max(1, int(action.reaction_count or 1)),
             quiet=quiet,
-            preferred_order=action.preferred_order or ("laugh_cry", "red_button", "lollipop", "lick_screen"),
+            preferred_order=action.preferred_order or DEFAULT_REACTION_ORDER,
             preserve_order=bool(action.preferred_order),
         )
         return {
@@ -204,7 +211,7 @@ def execute_private_action(
             target_message_id,
             count=max(1, int(action.reaction_count or 1)),
             quiet=quiet,
-            preferred_order=action.preferred_order or ("laugh_cry", "red_button", "lollipop", "lick_screen"),
+            preferred_order=action.preferred_order or DEFAULT_REACTION_ORDER,
             preserve_order=bool(action.preferred_order),
         )
         applied_count = int(result.get("applied_count", 0))

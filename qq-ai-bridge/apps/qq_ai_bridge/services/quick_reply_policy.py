@@ -45,7 +45,7 @@ def decide_quick_reply(topic: TopicWindow, group_config: dict) -> ReplyDecision 
         return ReplyDecision(False, ReplyMode.NO_REPLY, "topic_already_replied", 0.99)
 
     if _FILLER_RE.fullmatch(last_text):
-        return ReplyDecision(True, ReplyMode.REACTION, "short_filler", 0.92, emoji_id=_REACTION_EMOJI_MAP["laugh_cry"])
+        return ReplyDecision(False, ReplyMode.NO_REPLY, "short_filler_silence", 0.92)
 
     if _LOW_VALUE_RE.fullmatch(last_text):
         if _CUTE_TOPIC_RE.search(merged_text):
@@ -58,7 +58,7 @@ def decide_quick_reply(topic: TopicWindow, group_config: dict) -> ReplyDecision 
                 0.88,
                 text=_pick_template(merged_text, group_config, _CUTE_TEMPLATES),
             )
-        return ReplyDecision(True, ReplyMode.REACTION, "short_meme", 0.86, emoji_id=_REACTION_EMOJI_MAP["red_button"])
+        return ReplyDecision(False, ReplyMode.NO_REPLY, "short_meme_silence", 0.86)
 
     if len(merged_text) <= 8 and not any(message.explicit_trigger for message in topic.messages):
         return ReplyDecision(False, ReplyMode.NO_REPLY, "short_non_triggered", 0.84)

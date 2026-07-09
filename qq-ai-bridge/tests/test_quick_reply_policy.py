@@ -23,7 +23,7 @@ class QuickReplyPolicyTests(unittest.TestCase):
         self.assertEqual(decision.mode, ReplyMode.TEXT)
         self.assertTrue(decision.text)
 
-    def test_filler_message_prefers_reaction(self):
+    def test_filler_message_prefers_silence(self):
         topic = TopicWindow(
             group_id=123,
             messages=[IncomingMessage(user_id=1, sender_name="a", text="哈哈", timestamp=1)],
@@ -34,7 +34,9 @@ class QuickReplyPolicyTests(unittest.TestCase):
         )
         decision = decide_quick_reply(topic, {})
         self.assertIsNotNone(decision)
-        self.assertEqual(decision.mode, ReplyMode.REACTION)
+        self.assertFalse(decision.should_reply)
+        self.assertEqual(decision.mode, ReplyMode.NO_REPLY)
+        self.assertEqual(decision.reason, "short_filler_silence")
 
     def test_replied_topic_stays_quiet(self):
         topic = TopicWindow(

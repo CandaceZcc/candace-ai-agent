@@ -125,6 +125,7 @@ def _serialize_group_store() -> dict:
         "default": default_cfg,
         "meta": {
             "config_path": GROUP_CONFIG_PATH,
+            "effective_config_path": str(Path(GROUP_CONFIG_PATH).resolve()),
             "whitelist_count": sum(1 for item in groups if item.get("enabled", True)),
             "total_count": len(groups),
         },

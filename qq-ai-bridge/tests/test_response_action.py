@@ -32,6 +32,12 @@ class ResponseActionTests(unittest.TestCase):
         self.assertEqual(action.kind, ActionKind.TEXT)
         self.assertEqual(action.text, "你好呀")
 
+    def test_parse_upstream_rate_limit_as_no_reply(self):
+        action = parse_llm_response_action("⚠️ API rate limit reached. Please try again later.")
+
+        self.assertEqual(action.kind, ActionKind.NO_REPLY)
+        self.assertEqual(action.reason, "upstream_api_error")
+
     def test_parse_markdown_list_collapses_to_plain_text(self):
         action = parse_llm_response_action("**两个选择：**\n\n1. 改仅艾特\n2. 调概率")
 
@@ -89,6 +95,25 @@ class ResponseActionTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "empty_message")
+
+    def test_execute_group_reaction_default_order_is_not_laugh_cry_first(self):
+        from unittest.mock import patch
+
+        with patch(
+            "apps.qq_ai_bridge.services.response_action.react_message_with_multiple_emojis",
+            return_value={"ok": True, "applied_count": 1, "emoji_names": ["button_marker"]},
+        ) as mock_react:
+            result = execute_group_action(
+                12345,
+                ResponseAction(kind=ActionKind.REACTION),
+                target_message_id=998877,
+                quiet=True,
+            )
+
+        self.assertTrue(result["ok"])
+        preferred_order = mock_react.call_args.kwargs["preferred_order"]
+        self.assertNotEqual(preferred_order[0], "laugh_cry")
+        self.assertIn("laugh_cry", preferred_order)
 
     def test_execute_private_text_passes_force_parts(self):
         from unittest.mock import patch

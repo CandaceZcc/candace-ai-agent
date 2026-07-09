@@ -841,7 +841,7 @@
                 </div>
                 <div class="actions">
                   <label class="chip-toggle">
-                    <input id="logsAutoRefresh" type="checkbox">
+                    <input id="logsAutoRefresh" type="checkbox" checked>
                     自动刷新
                   </label>
                   <button class="button" id="refreshLogsButton" type="button">刷新日志</button>
@@ -980,8 +980,8 @@
       };
       const DEFAULT_STRATEGY = {
         reply_probability: 0.7,
-        silence_probability: 0.2,
-        reaction_probability: 0.1,
+        silence_probability: 0.27,
+        reaction_probability: 0.03,
         delay_min_ms: 300,
         delay_max_ms: 2000,
         context_window_sec: 5,
@@ -1005,6 +1005,8 @@
         logCategories: new Set(["all"]),
         logLevels: new Set(),
         logTimer: null,
+        logRequestInFlight: false,
+        groupMeta: {},
         traces: [],
         selectedTraceId: "",
         strategySaveTimers: new Map(),
@@ -1304,6 +1306,8 @@
       }
 
       async function loadLogs() {
+        if (state.logRequestInFlight) return;
+        state.logRequestInFlight = true;
         const params = new URLSearchParams({
           category: selectedCategoriesParam(),
           level: selectedLevelsParam(),
@@ -1313,10 +1317,14 @@
           user_id: $("logUserId").value.trim(),
         });
         setStatus($("logsStatus"), "读取中…");
-        const payload = await fetchJson(`/admin/api/logs?${params.toString()}`);
-        renderLogEntries(payload.entries || [], $("logsList"));
-        renderLogFileStatus(payload);
-        setStatus($("logsStatus"), `已读取 ${payload.entries.length} 条。`, "ok");
+        try {
+          const payload = await fetchJson(`/admin/api/logs?${params.toString()}`);
+          renderLogEntries(payload.entries || [], $("logsList"));
+          renderLogFileStatus(payload);
+          setStatus($("logsStatus"), `已读取 ${payload.entries.length} 条 · 刷新 ${new Date().toLocaleTimeString()}`, "ok");
+        } finally {
+          state.logRequestInFlight = false;
+        }
       }
 
       async function loadPrivateLogs() {
@@ -1396,11 +1404,13 @@
         const enabled = state.groups.filter((group) => group.enabled).length;
         const allMode = state.groups.filter((group) => group.enabled && group.trigger_mode === "all").length;
         const mentionMode = state.groups.filter((group) => group.enabled && group.trigger_mode === "mention").length;
+        const configPath = state.groupMeta.effective_config_path || state.groupMeta.config_path || "groups.json";
         $("groupStats").innerHTML = [
           metric("已录入群聊", String(state.groups.length), "groups.json"),
           metric("白名单", String(enabled), "enabled"),
           metric("全局触发", String(allMode), "reply_all_messages"),
           metric("艾特触发", String(mentionMode), "mention"),
+          metric("生效配置", "groups.json", configPath),
         ].join("");
         $("navGroupCount").textContent = String(state.groups.length);
       }
@@ -1785,6 +1795,7 @@
         setGroupStatus("正在读取群配置…");
         const payload = await fetchJson("/api/admin/groups");
         state.defaultGroup = normalizeDefaultGroup(payload.default || {});
+        state.groupMeta = payload.meta || {};
         state.groups = (payload.groups || []).map(normalizeGroup);
         renderGroups();
         setGroupStatus("配置已加载。", "ok");
@@ -1799,9 +1810,10 @@
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify(collectGroupPayload()),
           });
+          state.groupMeta = payload.meta || {};
           state.groups = (payload.groups || []).map(normalizeGroup);
           renderGroups();
-          setGroupStatus("已保存。", "ok");
+          setGroupStatus("已保存，下一条群消息生效。", "ok");
         } finally {
           $("saveGroupsButton").disabled = false;
         }
@@ -1823,7 +1835,7 @@
           name,
           enabled: true,
           bot_can_reply: true,
-          trigger_mode: "mention",
+          trigger_mode: "all",
           reaction_decision_mode: "llm_first",
           strategy: normalizeStrategy({}),
         }));
@@ -1845,7 +1857,10 @@
         if (state.current === "dashboard") loadSummary().catch(console.error);
         if (state.current === "vocat") loadVocatStatus().catch((error) => setStatus($("vocatActionStatus"), error.message, "error"));
         if (state.current === "traces") loadTraces().catch((error) => setStatus($("tracesStatus"), error.message, "error"));
-        if (state.current === "logs") loadLogs().catch((error) => setStatus($("logsStatus"), error.message, "error"));
+        if (state.current === "logs") {
+          loadLogs().catch((error) => setStatus($("logsStatus"), error.message, "error"));
+          startLogAutoRefresh();
+        }
         if (state.current === "groups" && !state.groups.length) loadGroups().catch((error) => setGroupStatus(error.message, "error"));
         if (state.current === "private") loadPrivateLogs().catch(console.error);
         if (state.current === "system") {
@@ -1862,6 +1877,19 @@
         if (state.current === "groups") return loadGroups();
         if (state.current === "private") return loadPrivateLogs();
         if (state.current === "system") return loadSummary();
+      }
+
+      function startLogAutoRefresh() {
+        if (state.logTimer || !$("logsAutoRefresh").checked) return;
+        state.logTimer = setInterval(() => {
+          if (state.current === "logs") loadLogs().catch(console.error);
+        }, 5000);
+      }
+
+      function stopLogAutoRefresh() {
+        if (!state.logTimer) return;
+        clearInterval(state.logTimer);
+        state.logTimer = null;
       }
 
       function setupEvents() {
@@ -1883,14 +1911,10 @@
           });
         });
         $("logsAutoRefresh").addEventListener("change", (event) => {
-          if (state.logTimer) {
-            clearInterval(state.logTimer);
-            state.logTimer = null;
-          }
+          stopLogAutoRefresh();
           if (event.target.checked) {
-            state.logTimer = setInterval(() => {
-              if (state.current === "logs") loadLogs().catch(console.error);
-            }, 5000);
+            startLogAutoRefresh();
+            if (state.current === "logs") loadLogs().catch(console.error);
           }
         });
         $("reloadGroupsButton").addEventListener("click", () => loadGroups().catch((error) => setGroupStatus(error.message, "error")));

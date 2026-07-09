@@ -11,8 +11,8 @@ from typing import Any
 
 DEFAULT_GROUP_STRATEGY: dict[str, Any] = {
     "reply_probability": 0.7,
-    "silence_probability": 0.2,
-    "reaction_probability": 0.1,
+    "silence_probability": 0.27,
+    "reaction_probability": 0.03,
     "delay_min_ms": 300,
     "delay_max_ms": 2000,
     "context_window_sec": 5,
@@ -83,7 +83,7 @@ def group_strategy_decision(parsed_data: dict[str, Any], group_config: dict[str,
     if any(token in text for token in ("?", "？", "怎么", "如何", "为什么", "吗", "么")):
         return _apply_probability("text", "question", cfg, probabilities)
     if _emotion_short_text(text):
-        return _apply_probability("reaction", "emotion_short_text", cfg, probabilities)
+        return _decision("silence", "ambient_filler_silence", cfg, probabilities=probabilities)
     if _noise(text):
         return _decision("silence", "noise", cfg, probabilities=probabilities)
     return _apply_probability("delay_text", "ambient_reply", cfg, probabilities)

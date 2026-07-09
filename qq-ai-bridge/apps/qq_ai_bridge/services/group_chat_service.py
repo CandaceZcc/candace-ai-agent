@@ -1231,8 +1231,6 @@ def _local_global_reaction_reason(text: str, *, mentions_bot: bool) -> str:
         return ""
     if any(token in normalized for token in ("想摸", "想舔", "想冲", "冲了", "擦边", "涩", "色", "骚", "烧", "老婆睡", "大果睡")):
         return "sexual_reaction_hint"
-    if any(token in normalized for token in ("睡觉了", "晚安", "睡了", "困了", "先睡")):
-        return "goodnight_reaction_hint"
     return ""
 
 
@@ -1294,7 +1292,7 @@ def _should_use_reaction_instead(merged_text: str, reply: str, group_config: dic
     generated = normalize_query_text(reply)
     cfg = group_config or {}
     if "[[NO_REPLY]]" in str(reply or ""):
-        return True
+        return False
     if not text:
         return False
     if any(token in text for token in ("?", "？", "吗", "怎么", "为何", "为什么", "求")):
