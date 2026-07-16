@@ -107,7 +107,7 @@ def analyze_image_with_details(
         ))
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "x-goog-api-key": api_key,
         "Content-Type": "application/json",
     }
 
@@ -210,27 +210,22 @@ def _build_request_payload(image_path: str, user_text: str, model: str) -> dict:
     mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
     with open(image_path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode("utf-8")
-    image_url = f"data:{mime_type};base64,{encoded}"
 
     return {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "你是群聊看图助手。"
-                    "回答要短、自然、可验证。"
-                    "优先客观描述，不要低俗、不攻击，不要模板化夸夸。"
-                )
-            },
+        "contents": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": build_vision_prompt(user_text)},
-                    {"type": "image_url", "image_url": {"url": image_url}}
-                ]
+                "parts": [
+                    {"text": build_vision_prompt(user_text)},
+                    {
+                        "inline_data": {
+                            "mime_type": mime_type,
+                            "data": encoded,
+                        }
+                    },
+                ],
             }
-        ]
+        ],
     }
 
 
@@ -272,6 +267,24 @@ def _extract_response_text(data) -> str:
         return data.get("reply", "").strip()
     if isinstance(data.get("text"), str):
         return data.get("text", "").strip()
+
+    candidates = data.get("candidates")
+    if isinstance(candidates, list):
+        parts = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content")
+            if not isinstance(content, dict):
+                continue
+            for item in content.get("parts") or []:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text:
+                    parts.append(text)
+        if parts:
+            return " ".join(parts).strip()
 
     choices = data.get("choices")
     if isinstance(choices, list) and choices:

@@ -65,6 +65,13 @@ ALLOWED_PRIVATE_USER = _get_int_env("ALLOWED_PRIVATE_USER", 273007866)
 OWNER_QQ = _get_int_env("OWNER_QQ", ALLOWED_PRIVATE_USER)
 OWNER_NAME = os.getenv("OWNER_NAME", "Candace").strip() or "Candace"
 AI_CMD = os.getenv("AI_CMD", "/home/cancade/.local/bin/ocai").strip() or "/home/cancade/.local/bin/ocai"
+RUNTIME_CHAT_WORKERS = max(1, _get_int_env("RUNTIME_CHAT_WORKERS", 8))
+RUNTIME_CHAT_MAX_PENDING = max(0, _get_int_env("RUNTIME_CHAT_MAX_PENDING", 64))
+RUNTIME_MEDIA_WORKERS = max(1, _get_int_env("RUNTIME_MEDIA_WORKERS", 2))
+RUNTIME_MEDIA_MAX_PENDING = max(0, _get_int_env("RUNTIME_MEDIA_MAX_PENDING", 8))
+RUNTIME_SCHEDULED_MAX_PENDING = max(1, _get_int_env("RUNTIME_SCHEDULED_MAX_PENDING", 256))
+CHAT_STATE_TTL_SECONDS = max(60, _get_int_env("CHAT_STATE_TTL_SECONDS", 1800))
+IMAGE_CAPTION_PENDING_MAX = max(1, _get_int_env("IMAGE_CAPTION_PENDING_MAX", 128))
 
 QQ_AI_BRIDGE_ROOT = Path(__file__).resolve().parents[3]
 REPO_ROOT = QQ_AI_BRIDGE_ROOT.parent
@@ -262,9 +269,43 @@ BROWSER_AGENT_LOOP_PROMPT = """
 """
 
 KIMI_API_KEY = os.getenv("KIMI_API_KEY", "").strip()
-KIMI_BASE_URL = os.getenv("KIMI_BASE_URL", "https://api.moonshot.cn/v1").strip() or "https://api.moonshot.cn/v1"
-KIMI_MODEL = os.getenv("KIMI_MODEL", "kimi-k2.6").strip() or "kimi-k2.6"
+KIMI_BASE_URL = (
+    os.getenv("KIMI_BASE_URL", "https://api.deepseek.com").strip()
+    or "https://api.deepseek.com"
+)
+KIMI_MODEL = (
+    os.getenv("KIMI_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
+)
 KIMI_TIMEOUT_SECONDS = max(5, _get_int_env("KIMI_TIMEOUT_SECONDS", 25))
+LLM_BACKEND = os.getenv("LLM_BACKEND", "auto").strip().lower() or "auto"
+if LLM_BACKEND not in {"auto", "direct", "cli"}:
+    print(f"[CONFIG] invalid LLM_BACKEND={LLM_BACKEND!r}, fallback='auto'")
+    LLM_BACKEND = "auto"
+LLM_MAX_CONCURRENCY = max(1, _get_int_env("LLM_MAX_CONCURRENCY", 4))
+LLM_QUEUE_TIMEOUT_SECONDS = max(0, _get_int_env("LLM_QUEUE_TIMEOUT_SECONDS", 1))
+
+DRAW_API_KEY = (
+    os.getenv("DRAW_API_KEY", "").strip()
+    or os.getenv("VISION_API_KEY", "").strip()
+)
+DRAW_BASE_URL = (
+    os.getenv("DRAW_BASE_URL", "https://www.right.codes").strip()
+    or "https://www.right.codes"
+)
+DRAW_MODEL = os.getenv("DRAW_MODEL", "nano-banana-2").strip() or "nano-banana-2"
+DRAW_ASPECT_RATIO = os.getenv("DRAW_ASPECT_RATIO", "1:1").strip() or "1:1"
+DRAW_IMAGE_SIZE = os.getenv("DRAW_IMAGE_SIZE", "1K").strip() or "1K"
+DRAW_POLL_INTERVAL_SECONDS = max(0, _get_int_env("DRAW_POLL_INTERVAL_SECONDS", 2))
+DRAW_TIMEOUT_SECONDS = max(1, _get_int_env("DRAW_TIMEOUT_SECONDS", 240))
+DRAW_POLL_MAX_TRANSIENT_ERRORS = max(
+    0,
+    _get_int_env("DRAW_POLL_MAX_TRANSIENT_ERRORS", 6),
+)
+DRAW_FALLBACK_MODEL = (
+    os.getenv("DRAW_FALLBACK_MODEL", "gpt-image-2").strip()
+    or "gpt-image-2"
+)
+DRAW_FALLBACK_ENABLED = _get_bool_env("DRAW_FALLBACK_ENABLED", True)
 
 VOCAT_WEBHOOK_TOKEN = os.getenv("VOCAT_WEBHOOK_TOKEN", "").strip()
 VOCAT_API_TOKEN = os.getenv("VOCAT_API_TOKEN", "").strip()

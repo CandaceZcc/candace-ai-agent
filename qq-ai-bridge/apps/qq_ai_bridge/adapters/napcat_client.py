@@ -296,6 +296,104 @@ def send_group_msg(
         return {"ok": False, "error": str(e), "parts_sent": sent, "parts_total": len(parts)}
 
 
+def send_private_image(user_id, image_url: str, quiet: bool = False):
+    """Send one remote image to a private chat via NapCat."""
+    return _send_image_segment(
+        "send_private_msg",
+        "user_id",
+        user_id,
+        image_url,
+        quiet=quiet,
+    )
+
+
+def send_group_image(
+    group_id,
+    image_url: str,
+    quiet: bool = False,
+    reply_to_message_id: int | None = None,
+):
+    """Send one remote image to a group via NapCat."""
+    return _send_image_segment(
+        "send_group_msg",
+        "group_id",
+        group_id,
+        image_url,
+        quiet=quiet,
+        reply_to_message_id=reply_to_message_id,
+    )
+
+
+def _send_image_segment(
+    api_name: str,
+    target_key: str,
+    target_id,
+    image_url: str,
+    *,
+    quiet: bool,
+    reply_to_message_id: int | None = None,
+):
+    normalized_url = str(image_url or "").strip()
+    if not normalized_url:
+        return {"ok": False, "reason": "empty_image_url"}
+
+    message = [{"type": "image", "data": {"file": normalized_url}}]
+    if reply_to_message_id:
+        message.insert(0, {"type": "reply", "data": {"id": str(reply_to_message_id)}})
+    try:
+        response = _post_json(
+            api_name,
+            {target_key: target_id, "message": message},
+            timeout=30,
+        )
+        response_text = getattr(response, "text", "")
+        retcode = None
+        if response_text:
+            try:
+                payload = json.loads(response_text)
+                retcode = payload.get("retcode") if isinstance(payload, dict) else None
+            except (TypeError, json.JSONDecodeError):
+                pass
+        ok = bool(response.ok and retcode in (None, 0))
+        if not quiet:
+            print(
+                f"[SEND_IMAGE] api={api_name} target={target_id}"
+                f" status_code={response.status_code} ok={ok}"
+            )
+        _append_outbound_event(
+            {
+                "type": "image",
+                target_key: target_id,
+                "image_url": normalized_url,
+                "reply_to_message_id": reply_to_message_id,
+                "ok": ok,
+                "status_code": getattr(response, "status_code", None),
+                "retcode": retcode,
+                "response_preview": response_text[:300],
+            }
+        )
+        return {
+            "ok": ok,
+            "status_code": getattr(response, "status_code", None),
+            "retcode": retcode,
+            "text": response_text,
+        }
+    except Exception as exc:
+        if not quiet:
+            print(f"[SEND_IMAGE] failed api={api_name} target={target_id} error={exc}")
+        _append_outbound_event(
+            {
+                "type": "image",
+                target_key: target_id,
+                "image_url": normalized_url,
+                "reply_to_message_id": reply_to_message_id,
+                "ok": False,
+                "error": str(exc),
+            }
+        )
+        return {"ok": False, "error": "napcat_image_send_failed"}
+
+
 
 
 def send_group_file(group_id, file_path, name: str | None = None, quiet: bool = False):

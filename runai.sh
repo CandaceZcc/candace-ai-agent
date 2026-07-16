@@ -151,6 +151,20 @@ service_running() {
   is_pid_running "$pid"
 }
 
+resolve_service_pid() {
+  local pid_file="$1"
+  local port="$2"
+  local pid=""
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if ! is_pid_running "$pid"; then
+    pid="$(find_pid_by_port "$port")"
+  fi
+  if [[ -n "${pid:-}" ]]; then
+    write_pid "$pid_file" "$pid"
+    echo "$pid"
+  fi
+}
+
 bridge_running() {
   service_running "$BRIDGE_PID_FILE" || service_running_on_port "$BRIDGE_PORT"
 }
@@ -173,9 +187,7 @@ remove_pid() {
 start_bridge_bg() {
   if bridge_running; then
     local pid
-    pid="$(cat "$BRIDGE_PID_FILE" 2>/dev/null || true)"
-    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$BRIDGE_PORT")"
-    [[ -n "${pid:-}" ]] && write_pid "$BRIDGE_PID_FILE" "$pid"
+    pid="$(resolve_service_pid "$BRIDGE_PID_FILE" "$BRIDGE_PORT")"
     say "bridge 已在运行，PID=${pid:-unknown} PORT=$BRIDGE_PORT"
     return 0
   fi
@@ -188,7 +200,7 @@ start_bridge_bg() {
     nvm use "$BRIDGE_NODE_VERSION" >/dev/null || exit 1
     cd "$BRIDGE_DIR" || exit 1
     export PYTHONUNBUFFERED=1
-    nohup python3 -u bridge.py >>"$BRIDGE_LOG" 2>&1 &
+    nohup python3 -u bridge.py >/dev/null 2>&1 &
     echo $! > "$BRIDGE_PID_FILE"
     wait
   ) >/dev/null 2>&1 &
@@ -196,9 +208,7 @@ start_bridge_bg() {
   sleep 1
   if bridge_running; then
     local pid
-    pid="$(cat "$BRIDGE_PID_FILE" 2>/dev/null || true)"
-    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$BRIDGE_PORT")"
-    [[ -n "${pid:-}" ]] && write_pid "$BRIDGE_PID_FILE" "$pid"
+    pid="$(resolve_service_pid "$BRIDGE_PID_FILE" "$BRIDGE_PORT")"
     say "bridge 启动成功，PID=${pid:-unknown} PORT=$BRIDGE_PORT"
   else
     say "bridge 启动失败，查看日志：$BRIDGE_LOG"
@@ -209,9 +219,7 @@ start_bridge_bg() {
 start_agent_bg() {
   if agent_running; then
     local pid
-    pid="$(cat "$AGENT_PID_FILE" 2>/dev/null || true)"
-    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$PC_AGENT_PORT")"
-    [[ -n "${pid:-}" ]] && write_pid "$AGENT_PID_FILE" "$pid"
+    pid="$(resolve_service_pid "$AGENT_PID_FILE" "$PC_AGENT_PORT")"
     say "agent 已在运行，PID=${pid:-unknown} PORT=$PC_AGENT_PORT"
     return 0
   fi
@@ -230,9 +238,7 @@ start_agent_bg() {
   sleep 1
   if agent_running; then
     local pid
-    pid="$(cat "$AGENT_PID_FILE" 2>/dev/null || true)"
-    [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$PC_AGENT_PORT")"
-    [[ -n "${pid:-}" ]] && write_pid "$AGENT_PID_FILE" "$pid"
+    pid="$(resolve_service_pid "$AGENT_PID_FILE" "$PC_AGENT_PORT")"
     say "agent 启动成功，PID=${pid:-unknown} PORT=$PC_AGENT_PORT"
   else
     say "agent 启动失败，查看日志：$AGENT_LOG"
@@ -243,15 +249,16 @@ start_agent_bg() {
 stop_one() {
   local name="$1"
   local pid_file="$2"
+  local port="$3"
+  local pid=""
+  pid="$(resolve_service_pid "$pid_file" "$port")"
 
-  if ! service_running "$pid_file"; then
+  if [[ -z "${pid:-}" ]]; then
     say "$name 未运行"
     remove_pid "$pid_file"
     return 0
   fi
 
-  local pid
-  pid="$(cat "$pid_file")"
   say "停止 $name，PID=$pid"
   kill "$pid" 2>/dev/null || true
 
@@ -279,18 +286,14 @@ status_one() {
   case "$name" in
     bridge)
       if bridge_running; then
-        pid="$(cat "$pid_file" 2>/dev/null || true)"
-        [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$BRIDGE_PORT")"
-        [[ -n "${pid:-}" ]] && write_pid "$pid_file" "$pid"
+        pid="$(resolve_service_pid "$pid_file" "$BRIDGE_PORT")"
         echo "$name: RUNNING (PID=${pid:-unknown}, PORT=$BRIDGE_PORT)"
         return 0
       fi
       ;;
     agent)
       if agent_running; then
-        pid="$(cat "$pid_file" 2>/dev/null || true)"
-        [[ -n "${pid:-}" ]] || pid="$(find_pid_by_port "$PC_AGENT_PORT")"
-        [[ -n "${pid:-}" ]] && write_pid "$pid_file" "$pid"
+        pid="$(resolve_service_pid "$pid_file" "$PC_AGENT_PORT")"
         echo "$name: RUNNING (PID=${pid:-unknown}, PORT=$PC_AGENT_PORT)"
         return 0
       fi
@@ -311,7 +314,7 @@ run_window_mode() {
     nvm use '$BRIDGE_NODE_VERSION' >/dev/null || exit 1
     cd '$BRIDGE_DIR' || exit 1
     export PYTHONUNBUFFERED=1
-    python3 -u bridge.py 2>&1 | tee -a '$BRIDGE_LOG'
+    python3 -u bridge.py
   "
 
   local agent_cmd="
@@ -406,8 +409,8 @@ start_all() {
 }
 
 stop_all() {
-  stop_one "agent" "$AGENT_PID_FILE"
-  stop_one "bridge" "$BRIDGE_PID_FILE"
+  stop_one "agent" "$AGENT_PID_FILE" "$PC_AGENT_PORT"
+  stop_one "bridge" "$BRIDGE_PID_FILE" "$BRIDGE_PORT"
 }
 
 status_all() {

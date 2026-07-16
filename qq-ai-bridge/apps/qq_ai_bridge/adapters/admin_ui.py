@@ -15,6 +15,7 @@ from storage_utils import load_group_config_store, save_group_config_store
 
 from apps.qq_ai_bridge.config.settings import (
     GROUP_CONFIG_PATH,
+    IMAGE_TMP_DIR,
     NAPCAT_HTTP,
     NAPCAT_TOKEN,
     OWNER_QQ,
@@ -27,6 +28,10 @@ from apps.qq_ai_bridge.services.vocat_command_queue import (
     get_vocat_runtime_status,
 )
 from apps.qq_ai_bridge.services.vocat_service import get_local_repo_docs_status
+from apps.qq_ai_bridge.services.group_chat_service import get_group_chat_runtime_status
+from apps.qq_ai_bridge.services.private_chat_service import get_private_chat_runtime_status
+from apps.qq_ai_bridge.services.runtime_maintenance import get_directory_status, get_process_rss_bytes
+from apps.qq_ai_bridge.services.runtime_resources import get_runtime_resource_status
 from apps.qq_ai_bridge.services.group_strategy import DEFAULT_GROUP_STRATEGY, normalize_group_strategy_config
 from apps.qq_ai_bridge.services.trace_store import get_trace, list_traces
 
@@ -446,6 +451,13 @@ def _build_summary() -> dict[str, Any]:
         "today_vocat_ack": sum(1 for entry in entries if "ack command_id" in entry["raw"]),
         "recent_warnings": recent_warnings,
         "vocat": vocat_status,
+        "runtime_resources": get_runtime_resource_status(),
+        "chat_states": {
+            "group": get_group_chat_runtime_status(),
+            "private": get_private_chat_runtime_status(),
+        },
+        "temporary_storage": get_directory_status(IMAGE_TMP_DIR),
+        "process_rss_bytes": get_process_rss_bytes(),
         "config": _system_config_summary(),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

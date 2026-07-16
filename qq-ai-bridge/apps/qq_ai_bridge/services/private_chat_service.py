@@ -18,6 +18,7 @@ from storage_utils import (
 from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
 from apps.qq_ai_bridge.config.settings import (
     BASE_DATA_DIR,
+    CHAT_STATE_TTL_SECONDS,
     PRIVATE_COOLDOWN_MODE,
     PRIVATE_DEBOUNCE_MS,
     PRIVATE_REPLY_COOLDOWN_SEC,
@@ -44,6 +45,7 @@ from apps.qq_ai_bridge.services.response_action import (
     execute_private_action,
     parse_llm_response_action,
 )
+from apps.qq_ai_bridge.services.runtime_resources import submit_chat_task
 
 DEBOUNCE_MS = PRIVATE_DEBOUNCE_MS
 PRIVATE_REACTION_MIRROR_FACE = False
@@ -68,10 +70,13 @@ class PrivateChatState:
     debounce_started_monotonic: float = 0.0
     worker_running: bool = False
     last_reply_monotonic: float = 0.0
+    last_activity_monotonic: float = field(default_factory=time.monotonic)
 
 
 _PRIVATE_CHAT_STATES: dict[str, PrivateChatState] = {}
 _PRIVATE_CHAT_STATES_LOCK = threading.Lock()
+_PRIVATE_CHAT_STATES_LAST_CLEANUP = 0.0
+_PRIVATE_CHAT_STATES_CLEANUP_INTERVAL_SECONDS = 60.0
 
 
 # get_user_workspace：获取用户工作目录
@@ -127,13 +132,54 @@ def _handle_private_emoji_request(user_id, merged_text: str, current_message_ts:
 
 # _get_private_chat_state：获取私聊聊天状态
 def _get_private_chat_state(user_id) -> PrivateChatState:
+    _maybe_cleanup_private_chat_states()
     key = str(user_id)
     with _PRIVATE_CHAT_STATES_LOCK:
         state = _PRIVATE_CHAT_STATES.get(key)
         if state is None:
             state = PrivateChatState()
             _PRIVATE_CHAT_STATES[key] = state
+        state.last_activity_monotonic = time.monotonic()
         return state
+
+
+def _maybe_cleanup_private_chat_states(now: float | None = None) -> int:
+    global _PRIVATE_CHAT_STATES_LAST_CLEANUP
+    current = time.monotonic() if now is None else float(now)
+    if current - _PRIVATE_CHAT_STATES_LAST_CLEANUP < _PRIVATE_CHAT_STATES_CLEANUP_INTERVAL_SECONDS:
+        return 0
+    _PRIVATE_CHAT_STATES_LAST_CLEANUP = current
+    return _cleanup_private_chat_states(now=current)
+
+
+def _cleanup_private_chat_states(
+    *,
+    now: float | None = None,
+    ttl_seconds: float | None = None,
+) -> int:
+    current = time.monotonic() if now is None else float(now)
+    ttl = float(CHAT_STATE_TTL_SECONDS if ttl_seconds is None else ttl_seconds)
+    removed = 0
+    with _PRIVATE_CHAT_STATES_LOCK:
+        for key, state in list(_PRIVATE_CHAT_STATES.items()):
+            with state.lock:
+                if state.worker_running or state.pending:
+                    continue
+                if current - state.last_activity_monotonic < ttl:
+                    continue
+                _PRIVATE_CHAT_STATES.pop(key, None)
+                removed += 1
+    return removed
+
+
+def get_private_chat_runtime_status() -> dict[str, int]:
+    with _PRIVATE_CHAT_STATES_LOCK:
+        states = list(_PRIVATE_CHAT_STATES.values())
+    return {
+        "states": len(states),
+        "active_workers": sum(1 for state in states if state.worker_running),
+        "pending_messages": sum(len(state.pending) for state in states),
+    }
 
 
 # _merge_pending_messages：待办消息处理
@@ -161,6 +207,7 @@ def enqueue_private_text(user_id, ai_query: str, timestamp: int = 0, message_id:
     pending_message = PendingPrivateMessage(text=ai_query, timestamp=timestamp, message_id=message_id)
 
     with state.lock:
+        state.last_activity_monotonic = time.monotonic()
         was_empty = not state.pending
         state.pending.append(pending_message)
         if was_empty:
@@ -170,8 +217,11 @@ def enqueue_private_text(user_id, ai_query: str, timestamp: int = 0, message_id:
         worker_running = state.worker_running
         if not worker_running:
             state.worker_running = True
-            worker = threading.Thread(target=_run_private_chat_worker, args=(user_id,), daemon=True)
-            worker.start()
+            future = submit_chat_task(_run_private_chat_worker_safely, user_id)
+            if future is None:
+                state.pending.remove(pending_message)
+                state.worker_running = False
+                return {"queued": False, "reason": "runtime_busy"}
 
     print(
         f"[PRIVATE_CHAT] queued user_id={user_id}"
@@ -182,6 +232,26 @@ def enqueue_private_text(user_id, ai_query: str, timestamp: int = 0, message_id:
     return {"queued": True, "pending_count": pending_count}
 
 
+# _run_private_chat_worker_safely：隔离异常并恢复会话状态
+def _run_private_chat_worker_safely(user_id) -> None:
+    try:
+        _run_private_chat_worker(user_id)
+    except Exception as exc:
+        state = _get_private_chat_state(user_id)
+        with state.lock:
+            dropped_pending = len(state.pending)
+            state.pending.clear()
+            state.worker_running = False
+            state.debounce_started_monotonic = 0.0
+            state.last_activity_monotonic = time.monotonic()
+        print(
+            f"[PRIVATE_CHAT] worker_failed user_id={user_id}"
+            f" error_type={type(exc).__name__}"
+            f" dropped_pending={dropped_pending}"
+        )
+        send_private_msg(user_id, "消息处理失败了，请稍后重试。", quiet=True)
+
+
 # _run_private_chat_worker：运行私聊消费线程
 def _run_private_chat_worker(user_id) -> None:
     state = _get_private_chat_state(user_id)
@@ -189,6 +259,7 @@ def _run_private_chat_worker(user_id) -> None:
         with state.lock:
             if not state.pending:
                 state.worker_running = False
+                state.last_activity_monotonic = time.monotonic()
                 print(f"[PRIVATE_CHAT] idle user_id={user_id}")
                 return
             wait_ms = max(0, int(DEBOUNCE_MS - (time.monotonic() - state.last_enqueue_monotonic) * 1000))

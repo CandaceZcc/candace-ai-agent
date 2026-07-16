@@ -2,48 +2,58 @@
 
 import os
 import sys
-import threading
 from pathlib import Path
+
+from apps.qq_ai_bridge.services.runtime_maintenance import (
+    RotatingLogSink,
+    TeeStream,
+    cleanup_log_backups,
+    cleanup_temp_directory,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-class _TeeStream:
-    """Mirror process output to terminal and bridge.log."""
-
-    def __init__(self, original, log_file):
-        self._original = original
-        self._log_file = log_file
-        self._lock = threading.Lock()
-
-    def write(self, data):
-        with self._lock:
-            self._original.write(data)
-            self._log_file.write(data)
-            self.flush()
-        return len(data)
-
-    def flush(self):
-        self._original.flush()
-        self._log_file.flush()
-
-    def isatty(self):
-        return bool(getattr(self._original, "isatty", lambda: False)())
-
-
-def _install_bridge_log_tee() -> Path:
+def _install_bridge_log_tee() -> tuple[Path, RotatingLogSink, dict]:
     log_path = (REPO_ROOT / ".runtime" / "logs" / "bridge.log").resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = log_path.open("a", encoding="utf-8", buffering=1)
-    sys.stdout = _TeeStream(sys.stdout, log_file)
-    sys.stderr = _TeeStream(sys.stderr, log_file)
-    return log_path
+    max_bytes = max(1024 * 1024, int(os.getenv("BRIDGE_LOG_MAX_BYTES", str(20 * 1024 * 1024))))
+    backup_count = max(1, int(os.getenv("BRIDGE_LOG_BACKUP_COUNT", "7")))
+    backup_cleanup = cleanup_log_backups(
+        log_path,
+        max_age_seconds=max(24 * 3600, int(os.getenv("BRIDGE_LOG_BACKUP_MAX_AGE_SECONDS", str(14 * 24 * 3600)))),
+        max_total_bytes=max(max_bytes, int(os.getenv("BRIDGE_LOG_BACKUP_MAX_BYTES", str(max_bytes * backup_count)))),
+    )
+    log_sink = RotatingLogSink(log_path, max_bytes=max_bytes, backup_count=backup_count)
+    sys.stdout = TeeStream(sys.stdout, log_sink, "stdout")
+    sys.stderr = TeeStream(sys.stderr, log_sink, "stderr")
+    return log_path, log_sink, backup_cleanup
 
 
-_BRIDGE_LOG_PATH = _install_bridge_log_tee()
+_BRIDGE_LOG_PATH, _BRIDGE_LOG_SINK, _BRIDGE_BACKUP_CLEANUP = _install_bridge_log_tee()
+print(
+    "[SYSTEM] 历史日志清理"
+    f" removed_files={_BRIDGE_BACKUP_CLEANUP['removed_files']}"
+    f" removed_bytes={_BRIDGE_BACKUP_CLEANUP['removed_bytes']}"
+    f" backup_files={_BRIDGE_BACKUP_CLEANUP['backup_files']}"
+    f" backup_bytes={_BRIDGE_BACKUP_CLEANUP['backup_bytes']}"
+)
 
 from apps.qq_ai_bridge import runtime
 from apps.qq_ai_bridge.app import app
+
+_TEMP_CLEANUP = cleanup_temp_directory(
+    runtime.IMAGE_TMP_DIR,
+    max_age_seconds=max(3600, int(os.getenv("IMAGE_TMP_MAX_AGE_SECONDS", str(3 * 24 * 3600)))),
+    max_total_bytes=max(10 * 1024 * 1024, int(os.getenv("IMAGE_TMP_MAX_BYTES", str(512 * 1024 * 1024)))),
+)
+print(
+    "[SYSTEM] 临时图片清理"
+    f" removed_files={_TEMP_CLEANUP['removed_files']}"
+    f" removed_bytes={_TEMP_CLEANUP['removed_bytes']}"
+    f" remaining_files={_TEMP_CLEANUP['file_count']}"
+    f" remaining_bytes={_TEMP_CLEANUP['total_bytes']}"
+)
 
 
 def _serve() -> None:

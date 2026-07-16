@@ -15,10 +15,9 @@ from storage_utils import append_group_chat_log
 from storage_utils import load_group_config as load_group_config_from_file
 
 from apps.qq_ai_bridge.adapters.message_parser import normalize_query_text
-from apps.qq_ai_bridge.adapters.napcat_client import send_group_file
-from apps.qq_ai_bridge.config.settings import GROUP_CONFIG_PATH
-from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR
-from apps.qq_ai_bridge.config.settings import GLOBAL_LISTEN_GROUP_IDS
+from apps.qq_ai_bridge.adapters.napcat_client import send_group_file, send_group_msg
+from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR, CHAT_STATE_TTL_SECONDS
+from apps.qq_ai_bridge.config.settings import GLOBAL_LISTEN_GROUP_IDS, GROUP_CONFIG_PATH
 from apps.qq_ai_bridge.services.emoji_service import infer_reaction_preferred_order
 from apps.qq_ai_bridge.services.group_strategy import normalize_group_strategy_config, record_group_strategy_reply
 from apps.qq_ai_bridge.services.prompt_service import prepare_group_ai_prompt
@@ -28,6 +27,7 @@ from apps.qq_ai_bridge.services.response_action import (
     execute_group_action,
     parse_llm_response_action,
 )
+from apps.qq_ai_bridge.services.runtime_resources import submit_chat_task
 from apps.qq_ai_bridge.services.trace_store import add_trace_step
 
 GROUP_DEBOUNCE_MS = 5000
@@ -77,10 +77,13 @@ class GroupChatState:
     last_enqueue_monotonic: float = 0.0
     debounce_started_monotonic: float = 0.0
     worker_running: bool = False
+    last_activity_monotonic: float = field(default_factory=time.monotonic)
 
 
 _GROUP_CHAT_STATES: dict[str, GroupChatState] = {}
 _GROUP_CHAT_STATES_LOCK = threading.Lock()
+_GROUP_CHAT_STATES_LAST_CLEANUP = 0.0
+_GROUP_CHAT_STATES_CLEANUP_INTERVAL_SECONDS = 60.0
 _RECENT_REPEAT_MESSAGES: dict[str, list[tuple[float, str]]] = {}
 _RECENT_REPEAT_FOLLOWS: dict[str, float] = {}
 _REPEAT_FOLLOW_COOLDOWN_SECONDS = 60
@@ -150,6 +153,7 @@ def enqueue_group_text(
     context_window_ms = _context_window_ms(strategy_cfg)
 
     with state.lock:
+        state.last_activity_monotonic = time.monotonic()
         configured_reply_all = bool(group_config.get("reply_all_messages", False))
         fallback_global_listen = int(group_id or 0) in GLOBAL_LISTEN_GROUP_IDS
         reply_all = configured_reply_all or fallback_global_listen
@@ -167,8 +171,11 @@ def enqueue_group_text(
         worker_running = state.worker_running
         if not worker_running:
             state.worker_running = True
-            worker = threading.Thread(target=_run_group_chat_worker, args=(group_id, group_config, log), daemon=True)
-            worker.start()
+            future = submit_chat_task(_run_group_chat_worker_safely, group_id, group_config, log)
+            if future is None:
+                state.pending.remove(pending_message)
+                state.worker_running = False
+                return {"queued": False, "reason": "runtime_busy"}
 
     log(
         f"[GROUP_CHAT] queued group_id={group_id}"
@@ -185,13 +192,79 @@ def enqueue_group_text(
 
 
 def _get_group_chat_state(group_id) -> GroupChatState:
+    _maybe_cleanup_group_chat_states()
     key = str(group_id)
     with _GROUP_CHAT_STATES_LOCK:
         state = _GROUP_CHAT_STATES.get(key)
         if state is None:
             state = GroupChatState()
             _GROUP_CHAT_STATES[key] = state
+        state.last_activity_monotonic = time.monotonic()
         return state
+
+
+def _maybe_cleanup_group_chat_states(now: float | None = None) -> int:
+    global _GROUP_CHAT_STATES_LAST_CLEANUP
+    current = time.monotonic() if now is None else float(now)
+    if current - _GROUP_CHAT_STATES_LAST_CLEANUP < _GROUP_CHAT_STATES_CLEANUP_INTERVAL_SECONDS:
+        return 0
+    _GROUP_CHAT_STATES_LAST_CLEANUP = current
+    return _cleanup_group_chat_states(now=current)
+
+
+def _cleanup_group_chat_states(
+    *,
+    now: float | None = None,
+    ttl_seconds: float | None = None,
+) -> int:
+    current = time.monotonic() if now is None else float(now)
+    ttl = float(CHAT_STATE_TTL_SECONDS if ttl_seconds is None else ttl_seconds)
+    removed = 0
+    with _GROUP_CHAT_STATES_LOCK:
+        for key, state in list(_GROUP_CHAT_STATES.items()):
+            with state.lock:
+                if state.worker_running or state.pending:
+                    continue
+                if current - state.last_activity_monotonic < ttl:
+                    continue
+                _GROUP_CHAT_STATES.pop(key, None)
+                removed += 1
+    return removed
+
+
+def get_group_chat_runtime_status() -> dict[str, int]:
+    with _GROUP_CHAT_STATES_LOCK:
+        states = list(_GROUP_CHAT_STATES.values())
+    return {
+        "states": len(states),
+        "active_workers": sum(1 for state in states if state.worker_running),
+        "pending_messages": sum(len(state.pending) for state in states),
+        "repeat_message_keys": len(_RECENT_REPEAT_MESSAGES),
+        "repeat_follow_keys": len(_RECENT_REPEAT_FOLLOWS),
+    }
+
+
+def _run_group_chat_worker_safely(group_id, group_config: dict, log) -> None:
+    try:
+        _run_group_chat_worker(group_id, group_config, log)
+    except Exception as exc:
+        state = _get_group_chat_state(group_id)
+        with state.lock:
+            dropped_pending = len(state.pending)
+            state.pending.clear()
+            state.worker_running = False
+            state.debounce_started_monotonic = 0.0
+            state.last_activity_monotonic = time.monotonic()
+        log(
+            f"[GROUP_CHAT] worker_failed group_id={group_id}"
+            f" error_type={type(exc).__name__}"
+            f" dropped_pending={dropped_pending}"
+        )
+        send_group_msg(
+            group_id,
+            "消息处理失败了，请稍后重试。",
+            quiet=not should_log_group(group_id),
+        )
 
 
 def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
@@ -202,6 +275,7 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
         with state.lock:
             if not state.pending:
                 state.worker_running = False
+                state.last_activity_monotonic = time.monotonic()
                 log(f"[GROUP_CHAT] idle group_id={group_id}")
                 return
             if _should_flush_head_message_now(state.pending):
@@ -1132,6 +1206,35 @@ def _is_global_listen_group(group_id, group_config: dict | None) -> bool:
     return bool(cfg.get("reply_all_messages", False)) or int(group_id or 0) in GLOBAL_LISTEN_GROUP_IDS
 
 
+def _local_group_response_mode(
+    merged_text: str,
+    batch: list[PendingGroupMessage],
+) -> dict | None:
+    """Resolve clear group-response cases without spending a selector request."""
+    normalized_text = normalize_query_text(merged_text)
+    if not normalized_text:
+        return {"mode": "silence", "reason": "empty_text"}
+
+    mentions_bot = any(bool(item.explicit_trigger) for item in batch)
+    if _looks_like_stop_talking_request(normalized_text):
+        return {"mode": "silence", "reason": "制止"}
+    if _should_allow_ambient_chatter_interjection(batch, normalized_text, mentions_bot=mentions_bot):
+        return {"mode": "text", "reason": "ambient_chatter_interjection"}
+    if _looks_like_forwarded_chat_record(normalized_text):
+        return {"mode": "text", "reason": "forwarded_chat_record"}
+
+    local_reaction_reason = _local_global_reaction_reason(normalized_text, mentions_bot=mentions_bot)
+    if local_reaction_reason:
+        return {"mode": "reaction", "reason": local_reaction_reason}
+    if _should_silence_trivial_global_message(normalized_text, mentions_bot=mentions_bot):
+        return {"mode": "silence", "reason": "trivial_global_message"}
+    if mentions_bot:
+        return {"mode": "text", "reason": "explicit_trigger"}
+    if _looks_like_action_or_question_request(normalized_text):
+        return {"mode": "text", "reason": "local_action_or_question"}
+    return None
+
+
 def _decide_group_response_mode_with_llm(
     merged_text: str,
     batch: list[PendingGroupMessage],
@@ -1139,27 +1242,17 @@ def _decide_group_response_mode_with_llm(
     log,
 ) -> dict:
     normalized_text = normalize_query_text(merged_text)
-    if not normalized_text:
-        return {"mode": "silence", "reason": "empty_text"}
-
     mentions_bot = any(bool(item.explicit_trigger) for item in batch)
     has_question = any(token in normalized_text for token in ("?", "？", "怎么", "为什么", "吗", "咋"))
     message_count = len(batch)
-    if _should_allow_ambient_chatter_interjection(batch, normalized_text, mentions_bot=mentions_bot):
-        return {"mode": "text", "reason": "ambient_chatter_interjection"}
-    if _looks_like_forwarded_chat_record(normalized_text):
-        return {"mode": "text", "reason": "forwarded_chat_record"}
-    local_reaction_reason = _local_global_reaction_reason(normalized_text, mentions_bot=mentions_bot)
-    if local_reaction_reason:
-        decision = {"mode": "reaction", "reason": local_reaction_reason}
+    local_decision = _local_group_response_mode(normalized_text, batch)
+    if local_decision is not None:
         log(
-            f"[GROUP_CHAT] llm_mode_decision mode={decision['mode']}"
-            f" reason={decision.get('reason', '')!r}"
-            f" mentions_bot={mentions_bot} source=local_reaction_hint"
+            f"[GROUP_CHAT] local_mode_decision mode={local_decision['mode']}"
+            f" reason={local_decision.get('reason', '')!r}"
+            f" mentions_bot={mentions_bot} source=local_rules"
         )
-        return decision
-    if _should_silence_trivial_global_message(normalized_text, mentions_bot=mentions_bot):
-        return {"mode": "silence", "reason": "trivial_global_message"}
+        return local_decision
 
     reaction_bias = 0.24 if not mentions_bot else 0.18
     reaction_bias = max(0.0, min(0.95, reaction_bias))

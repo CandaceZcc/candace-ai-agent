@@ -7,10 +7,60 @@ sys.path.insert(0, "qq-ai-bridge")
 
 from apps.qq_ai_bridge.services import private_chat_service
 from apps.qq_ai_bridge.services.private_ledger_service import _PRIVATE_LEDGER_ARTIFACTS
-from apps.qq_ai_bridge.services.private_chat_service import _PRIVATE_CHAT_STATES, _handle_private_emoji_request, enqueue_private_text
+from apps.qq_ai_bridge.services.private_chat_service import (
+    _PRIVATE_CHAT_STATES,
+    _cleanup_private_chat_states,
+    _get_private_chat_state,
+    _handle_private_emoji_request,
+    enqueue_private_text,
+)
 
 
 class PrivateChatServiceTests(unittest.TestCase):
+    def test_cleanup_private_chat_states_evicts_only_expired_idle_state(self):
+        _PRIVATE_CHAT_STATES.clear()
+        expired = _get_private_chat_state(101)
+        expired.last_activity_monotonic = 10.0
+        active = _get_private_chat_state(202)
+        active.last_activity_monotonic = 10.0
+        active.pending.append(private_chat_service.PendingPrivateMessage(text="等待", timestamp=1))
+
+        removed = _cleanup_private_chat_states(now=100.0, ttl_seconds=30.0)
+
+        self.assertEqual(removed, 1)
+        self.assertNotIn("101", _PRIVATE_CHAT_STATES)
+        self.assertIs(_PRIVATE_CHAT_STATES["202"], active)
+        _PRIVATE_CHAT_STATES.clear()
+
+    @patch("apps.qq_ai_bridge.services.private_chat_service.submit_chat_task", return_value=object())
+    def test_enqueue_private_text_submits_worker_through_runtime_pool(self, mock_submit):
+        _PRIVATE_CHAT_STATES.clear()
+        result = enqueue_private_text(303, "测试", timestamp=1, message_id=2)
+
+        self.assertTrue(result["queued"])
+        mock_submit.assert_called_once()
+        self.assertIs(mock_submit.call_args.args[0], private_chat_service._run_private_chat_worker_safely)
+        _PRIVATE_CHAT_STATES.clear()
+
+    @patch("apps.qq_ai_bridge.services.private_chat_service.send_private_msg")
+    @patch(
+        "apps.qq_ai_bridge.services.private_chat_service._run_private_chat_worker",
+        side_effect=RuntimeError("boom"),
+    )
+    def test_private_worker_exception_resets_state_and_notifies_user(self, _mock_worker, mock_send):
+        _PRIVATE_CHAT_STATES.clear()
+        state = _get_private_chat_state(404)
+        state.worker_running = True
+        state.pending.append(private_chat_service.PendingPrivateMessage(text="等待", timestamp=1))
+
+        private_chat_service._run_private_chat_worker_safely(404)
+
+        self.assertFalse(state.worker_running)
+        self.assertEqual(state.pending, [])
+        mock_send.assert_called_once()
+        self.assertEqual(mock_send.call_args.args[:2], (404, "消息处理失败了，请稍后重试。"))
+        _PRIVATE_CHAT_STATES.clear()
+
     @patch("apps.qq_ai_bridge.services.response_action.react_message_with_multiple_emojis")
     @patch("apps.qq_ai_bridge.services.response_action.send_private_msg")
     @patch("apps.qq_ai_bridge.services.private_chat_service.send_private_msg")
@@ -29,7 +79,7 @@ class PrivateChatServiceTests(unittest.TestCase):
         self.assertTrue(result["handled"])
         self.assertEqual(result["mode"], "reaction")
         mock_react.assert_called_once()
-        self.assertEqual(mock_react.call_args.kwargs["preferred_order"][:2], ("button_marker", "laugh_cry"))
+        self.assertEqual(mock_react.call_args.kwargs["preferred_order"][:2], ("button_marker", "lollipop"))
         self.assertTrue(mock_react.call_args.kwargs["preserve_order"])
         mock_fallback_send.assert_called_once()
         mock_direct_send.assert_not_called()
@@ -128,7 +178,7 @@ class PrivateChatServiceTests(unittest.TestCase):
 
         self.assertTrue(result["queued"])
         mock_react.assert_called_once()
-        self.assertEqual(mock_react.call_args.kwargs["preferred_order"][:2], ("button_marker", "laugh_cry"))
+        self.assertEqual(mock_react.call_args.kwargs["preferred_order"][:2], ("button_marker", "lollipop"))
         self.assertTrue(mock_react.call_args.kwargs["preserve_order"])
         mock_fallback_send.assert_called_once()
         mock_direct_send.assert_not_called()

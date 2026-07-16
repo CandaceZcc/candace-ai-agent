@@ -11,13 +11,65 @@ from apps.qq_ai_bridge.adapters.napcat_client import (
     react_message_with_multiple_emojis,
     react_message_with_preferred_emojis,
     send_group_file,
+    send_group_image,
     send_group_msg,
+    send_private_image,
     send_private_msg,
     split_outbound_messages,
 )
 
 
 class NapcatClientTests(unittest.TestCase):
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_send_private_image_uses_onebot_image_segment(self, mock_post):
+        mock_post.return_value = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            text='{"retcode":0}',
+        )
+
+        result = send_private_image(67890, "https://cdn.example.com/result.png", quiet=True)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(mock_post.call_args.args[0], "send_private_msg")
+        self.assertEqual(
+            mock_post.call_args.args[1]["message"],
+            [
+                {
+                    "type": "image",
+                    "data": {"file": "https://cdn.example.com/result.png"},
+                }
+            ],
+        )
+
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_send_group_image_can_reply_to_trigger_message(self, mock_post):
+        mock_post.return_value = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            text='{"retcode":0}',
+        )
+
+        result = send_group_image(
+            12345,
+            "https://cdn.example.com/result.png",
+            quiet=True,
+            reply_to_message_id=998877,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(mock_post.call_args.args[0], "send_group_msg")
+        self.assertEqual(
+            mock_post.call_args.args[1]["message"],
+            [
+                {"type": "reply", "data": {"id": "998877"}},
+                {
+                    "type": "image",
+                    "data": {"file": "https://cdn.example.com/result.png"},
+                },
+            ],
+        )
+
     def test_split_outbound_messages_by_blank_line(self):
         parts = split_outbound_messages("第一段\n\n第二段")
         self.assertEqual(parts, ["第一段", "第二段"])
