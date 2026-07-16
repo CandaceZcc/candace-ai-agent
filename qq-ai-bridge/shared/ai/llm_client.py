@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import subprocess
+import threading
 import time
 from typing import Any
 
@@ -14,6 +15,9 @@ from apps.qq_ai_bridge.config.settings import (
     KIMI_BASE_URL,
     KIMI_MODEL,
     KIMI_TIMEOUT_SECONDS,
+    LLM_BACKEND,
+    LLM_MAX_CONCURRENCY,
+    LLM_QUEUE_TIMEOUT_SECONDS,
 )
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -28,6 +32,9 @@ _LOCAL_DIAGNOSTIC_TOKENS = (
     ".openclaw",
     "node_modules",
 )
+_HTTP_SESSION = requests.Session()
+_LLM_SEMAPHORE = threading.BoundedSemaphore(LLM_MAX_CONCURRENCY)
+_LLM_BUSY_REPLY = "当前模型请求较多，请稍后再试。"
 
 
 def _strip_cli_diagnostics(raw_output: str) -> str:
@@ -78,8 +85,24 @@ def _extract_output_and_usage(raw_output: str) -> tuple[str, dict[str, Any] | No
     return stripped, None
 
 
-def call_ai(text: str, metadata: dict[str, Any] | None = None) -> str:
-    """Call the local LLM CLI and return text output."""
+def _render_cli_prompt(value: str | list[dict[str, Any]]) -> str:
+    if isinstance(value, str):
+        return value
+    lines: list[str] = []
+    for message in value:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "user").strip() or "user"
+        content = message.get("content", "")
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
+def _call_cli_llm(text: str | list[dict[str, Any]], metadata: dict[str, Any] | None = None) -> str:
+    """Call the compatibility OpenClaw CLI backend."""
+    text = _render_cli_prompt(text)
     metadata = metadata or {}
     user_id = metadata.get("user_id", "unknown")
     merged_message_count = metadata.get("merged_message_count", "na")
@@ -198,25 +221,47 @@ def _extract_kimi_text(payload: dict[str, Any]) -> str:
     return ""
 
 
-def call_kimi_text(
-    prompt: str,
+def _select_llm_backend(backend: str, *, api_key: str) -> str:
+    normalized = str(backend or "auto").strip().lower()
+    if normalized not in {"auto", "direct", "cli"}:
+        normalized = "auto"
+    if normalized == "auto":
+        return "direct" if str(api_key or "").strip() else "cli"
+    return normalized
+
+
+def _acquire_llm_slot() -> bool:
+    if LLM_QUEUE_TIMEOUT_SECONDS <= 0:
+        return _LLM_SEMAPHORE.acquire(blocking=False)
+    return _LLM_SEMAPHORE.acquire(timeout=LLM_QUEUE_TIMEOUT_SECONDS)
+
+
+def _call_direct_llm(
+    prompt: str | list[dict[str, Any]],
+    *,
     system_prompt: str | None = None,
     timeout_seconds: int | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> str:
-    """Call Kimi chat completions and return plain text output."""
     if not KIMI_API_KEY:
-        return "Kimi API 未配置。请设置 KIMI_API_KEY。"
+        return "文本模型 API 未配置，请设置 KIMI_API_KEY。"
 
-    timeout_seconds = timeout_seconds or KIMI_TIMEOUT_SECONDS
+    metadata = metadata or {}
+    timeout = timeout_seconds or KIMI_TIMEOUT_SECONDS
     url = f"{KIMI_BASE_URL.rstrip('/')}/chat/completions"
     headers = {
         "Authorization": f"Bearer {KIMI_API_KEY}",
         "Content-Type": "application/json",
     }
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
+    if isinstance(prompt, list):
+        messages = [dict(message) for message in prompt if isinstance(message, dict)]
+        if system_prompt:
+            messages.insert(0, {"role": "system", "content": system_prompt})
+    else:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
     payload = {
         "model": KIMI_MODEL,
         "messages": messages,
@@ -225,33 +270,88 @@ def call_kimi_text(
 
     started_at = time.monotonic()
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=timeout_seconds)
+        response = _HTTP_SESSION.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        )
         response.raise_for_status()
         data = response.json()
-        text = _extract_kimi_text(data)
+        output = _extract_kimi_text(data)
         duration_ms = int((time.monotonic() - started_at) * 1000)
         usage = data.get("usage") if isinstance(data, dict) else {}
         prompt_tokens = usage.get("prompt_tokens", "na") if isinstance(usage, dict) else "na"
-        completion_tokens = (
-            usage.get("completion_tokens", "na") if isinstance(usage, dict) else "na"
-        )
+        completion_tokens = usage.get("completion_tokens", "na") if isinstance(usage, dict) else "na"
         total_tokens = usage.get("total_tokens", "na") if isinstance(usage, dict) else "na"
         print(
-            "[KIMI] success"
+            "[LLM] success"
+            " backend=direct"
+            f" model={KIMI_MODEL}"
+            f" user_id={metadata.get('user_id', 'unknown')}"
             f" duration_ms={duration_ms}"
             f" prompt_tokens={prompt_tokens}"
             f" completion_tokens={completion_tokens}"
             f" total_tokens={total_tokens}"
         )
-        return text or "Kimi 没有返回内容。"
+        return output or "模型没有返回内容。"
     except requests.RequestException as exc:
         duration_ms = int((time.monotonic() - started_at) * 1000)
-        print(f"[KIMI] request_error duration_ms={duration_ms} error={exc}")
-        return f"Kimi 调用失败：{exc}"
+        status_code = getattr(getattr(exc, "response", None), "status_code", "na")
+        print(
+            "[LLM] request_error"
+            " backend=direct"
+            f" model={KIMI_MODEL}"
+            f" duration_ms={duration_ms}"
+            f" status_code={status_code}"
+            f" error_type={type(exc).__name__}"
+        )
+        return "模型服务暂时不可用，请稍后再试。"
     except Exception as exc:
         duration_ms = int((time.monotonic() - started_at) * 1000)
-        print(f"[KIMI] exception duration_ms={duration_ms} error={exc}")
-        return f"Kimi 处理失败：{exc}"
+        print(
+            "[LLM] exception"
+            " backend=direct"
+            f" model={KIMI_MODEL}"
+            f" duration_ms={duration_ms}"
+            f" error_type={type(exc).__name__}"
+        )
+        return "模型处理失败，请稍后再试。"
+
+
+def call_ai(text: str | list[dict[str, Any]], metadata: dict[str, Any] | None = None) -> str:
+    """Call the configured text-model backend with bounded concurrency."""
+    if not _acquire_llm_slot():
+        print("[LLM] busy queue_timeout")
+        return _LLM_BUSY_REPLY
+    try:
+        backend = _select_llm_backend(LLM_BACKEND, api_key=KIMI_API_KEY)
+        if backend == "direct":
+            return _call_direct_llm(text, metadata=metadata)
+        return _call_cli_llm(text, metadata=metadata)
+    finally:
+        _LLM_SEMAPHORE.release()
+
+
+def call_kimi_text(
+    prompt: str,
+    system_prompt: str | None = None,
+    timeout_seconds: int | None = None,
+) -> str:
+    """Compatibility wrapper for direct OpenAI-compatible text generation."""
+    if not KIMI_API_KEY:
+        return "Kimi API 未配置。请设置 KIMI_API_KEY。"
+    if not _acquire_llm_slot():
+        return _LLM_BUSY_REPLY
+    try:
+        return _call_direct_llm(
+            prompt,
+            system_prompt=system_prompt,
+            timeout_seconds=timeout_seconds,
+            metadata={"user_id": "compat_text"},
+        )
+    finally:
+        _LLM_SEMAPHORE.release()
 
 
 async def call_kimi_text_async(

@@ -14,6 +14,7 @@ from apps.qq_ai_bridge.services.group_chat_service import (
     _RECENT_REPEAT_MESSAGES,
     _RECENT_REPEAT_FOLLOWS,
     _claim_repeat_follow,
+    _cleanup_group_chat_states,
     _get_group_chat_state,
     _decide_group_response_mode_with_llm,
     _detect_direct_reaction_request_count,
@@ -46,6 +47,58 @@ class GroupChatServiceTests(unittest.TestCase):
         _GROUP_CHAT_STATES.clear()
         _RECENT_REPEAT_MESSAGES.clear()
         _RECENT_REPEAT_FOLLOWS.clear()
+
+    def test_cleanup_group_chat_states_evicts_only_expired_idle_state(self):
+        expired = _get_group_chat_state(101)
+        expired.last_activity_monotonic = 10.0
+        active = _get_group_chat_state(202)
+        active.last_activity_monotonic = 10.0
+        active.worker_running = True
+
+        removed = _cleanup_group_chat_states(now=100.0, ttl_seconds=30.0)
+
+        self.assertEqual(removed, 1)
+        self.assertNotIn("101", _GROUP_CHAT_STATES)
+        self.assertIs(_GROUP_CHAT_STATES["202"], active)
+
+    @patch("apps.qq_ai_bridge.services.group_chat_service.submit_chat_task", return_value=object())
+    def test_enqueue_group_text_submits_worker_through_runtime_pool(self, mock_submit):
+        result = enqueue_group_text(
+            group_id=303,
+            user_id=1,
+            sender_name="u",
+            ai_query="测试",
+            group_config={"reply_all_messages": True},
+            explicit_trigger=True,
+            timestamp=1,
+            message_id=2,
+            log=lambda *_args: None,
+        )
+
+        self.assertTrue(result["queued"])
+        mock_submit.assert_called_once()
+        self.assertIs(mock_submit.call_args.args[0], group_chat_service._run_group_chat_worker_safely)
+
+    @patch("apps.qq_ai_bridge.services.group_chat_service.send_group_msg")
+    @patch(
+        "apps.qq_ai_bridge.services.group_chat_service._run_group_chat_worker",
+        side_effect=RuntimeError("boom"),
+    )
+    def test_group_worker_exception_resets_state_and_notifies_group(self, _mock_worker, mock_send):
+        state = _get_group_chat_state(404)
+        state.worker_running = True
+        state.pending.append(
+            PendingGroupMessage(user_id=1, sender_name="u", text="等待", timestamp=1)
+        )
+        logs = []
+
+        group_chat_service._run_group_chat_worker_safely(404, {}, logs.append)
+
+        self.assertFalse(state.worker_running)
+        self.assertEqual(state.pending, [])
+        self.assertTrue(any("worker_failed" in line for line in logs))
+        mock_send.assert_called_once()
+        self.assertEqual(mock_send.call_args.args[:2], (404, "消息处理失败了，请稍后重试。"))
 
     def test_detect_requested_parts_in_chinese(self):
         self.assertEqual(_detect_requested_parts("我叫你发两条消息"), 2)
@@ -364,7 +417,7 @@ class GroupChatServiceTests(unittest.TestCase):
         mock_call_ai.assert_not_called()
 
     @patch("apps.qq_ai_bridge.services.group_chat_service.call_ai", return_value='{"mode":"silence","reason":"短消息"}')
-    def test_group_response_mode_never_silences_explicit_trigger(self, _mock_call_ai):
+    def test_group_response_mode_never_silences_explicit_trigger(self, mock_call_ai):
         decision = _decide_group_response_mode_with_llm(
             merged_text="宝宝",
             batch=[PendingGroupMessage(user_id=1, sender_name="u", text="宝宝", timestamp=1, explicit_trigger=True)],
@@ -373,7 +426,47 @@ class GroupChatServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(decision["mode"], "text")
-        self.assertEqual(decision["reason"], "explicit_trigger_override")
+        self.assertEqual(decision["reason"], "explicit_trigger")
+        mock_call_ai.assert_not_called()
+
+    @patch("apps.qq_ai_bridge.services.group_chat_service.call_ai")
+    def test_group_response_mode_skips_selector_for_explicit_trigger(self, mock_call_ai):
+        decision = _decide_group_response_mode_with_llm(
+            merged_text="宝宝",
+            batch=[PendingGroupMessage(user_id=1, sender_name="u", text="宝宝", timestamp=1, explicit_trigger=True)],
+            group_config={"reply_all_messages": True},
+            log=lambda *_args: None,
+        )
+
+        self.assertEqual(decision, {"mode": "text", "reason": "explicit_trigger"})
+        mock_call_ai.assert_not_called()
+
+    @patch("apps.qq_ai_bridge.services.group_chat_service.call_ai")
+    def test_group_response_mode_skips_selector_for_local_question(self, mock_call_ai):
+        decision = _decide_group_response_mode_with_llm(
+            merged_text="u：这个报错怎么解决？",
+            batch=[PendingGroupMessage(user_id=1, sender_name="u", text="这个报错怎么解决？", timestamp=1)],
+            group_config={"reply_all_messages": True},
+            log=lambda *_args: None,
+        )
+
+        self.assertEqual(decision, {"mode": "text", "reason": "local_action_or_question"})
+        mock_call_ai.assert_not_called()
+
+    @patch(
+        "apps.qq_ai_bridge.services.group_chat_service.call_ai",
+        return_value='{"mode":"silence","reason":"不是对机器人说"}',
+    )
+    def test_group_response_mode_uses_selector_for_ambiguous_ambient_text(self, mock_call_ai):
+        decision = _decide_group_response_mode_with_llm(
+            merged_text="u：这版本感觉不一样",
+            batch=[PendingGroupMessage(user_id=1, sender_name="u", text="这版本感觉不一样", timestamp=1)],
+            group_config={"reply_all_messages": True},
+            log=lambda *_args: None,
+        )
+
+        self.assertEqual(decision["mode"], "silence")
+        mock_call_ai.assert_called_once()
 
     @patch("apps.qq_ai_bridge.services.group_chat_service.call_ai", return_value='{"mode":"silence","reason":"制止"}')
     def test_group_response_mode_respects_stop_talking_request(self, _mock_call_ai):

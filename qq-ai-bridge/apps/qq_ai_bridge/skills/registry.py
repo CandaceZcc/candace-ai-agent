@@ -7,6 +7,7 @@ from typing import Any
 
 
 _SKILL_SPECS = (
+    ("apps.qq_ai_bridge.skills.draw", "DrawSkill"),
     ("apps.qq_ai_bridge.skills.image_understanding", "ImageUnderstandingSkill"),
     ("apps.qq_ai_bridge.skills.file_understanding", "FileUnderstandingSkill"),
     ("apps.qq_ai_bridge.skills.desktop_agent", "DesktopAgentSkill"),

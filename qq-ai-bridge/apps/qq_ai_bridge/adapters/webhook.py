@@ -20,6 +20,7 @@ from apps.qq_ai_bridge.adapters.napcat_client import (
     send_private_msg as _send_private_msg_raw,
 )
 from apps.qq_ai_bridge.config.settings import (
+    IMAGE_CAPTION_PENDING_MAX,
     VOCAT_API_TOKEN,
     VOCAT_BOT_ID,
     VOCAT_DEVICE_NAME,
@@ -43,6 +44,7 @@ from apps.qq_ai_bridge.services.reaction_follow_service import (
     record_group_message_for_reaction_learning,
 )
 from apps.qq_ai_bridge.services.style_service import capture_group_style
+from apps.qq_ai_bridge.services.runtime_resources import schedule_task, submit_media_task
 from apps.qq_ai_bridge.services.trace_store import add_trace_step, finish_trace, new_trace_id, start_trace, trace_prefix
 from apps.qq_ai_bridge.services.vocat_service import (
     get_local_repo_docs_status,
@@ -285,6 +287,29 @@ def _caption_pending_key(parsed_data: dict) -> str:
     return f"{parsed_data.get('msg_type')}:{parsed_data.get('group_id') or ''}:{parsed_data.get('user_id') or ''}"
 
 
+def _store_pending_image_caption(
+    key: str,
+    parsed_data: dict,
+    *,
+    now: float | None = None,
+    max_entries: int | None = None,
+) -> None:
+    current = time.time() if now is None else float(now)
+    capacity = max(1, int(IMAGE_CAPTION_PENDING_MAX if max_entries is None else max_entries))
+    stale_before = current - IMAGE_CAPTION_GRACE_SECONDS - 1.0
+    with _PENDING_IMAGE_CAPTIONS_LOCK:
+        for pending_key, pending in list(_PENDING_IMAGE_CAPTIONS.items()):
+            if float(pending.get("created_at", 0)) < stale_before:
+                _PENDING_IMAGE_CAPTIONS.pop(pending_key, None)
+        if key not in _PENDING_IMAGE_CAPTIONS and len(_PENDING_IMAGE_CAPTIONS) >= capacity:
+            oldest_key = min(
+                _PENDING_IMAGE_CAPTIONS,
+                key=lambda item: float(_PENDING_IMAGE_CAPTIONS[item].get("created_at", 0)),
+            )
+            _PENDING_IMAGE_CAPTIONS.pop(oldest_key, None)
+        _PENDING_IMAGE_CAPTIONS[key] = {"parsed": parsed_data, "created_at": current}
+
+
 def _maybe_handle_image_caption_merge(parsed_data: dict) -> bool:
     if parsed_data.get("type") != "text" or parsed_data.get("msg_type") != "group":
         return False
@@ -294,11 +319,11 @@ def _maybe_handle_image_caption_merge(parsed_data: dict) -> bool:
     key = _caption_pending_key(parsed_data)
 
     if has_image and not text:
-        with _PENDING_IMAGE_CAPTIONS_LOCK:
-            _PENDING_IMAGE_CAPTIONS[key] = {"parsed": parsed_data, "created_at": time.time()}
-        timer = threading.Timer(IMAGE_CAPTION_GRACE_SECONDS, _flush_pending_image_caption, args=(key,))
-        timer.daemon = True
-        timer.start()
+        _store_pending_image_caption(key, parsed_data)
+        if not schedule_task(IMAGE_CAPTION_GRACE_SECONDS, _submit_pending_image_caption_flush, key):
+            with _PENDING_IMAGE_CAPTIONS_LOCK:
+                _PENDING_IMAGE_CAPTIONS.pop(key, None)
+            return False
         print(
             f"[VISION] waiting_for_caption group_id={parsed_data.get('group_id')}"
             f" user_id={parsed_data.get('user_id')} grace_seconds={IMAGE_CAPTION_GRACE_SECONDS}"
@@ -322,6 +347,26 @@ def _maybe_handle_image_caption_merge(parsed_data: dict) -> bool:
             SkillDispatcher.dispatch(merged)
             return True
     return False
+
+
+def _submit_pending_image_caption_flush(key: str) -> None:
+    future = submit_media_task(_flush_pending_image_caption, key)
+    if future is not None:
+        return
+    with _PENDING_IMAGE_CAPTIONS_LOCK:
+        dropped = _PENDING_IMAGE_CAPTIONS.pop(key, None)
+    if dropped:
+        parsed = dropped.get("parsed") or {}
+        print(
+            f"[VISION] caption_flush_dropped_runtime_busy group_id={parsed.get('group_id')}"
+            f" user_id={parsed.get('user_id')}"
+        )
+        _send_group_msg_raw(
+            parsed.get("group_id"),
+            "当前图片处理任务较多，请稍后再试。",
+            quiet=True,
+            reply_to_message_id=parsed.get("message_id"),
+        )
 
 
 def _flush_pending_image_caption(key: str) -> None:

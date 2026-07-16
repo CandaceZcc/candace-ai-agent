@@ -2,11 +2,13 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, "qq-ai-bridge")
 
 from apps.qq_ai_bridge.adapters.admin_ui import (
     _log_file_meta,
+    _build_summary,
     _normalize_default_payload,
     _normalize_group_payload,
     _normalize_strategy_payload,
@@ -19,6 +21,29 @@ from apps.qq_ai_bridge.adapters.admin_ui import (
 
 
 class AdminConsoleHelpersTest(unittest.TestCase):
+    @patch("apps.qq_ai_bridge.adapters.admin_ui.get_process_rss_bytes", return_value=1234)
+    @patch(
+        "apps.qq_ai_bridge.adapters.admin_ui.get_directory_status",
+        return_value={"path": "/tmp/images", "file_count": 2, "total_bytes": 99},
+    )
+    @patch(
+        "apps.qq_ai_bridge.adapters.admin_ui.get_runtime_resource_status",
+        return_value={"chat": {"active": 1}, "media": {"active": 0}},
+    )
+    @patch("apps.qq_ai_bridge.adapters.admin_ui.get_private_chat_runtime_status", return_value={"states": 3})
+    @patch("apps.qq_ai_bridge.adapters.admin_ui.get_group_chat_runtime_status", return_value={"states": 4})
+    @patch("apps.qq_ai_bridge.adapters.admin_ui._probe_napcat_available", return_value=True)
+    @patch("apps.qq_ai_bridge.adapters.admin_ui.tail_lines", return_value=[])
+    @patch("apps.qq_ai_bridge.adapters.admin_ui.get_vocat_runtime_status", return_value={})
+    @patch("apps.qq_ai_bridge.adapters.admin_ui.get_vocat_queue_status", return_value={"queue_size": 0})
+    def test_summary_exposes_runtime_resource_and_storage_health(self, *_mocks):
+        summary = _build_summary()
+
+        self.assertEqual(summary["runtime_resources"]["chat"]["active"], 1)
+        self.assertEqual(summary["chat_states"], {"group": {"states": 4}, "private": {"states": 3}})
+        self.assertEqual(summary["temporary_storage"]["total_bytes"], 99)
+        self.assertEqual(summary["process_rss_bytes"], 1234)
+
     def test_parse_vocat_log_line(self):
         entry = parse_log_line("[VOCAT] poll deliver command_id=abc123 type=tts queue_size=2")
 

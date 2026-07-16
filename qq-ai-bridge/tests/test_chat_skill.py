@@ -9,6 +9,122 @@ from apps.qq_ai_bridge.skills.chat import ChatSkill
 
 
 class ChatSkillTests(unittest.TestCase):
+    @patch("apps.qq_ai_bridge.skills.chat.group_strategy_decision")
+    @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text", return_value={"queued": True})
+    def test_local_question_bypasses_probabilistic_strategy(self, mock_enqueue, mock_strategy):
+        context = SkillContext(
+            data={"message_id": 123},
+            post_type="message",
+            message_type="group",
+            user_id=1,
+            self_id=2,
+            group_id=3,
+            group_config={"reply_all_messages": True, "bot_can_reply": True},
+            should_log=True,
+            msg="这个报错怎么解决？",
+            normalized_msg="这个报错怎么解决？",
+            effective_text="这个报错怎么解决？",
+            mentioned_self=False,
+            image_inputs={},
+            file_info=None,
+            logger=lambda *_args: None,
+            timestamp=10,
+            nick="u",
+        )
+
+        result = ChatSkill().handle(context)
+
+        self.assertTrue(result.response_payload["queue"]["queued"])
+        mock_strategy.assert_not_called()
+        self.assertEqual(mock_enqueue.call_args.kwargs["strategy"]["mode"], "text")
+
+    @patch("apps.qq_ai_bridge.skills.chat.group_strategy_decision")
+    @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text")
+    def test_stop_request_bypasses_strategy_and_stays_silent(self, mock_enqueue, mock_strategy):
+        context = SkillContext(
+            data={"message_id": 123},
+            post_type="message",
+            message_type="group",
+            user_id=1,
+            self_id=2,
+            group_id=3,
+            group_config={"reply_all_messages": True, "bot_can_reply": True},
+            should_log=True,
+            msg="你别回复",
+            normalized_msg="你别回复",
+            effective_text="你别回复",
+            mentioned_self=True,
+            image_inputs={},
+            file_info=None,
+            logger=lambda *_args: None,
+            timestamp=10,
+            nick="u",
+        )
+
+        result = ChatSkill().handle(context)
+
+        self.assertEqual(result.status, "ignore")
+        self.assertEqual(result.response_payload["status"], "local_silence")
+        mock_strategy.assert_not_called()
+        mock_enqueue.assert_not_called()
+
+    @patch("apps.qq_ai_bridge.skills.chat.maybe_handle_private_admin_command", return_value=None)
+    @patch("apps.qq_ai_bridge.skills.chat.enqueue_private_text", return_value={"queued": False, "reason": "runtime_busy"})
+    def test_private_runtime_busy_returns_immediate_user_message(self, _mock_enqueue, _mock_admin):
+        context = SkillContext(
+            data={"message_id": 123},
+            post_type="message",
+            message_type="private",
+            user_id=1,
+            self_id=2,
+            group_id=None,
+            group_config={},
+            should_log=True,
+            msg="你好",
+            normalized_msg="你好",
+            effective_text="你好",
+            mentioned_self=False,
+            image_inputs={},
+            file_info=None,
+            logger=lambda *_args: None,
+            timestamp=10,
+            nick="u",
+        )
+
+        result = ChatSkill().handle(context)
+
+        self.assertEqual(result.status, "busy")
+        self.assertEqual(result.response_text, "当前消息较多，请稍后再试。")
+
+    @patch("apps.qq_ai_bridge.skills.chat.group_strategy_decision")
+    @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text", return_value={"queued": False, "reason": "runtime_busy"})
+    def test_explicit_group_runtime_busy_returns_immediate_user_message(self, _mock_enqueue, mock_strategy):
+        mock_strategy.return_value = {"mode": "text", "reason": "explicit", "probabilities": {}}
+        context = SkillContext(
+            data={"message_id": 123},
+            post_type="message",
+            message_type="group",
+            user_id=1,
+            self_id=2,
+            group_id=3,
+            group_config={"reply_all_messages": True, "bot_can_reply": True},
+            should_log=True,
+            msg="宝宝",
+            normalized_msg="宝宝",
+            effective_text="宝宝",
+            mentioned_self=True,
+            image_inputs={},
+            file_info=None,
+            logger=lambda *_args: None,
+            timestamp=10,
+            nick="u",
+        )
+
+        result = ChatSkill().handle(context)
+
+        self.assertEqual(result.status, "busy")
+        self.assertEqual(result.response_text, "当前消息较多，请稍后再试。")
+
     @patch("apps.qq_ai_bridge.skills.chat.maybe_handle_private_admin_command")
     def test_private_admin_command_bypasses_llm_queue(self, mock_admin):
         mock_admin.return_value = {"ok": True, "reply": "已更新：测试群", "group_id": "123"}
@@ -93,9 +209,9 @@ class ChatSkillTests(unittest.TestCase):
             group_id=810938203,
             group_config={"reply_all_messages": True, "bot_can_reply": True},
             should_log=True,
-            msg="普通群聊",
-            normalized_msg="普通群聊",
-            effective_text="普通群聊",
+            msg="这个版本和之前感觉有些不一样",
+            normalized_msg="这个版本和之前感觉有些不一样",
+            effective_text="这个版本和之前感觉有些不一样",
             mentioned_self=False,
             image_inputs={},
             file_info=None,
@@ -274,9 +390,9 @@ class ChatSkillTests(unittest.TestCase):
                 "strategy": {"reply_probability": 1.0, "silence_probability": 0.0, "reaction_probability": 0.0},
             },
             should_log=False,
-            msg="普通群聊",
-            normalized_msg="普通群聊",
-            effective_text="普通群聊",
+            msg="这个版本和之前感觉有些不一样",
+            normalized_msg="这个版本和之前感觉有些不一样",
+            effective_text="这个版本和之前感觉有些不一样",
             mentioned_self=False,
             image_inputs={},
             file_info=None,

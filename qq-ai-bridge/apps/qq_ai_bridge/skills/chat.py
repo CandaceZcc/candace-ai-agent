@@ -1,10 +1,16 @@
-from apps.qq_ai_bridge.services.group_chat_service import enqueue_group_text
+from apps.qq_ai_bridge.services.group_chat_service import (
+    PendingGroupMessage,
+    _local_group_response_mode,
+    enqueue_group_text,
+)
 from apps.qq_ai_bridge.services.private_chat_service import enqueue_private_text
 from apps.qq_ai_bridge.config.settings import GLOBAL_LISTEN_GROUP_IDS
 from apps.qq_ai_bridge.services.group_strategy import group_strategy_decision
 from apps.qq_ai_bridge.services.private_admin_service import maybe_handle_private_admin_command
 from apps.qq_ai_bridge.services.trace_store import add_trace_step
 from apps.qq_ai_bridge.skills.base import Skill, SkillContext, SkillResult
+
+_RUNTIME_BUSY_REPLY = "当前消息较多，请稍后再试。"
 
 
 class ChatSkill(Skill):
@@ -55,6 +61,14 @@ class ChatSkill(Skill):
                 timestamp=context.timestamp,
                 message_id=context.data.get("message_id"),
             )
+            if not queue_info.get("queued") and queue_info.get("reason") == "runtime_busy":
+                return SkillResult(
+                    handled=True,
+                    source=self.name,
+                    status="busy",
+                    response_text=_RUNTIME_BUSY_REPLY,
+                    response_payload={"status": "busy", "queue": queue_info},
+                )
             context.log(f"[ROUTE] 私聊消息已入队 user_id={context.user_id}")
             return SkillResult(
                 handled=True,
@@ -95,16 +109,40 @@ class ChatSkill(Skill):
                     f" reply_all_messages={bool(context.group_config.get('reply_all_messages', False))}"
                 )
                 return SkillResult(handled=True, source=self.name, status="ignore")
-            strategy_input = {
-                **context.data,
-                "text": query,
-                "explicit_trigger": explicit_trigger,
-                "is_mentioned": context.mentioned_self,
-                "group_id": context.group_id,
-                "self_id": context.self_id,
-                "allow_ambient": global_listen,
-            }
-            strategy = group_strategy_decision(strategy_input, context.group_config)
+            local_decision = _local_group_response_mode(
+                query,
+                [
+                    PendingGroupMessage(
+                        user_id=context.user_id,
+                        sender_name=context.nick,
+                        text=query,
+                        timestamp=context.timestamp,
+                        message_id=context.data.get("message_id"),
+                        reply_reference=context.data.get("reply_reference"),
+                        explicit_trigger=explicit_trigger,
+                    )
+                ],
+            )
+            if local_decision is not None:
+                strategy = {
+                    "mode": local_decision["mode"],
+                    "reason": local_decision.get("reason", ""),
+                    "delay_ms": 0,
+                    "probabilities": {},
+                    "cooldown_hit": False,
+                    "source": "local_rules",
+                }
+            else:
+                strategy_input = {
+                    **context.data,
+                    "text": query,
+                    "explicit_trigger": explicit_trigger,
+                    "is_mentioned": context.mentioned_self,
+                    "group_id": context.group_id,
+                    "self_id": context.self_id,
+                    "allow_ambient": global_listen,
+                }
+                strategy = group_strategy_decision(strategy_input, context.group_config)
             context.data["group_strategy"] = strategy
             trace_id = context.data.get("trace_id")
             context.log(
@@ -123,11 +161,12 @@ class ChatSkill(Skill):
                 cooldown_hit=strategy.get("cooldown_hit"),
             )
             if strategy.get("mode") == "silence":
+                status = "local_silence" if strategy.get("source") == "local_rules" else "strategy_silence"
                 return SkillResult(
                     handled=True,
                     source=self.name,
                     status="ignore",
-                    response_payload={"status": "strategy_silence", "strategy": strategy},
+                    response_payload={"status": status, "strategy": strategy},
                 )
             queue_info = enqueue_group_text(
                 context.group_id,
@@ -156,6 +195,14 @@ class ChatSkill(Skill):
                     f" explicit_trigger={explicit_trigger}"
                     f" reply_all_messages={bool(context.group_config.get('reply_all_messages', False))}"
                 )
+                if queue_info.get("reason") == "runtime_busy" and explicit_trigger:
+                    return SkillResult(
+                        handled=True,
+                        source=self.name,
+                        status="busy",
+                        response_text=_RUNTIME_BUSY_REPLY,
+                        response_payload={"status": "busy", "queue": queue_info},
+                    )
             return SkillResult(
                 handled=True,
                 source=self.name,
