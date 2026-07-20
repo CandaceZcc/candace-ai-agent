@@ -20,6 +20,29 @@ Supported provider modes:
 - `chat_compatible`: OpenAI-compatible `/v1/chat/completions`, local function
   tools only.
 
+## API Key Plan
+
+Use separate keys for separate jobs. Do not reuse a hosted-tool/agent key for
+ordinary chat or image generation unless the provider account is meant to pay for
+that traffic.
+
+- Ordinary chat: keep the existing `KIMI_API_KEY`, `KIMI_BASE_URL`, and
+  `KIMI_MODEL` path for DeepSeek v4 chat. This remains the legacy fallback when
+  `AGENT_RUNTIME_ENABLED=false` or a safe owner-private agent turn falls back.
+- Image generation: use `DRAW_API_KEY`, `DRAW_BASE_URL`, and `DRAW_MODEL` for
+  the banana image provider. `/draw` is not routed through the Agents SDK.
+- Owner-private agent control: use the quota API 5.6 key only for
+  `AGENT_PROVIDER=responses_proxy` or `AGENT_PROVIDER=chat_compatible`.
+  Prefer `responses_proxy` when the gateway supports `/v1/responses`, because
+  hosted web search and computer probes can only be trusted after Responses
+  response items prove them. Use `chat_compatible` only for text plus local
+  function tools.
+
+Before enabling the runtime, record the quota API base URL, model name, endpoint
+type, and whether each billable probe was accepted. Keep
+`OPENAI_HOSTED_WEB_SEARCH_ENABLED=false` and `OPENAI_COMPUTER_USE_ENABLED=false`
+until the exact endpoint/model passes the matching probe.
+
 ## Capability Probes
 
 Keep hosted tools off until the exact endpoint/model passes:
