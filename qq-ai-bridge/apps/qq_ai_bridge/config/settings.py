@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def _get_int_env(name: str, default: int) -> int:
@@ -283,6 +284,142 @@ if LLM_BACKEND not in {"auto", "direct", "cli"}:
     LLM_BACKEND = "auto"
 LLM_MAX_CONCURRENCY = max(1, _get_int_env("LLM_MAX_CONCURRENCY", 4))
 LLM_QUEUE_TIMEOUT_SECONDS = max(0, _get_int_env("LLM_QUEUE_TIMEOUT_SECONDS", 1))
+
+AGENT_PROVIDER_VALUES = {"openai", "responses_proxy", "chat_compatible"}
+_RAW_AGENT_PROVIDER = os.getenv("AGENT_PROVIDER", "openai").strip().lower() or "openai"
+_AGENT_PROVIDER_IS_VALID = _RAW_AGENT_PROVIDER in AGENT_PROVIDER_VALUES
+AGENT_PROVIDER = _RAW_AGENT_PROVIDER if _AGENT_PROVIDER_IS_VALID else "openai"
+AGENT_RUNTIME_ENABLED = _get_bool_env("AGENT_RUNTIME_ENABLED", False) and _AGENT_PROVIDER_IS_VALID
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_AGENT_MODEL = os.getenv("OPENAI_AGENT_MODEL", "gpt-5.6").strip() or "gpt-5.6"
+OPENAI_HOSTED_WEB_SEARCH_ENABLED = _get_bool_env("OPENAI_HOSTED_WEB_SEARCH_ENABLED", False)
+OPENAI_COMPUTER_USE_ENABLED = _get_bool_env("OPENAI_COMPUTER_USE_ENABLED", False)
+RESPONSES_PROXY_API_KEY = os.getenv("RESPONSES_PROXY_API_KEY", "").strip()
+RESPONSES_PROXY_BASE_URL = os.getenv("RESPONSES_PROXY_BASE_URL", "").strip()
+RESPONSES_PROXY_MODEL = os.getenv("RESPONSES_PROXY_MODEL", "").strip()
+CHAT_COMPATIBLE_API_KEY = os.getenv("CHAT_COMPATIBLE_API_KEY", "").strip()
+CHAT_COMPATIBLE_BASE_URL = os.getenv("CHAT_COMPATIBLE_BASE_URL", "").strip()
+CHAT_COMPATIBLE_MODEL = os.getenv("CHAT_COMPATIBLE_MODEL", "").strip()
+AGENT_PROVIDER_CAPABILITY_STRICT = _get_bool_env("AGENT_PROVIDER_CAPABILITY_STRICT", True)
+_AGENT_RAW_LIMIT_VALUES = {
+    "AGENT_MAX_TURNS": os.getenv("AGENT_MAX_TURNS", "").strip(),
+    "AGENT_MAX_TOOL_CALLS": os.getenv("AGENT_MAX_TOOL_CALLS", "").strip(),
+    "AGENT_RUN_TIMEOUT_SECONDS": os.getenv("AGENT_RUN_TIMEOUT_SECONDS", "").strip(),
+}
+AGENT_MAX_TURNS = min(12, max(1, _get_int_env("AGENT_MAX_TURNS", 6)))
+AGENT_MAX_TOOL_CALLS = min(20, max(1, _get_int_env("AGENT_MAX_TOOL_CALLS", 8)))
+AGENT_RUN_TIMEOUT_SECONDS = min(300, max(1, _get_int_env("AGENT_RUN_TIMEOUT_SECONDS", 90)))
+AGENT_TRACE_EXPORT_ENABLED = _get_bool_env("AGENT_TRACE_EXPORT_ENABLED", False)
+AGENT_FALLBACK_TO_LEGACY = _get_bool_env("AGENT_FALLBACK_TO_LEGACY", True)
+
+
+def _secret_state(value: str) -> str:
+    return "set" if str(value or "").strip() else "missing"
+
+
+def _is_loopback_hostname(hostname: str | None) -> bool:
+    return hostname in {"localhost", "127.0.0.1", "::1"}
+
+
+def _is_https_or_loopback_url(value: str) -> bool:
+    parsed = urlparse(value)
+    if parsed.scheme == "https" and parsed.netloc:
+        return True
+    if parsed.scheme == "http" and _is_loopback_hostname(parsed.hostname):
+        return True
+    return False
+
+
+def _validate_required(value: str, name: str, errors: list[str]) -> None:
+    if not str(value or "").strip():
+        errors.append(f"{name} is required")
+
+
+def _validate_url(value: str, name: str, errors: list[str]) -> None:
+    if value and not _is_https_or_loopback_url(value):
+        errors.append(f"{name} must use https or a loopback http URL")
+
+
+def _validate_positive_int_env(name: str, errors: list[str]) -> None:
+    raw = _AGENT_RAW_LIMIT_VALUES.get(name, "")
+    if not raw:
+        return
+    try:
+        value = int(raw)
+    except ValueError:
+        errors.append(f"{name} must be a positive integer")
+        return
+    if value <= 0:
+        errors.append(f"{name} must be a positive integer")
+
+
+def validate_agent_settings() -> list[str]:
+    """Return safe validation errors; never include credential values."""
+    errors: list[str] = []
+    if not _AGENT_PROVIDER_IS_VALID:
+        errors.append(
+            "AGENT_PROVIDER must be one of: chat_compatible, openai, responses_proxy"
+        )
+
+    _validate_positive_int_env("AGENT_MAX_TURNS", errors)
+    _validate_positive_int_env("AGENT_MAX_TOOL_CALLS", errors)
+    _validate_positive_int_env("AGENT_RUN_TIMEOUT_SECONDS", errors)
+
+    if AGENT_PROVIDER == "chat_compatible" and OPENAI_HOSTED_WEB_SEARCH_ENABLED:
+        errors.append("chat_compatible provider cannot use hosted web search")
+    if AGENT_PROVIDER == "chat_compatible" and OPENAI_COMPUTER_USE_ENABLED:
+        errors.append("chat_compatible provider cannot use built-in computer use")
+
+    _validate_url(RESPONSES_PROXY_BASE_URL, "RESPONSES_PROXY_BASE_URL", errors)
+    _validate_url(CHAT_COMPATIBLE_BASE_URL, "CHAT_COMPATIBLE_BASE_URL", errors)
+
+    if not AGENT_RUNTIME_ENABLED:
+        return errors
+
+    if AGENT_PROVIDER == "openai":
+        _validate_required(OPENAI_API_KEY, "OPENAI_API_KEY", errors)
+    elif AGENT_PROVIDER == "responses_proxy":
+        _validate_required(RESPONSES_PROXY_BASE_URL, "RESPONSES_PROXY_BASE_URL", errors)
+        _validate_required(RESPONSES_PROXY_API_KEY, "RESPONSES_PROXY_API_KEY", errors)
+        _validate_required(RESPONSES_PROXY_MODEL, "RESPONSES_PROXY_MODEL", errors)
+    elif AGENT_PROVIDER == "chat_compatible":
+        _validate_required(CHAT_COMPATIBLE_BASE_URL, "CHAT_COMPATIBLE_BASE_URL", errors)
+        _validate_required(CHAT_COMPATIBLE_API_KEY, "CHAT_COMPATIBLE_API_KEY", errors)
+        _validate_required(CHAT_COMPATIBLE_MODEL, "CHAT_COMPATIBLE_MODEL", errors)
+
+    return errors
+
+
+def agent_config_summary() -> dict[str, object]:
+    """Return provider, models, flags, and secret set/missing states only."""
+    return {
+        "runtime_enabled": AGENT_RUNTIME_ENABLED,
+        "provider": AGENT_PROVIDER,
+        "provider_valid": _AGENT_PROVIDER_IS_VALID,
+        "models": {
+            "openai": OPENAI_AGENT_MODEL,
+            "responses_proxy": RESPONSES_PROXY_MODEL,
+            "chat_compatible": CHAT_COMPATIBLE_MODEL,
+        },
+        "capabilities": {
+            "hosted_web_search_enabled": OPENAI_HOSTED_WEB_SEARCH_ENABLED,
+            "computer_use_enabled": OPENAI_COMPUTER_USE_ENABLED,
+            "strict": AGENT_PROVIDER_CAPABILITY_STRICT,
+        },
+        "limits": {
+            "max_turns": AGENT_MAX_TURNS,
+            "max_tool_calls": AGENT_MAX_TOOL_CALLS,
+            "timeout_seconds": AGENT_RUN_TIMEOUT_SECONDS,
+        },
+        "secrets": {
+            "openai_api_key": _secret_state(OPENAI_API_KEY),
+            "responses_proxy_api_key": _secret_state(RESPONSES_PROXY_API_KEY),
+            "chat_compatible_api_key": _secret_state(CHAT_COMPATIBLE_API_KEY),
+        },
+        "trace_export_enabled": AGENT_TRACE_EXPORT_ENABLED,
+        "fallback_to_legacy": AGENT_FALLBACK_TO_LEGACY,
+        "validation_errors": validate_agent_settings(),
+    }
 
 DRAW_API_KEY = (
     os.getenv("DRAW_API_KEY", "").strip()
