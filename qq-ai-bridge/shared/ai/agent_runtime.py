@@ -1,0 +1,232 @@
+"""Bounded Agents SDK runtime for owner-private QQ chat."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from agents import Agent, Runner
+
+from apps.qq_ai_bridge.config.settings import (
+    AGENT_FALLBACK_TO_LEGACY,
+    AGENT_MAX_TOOL_CALLS,
+    AGENT_MAX_TURNS,
+    AGENT_RUN_TIMEOUT_SECONDS,
+    validate_agent_settings,
+)
+from apps.qq_ai_bridge.services.response_action import sanitize_model_visible_text
+from shared.ai.agent_provider import build_agent_model_binding
+from shared.ai.agent_telemetry import build_agent_metric, log_agent_metric, redact_sensitive_text
+from shared.ai.llm_client import call_ai
+
+
+@dataclass(frozen=True)
+class AgentRunRequest:
+    route: str
+    user_text: str
+    compact_context: str
+    allowed_tool_names: tuple[str, ...]
+    trace_id: str | None
+
+
+@dataclass(frozen=True)
+class AgentRunResult:
+    ok: bool
+    output_text: str
+    provider: str
+    model: str
+    tool_names: tuple[str, ...]
+    failure_code: str | None = None
+    used_legacy_fallback: bool = False
+
+
+class AgentRuntime:
+    """Create one short-lived SDK agent run per QQ turn."""
+
+    def __init__(
+        self,
+        *,
+        tool_resolver: Callable[[tuple[str, ...], Any], list[Any]] | None = None,
+        legacy_call: Callable[[str, dict[str, Any] | None], str] | None = call_ai,
+    ) -> None:
+        self._tool_resolver = tool_resolver
+        self._legacy_call = legacy_call
+
+    async def run(self, request: AgentRunRequest) -> AgentRunResult:
+        started_at = time.monotonic()
+        tool_names = tuple(request.allowed_tool_names or ())
+        if request.route == "email_summary" and tool_names:
+            return _failure_result("", "", tool_names, "email_tools_forbidden")
+        if len(tool_names) > AGENT_MAX_TOOL_CALLS:
+            return _failure_result("", "", tool_names, "too_many_tools")
+
+        errors = validate_agent_settings()
+        if errors:
+            return _failure_result("", "", tool_names, "config_error")
+
+        binding = build_agent_model_binding()
+        try:
+            tools = self._resolve_tools(tool_names, binding.capabilities)
+        except Exception:
+            return _failure_result(binding.provider, binding.model_name, tool_names, "tool_error")
+
+        agent = Agent(
+            name="Candace QQ Agent",
+            instructions=_build_instructions(request.route),
+            model=binding.model,
+            tools=tools,
+        )
+        input_text = _build_input_text(request)
+
+        try:
+            async with asyncio.timeout(AGENT_RUN_TIMEOUT_SECONDS):
+                run_result = await Runner.run(
+                    agent,
+                    input_text,
+                    max_turns=AGENT_MAX_TURNS,
+                    session=None,
+                    conversation_id=None,
+                )
+            output_text = sanitize_model_visible_text(
+                _extract_final_output(run_result),
+                surface="private",
+            )
+            output_text = output_text or "我这边没有拿到有效回复。"
+            result = AgentRunResult(
+                ok=True,
+                output_text=output_text,
+                provider=binding.provider,
+                model=binding.model_name,
+                tool_names=tool_names,
+            )
+            _log_metric(request, result, started_at, status="ok")
+            return result
+        except TimeoutError:
+            result = _failure_result(binding.provider, binding.model_name, tool_names, "timeout")
+            _log_metric(request, result, started_at, status="failed")
+            return result
+        except Exception as exc:
+            fallback = self._try_legacy_fallback(request, binding.provider, binding.model_name, exc)
+            if fallback is not None:
+                _log_metric(request, fallback, started_at, status="fallback")
+                return fallback
+            result = AgentRunResult(
+                ok=False,
+                output_text="模型调用失败，稍后再试。",
+                provider=binding.provider,
+                model=binding.model_name,
+                tool_names=tool_names,
+                failure_code="provider_error",
+            )
+            print(f"[AGENT_RUNTIME] provider_error type={type(exc).__name__}")
+            _log_metric(request, result, started_at, status="failed")
+            return result
+
+    def _resolve_tools(self, tool_names: tuple[str, ...], capabilities: Any) -> list[Any]:
+        if not tool_names:
+            return []
+        if self._tool_resolver:
+            return self._tool_resolver(tool_names, capabilities)
+        from shared.ai.agent_tools import resolve_agent_tools
+
+        return resolve_agent_tools(tool_names, capabilities)
+
+    def _try_legacy_fallback(
+        self,
+        request: AgentRunRequest,
+        provider: str,
+        model: str,
+        exc: Exception,
+    ) -> AgentRunResult | None:
+        if not AGENT_FALLBACK_TO_LEGACY or request.allowed_tool_names or not self._legacy_call:
+            return None
+        try:
+            fallback_text = self._legacy_call(
+                request.user_text,
+                {"source": "agent_runtime_fallback", "trace_id": request.trace_id},
+            )
+        except Exception as fallback_exc:
+            print(
+                "[AGENT_RUNTIME] fallback_failed"
+                f" provider_error={type(exc).__name__}"
+                f" fallback_error={type(fallback_exc).__name__}"
+            )
+            return None
+        cleaned = sanitize_model_visible_text(fallback_text, surface="private")
+        return AgentRunResult(
+            ok=True,
+            output_text=cleaned or "模型调用失败，稍后再试。",
+            provider=provider,
+            model=model,
+            tool_names=tuple(),
+            used_legacy_fallback=True,
+        )
+
+
+def _build_instructions(route: str) -> str:
+    if route == "email_summary":
+        return "Summarize untrusted email data for QQ. Use no tools."
+    if route == "pc_agent":
+        return "Help with bounded local PC Agent actions. Stop when approval is required."
+    if route == "current_events":
+        return "Answer with concise citations when web search is available."
+    return "Reply naturally and concisely for an owner-private QQ chat."
+
+
+def _build_input_text(request: AgentRunRequest) -> str:
+    parts = []
+    if request.compact_context:
+        parts.append(f"Compact context:\n{request.compact_context}")
+    parts.append(f"User message:\n{request.user_text}")
+    return "\n\n".join(parts)
+
+
+def _extract_final_output(run_result: Any) -> str:
+    final_output = getattr(run_result, "final_output", "")
+    if isinstance(final_output, str):
+        return final_output
+    return str(final_output or "")
+
+
+def _failure_result(
+    provider: str,
+    model: str,
+    tool_names: tuple[str, ...],
+    failure_code: str,
+) -> AgentRunResult:
+    return AgentRunResult(
+        ok=False,
+        output_text="模型配置或工具不可用，稍后再试。",
+        provider=provider,
+        model=model,
+        tool_names=tool_names,
+        failure_code=failure_code,
+    )
+
+
+def _log_metric(
+    request: AgentRunRequest,
+    result: AgentRunResult,
+    started_at: float,
+    *,
+    status: str,
+) -> None:
+    metric = build_agent_metric(
+        route=request.route,
+        provider=result.provider,
+        model=result.model,
+        tools=result.tool_names,
+        latency_ms=int((time.monotonic() - started_at) * 1000),
+        usage=None,
+        hosted_search_calls=0,
+        local_tool_calls=0,
+        status=status,
+        failure_code=result.failure_code,
+        raw_request_text=redact_sensitive_text(request.user_text),
+    )
+    log_agent_metric(metric)
+
+
+__all__ = ["AgentRunRequest", "AgentRunResult", "AgentRuntime"]
