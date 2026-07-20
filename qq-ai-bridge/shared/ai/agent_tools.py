@@ -24,6 +24,9 @@ def resolve_agent_tools(
         if name == "web_search":
             tools.append(_build_web_search_tool(capabilities))
             continue
+        if name.startswith("pc_"):
+            tools.append(_build_pc_agent_tool(name, capabilities))
+            continue
         raise CapabilityUnavailable(f"unsupported agent tool: {name}")
     return tools
 
@@ -36,6 +39,17 @@ def _build_web_search_tool(capabilities: ProviderCapabilities) -> WebSearchTool:
     if not capabilities.hosted_web_search or not capabilities.verified:
         raise CapabilityUnavailable("hosted web search capability is not verified")
     return WebSearchTool(search_context_size="low")
+
+
+def _build_pc_agent_tool(name: str, capabilities: ProviderCapabilities) -> Any:
+    if not capabilities.function_tools:
+        raise CapabilityUnavailable("provider does not support local function tools")
+    from shared.ai.pc_agent_tools import get_pc_agent_tool
+
+    try:
+        return get_pc_agent_tool(name)
+    except ValueError as exc:
+        raise CapabilityUnavailable(str(exc)) from exc
 
 
 def format_response_with_citations(
