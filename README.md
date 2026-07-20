@@ -136,5 +136,8 @@ runai
 
 https://candacezcc.github.io/candace-ai-agent/
 
----
+Phase A owner-private Agents SDK canary:
 
+- `docs/install/openai-agents-sdk.md`
+
+---
