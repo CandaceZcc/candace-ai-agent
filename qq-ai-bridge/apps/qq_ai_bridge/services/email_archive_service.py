@@ -10,7 +10,12 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from apps.qq_ai_bridge.services.email_models import EmailDigest, EmailEnvelope, EmailQuery
+from apps.qq_ai_bridge.services.email_models import (
+    EmailAttachment,
+    EmailDigest,
+    EmailEnvelope,
+    EmailQuery,
+)
 from apps.qq_ai_bridge.services.time_utils import LOCAL_TIMEZONE
 
 _SCHEMA_VERSION = 1
@@ -38,6 +43,28 @@ class EmailArchiveService:
             return path
         _atomic_write_json(path, payload)
         return path
+
+    def load_envelope(self, message_hash: str) -> EmailEnvelope | None:
+        normalized_hash = str(message_hash or "").strip().lower()
+        if len(normalized_hash) != 64 or any(
+            character not in "0123456789abcdef" for character in normalized_hash
+        ):
+            return None
+        archive_root = self.root / "archive"
+        for path in sorted(archive_root.glob(f"*/{normalized_hash}.json"), reverse=True):
+            if not _is_within(path.resolve(strict=False), self.root):
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict) or payload.get("schema_version") != _SCHEMA_VERSION:
+                    continue
+                envelope = _deserialize_envelope(payload.get("message"))
+                actual_hash = hashlib.sha256(envelope.message_id.encode("utf-8")).hexdigest()
+                if actual_hash == normalized_hash:
+                    return envelope
+            except (OSError, UnicodeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+                continue
+        return None
 
     def digest_cache_path(self, query: EmailQuery, model: str) -> Path:
         cache_identity = "|".join(
@@ -181,6 +208,33 @@ def _serialize_envelope(envelope: EmailEnvelope) -> dict[str, object]:
             for attachment in envelope.attachments
         ],
     }
+
+
+def _deserialize_envelope(raw: object) -> EmailEnvelope:
+    if not isinstance(raw, dict):
+        raise ValueError("invalid archived email envelope")
+    sent_at_raw = raw.get("sent_at")
+    sent_at = datetime.fromisoformat(str(sent_at_raw)) if sent_at_raw else None
+    attachments_raw = raw.get("attachments", [])
+    if not isinstance(attachments_raw, list):
+        raise ValueError("invalid archived email attachments")
+    return EmailEnvelope(
+        message_id=str(raw["message_id"]),
+        subject=str(raw["subject"]),
+        sender=str(raw["sender"]),
+        recipients=tuple(str(value) for value in raw.get("recipients", [])),
+        sent_at=sent_at,
+        body_text=str(raw.get("body_text", "")),
+        attachments=tuple(
+            EmailAttachment(
+                filename=str(attachment["filename"]),
+                content_type=str(attachment["content_type"]),
+                size_bytes=int(attachment["size_bytes"]),
+            )
+            for attachment in attachments_raw
+            if isinstance(attachment, dict)
+        ),
+    )
 
 
 def _envelope_date(envelope: EmailEnvelope, *, fallback: datetime) -> date:

@@ -166,6 +166,26 @@ class EmailProcessingStore:
 
         self._update_record(alias, mutate)
 
+    def pending_analysis(self, limit: int = 100) -> tuple[EmailProcessingRecord, ...]:
+        if int(limit) <= 0:
+            raise ValueError("limit must be positive")
+        with self._lock:
+            payload = self._load_unlocked()
+        records = []
+        for raw in payload.get("messages", {}).values():
+            if not isinstance(raw, dict):
+                continue
+            record = _record_from_payload(raw)
+            if (
+                record.delivery_state in {"observed", "pending"}
+                and record.classification is None
+                and record.rule_decision is not None
+                and record.rule_decision.eligibility == "semantic_required"
+            ):
+                records.append(record)
+        records.sort(key=lambda item: (item.observed_at, item.alias))
+        return tuple(records[: int(limit)])
+
     def pending_digest(
         self,
         now: datetime,

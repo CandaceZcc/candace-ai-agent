@@ -102,6 +102,23 @@ class EmailProcessingStoreTests(unittest.TestCase):
         self.assertEqual(record.classification, classification(observed.alias))
         self.assertEqual(record.delivery_state, "pending")
 
+    def test_pending_analysis_returns_only_unclassified_semantic_records(self):
+        pending = self.store.observe("INBOX", "44", 17, envelope(1))
+        classified = self.store.observe("INBOX", "44", 18, envelope(2))
+        low_value = self.store.observe("INBOX", "44", 19, envelope(3))
+        semantic_rule = EmailRuleDecision(75, "semantic_required", ("interest:cst",), ())
+        self.store.save_rule_decision(pending.alias, semantic_rule)
+        self.store.save_rule_decision(classified.alias, semantic_rule)
+        self.store.save_classification(classified.alias, classification(classified.alias))
+        self.store.save_rule_decision(
+            low_value.alias,
+            EmailRuleDecision(20, "deterministic_low_value", (), ("routine_event",)),
+        )
+
+        records = self.store.pending_analysis(limit=100)
+
+        self.assertEqual([record.alias for record in records], [pending.alias])
+
     def test_pending_digest_filters_by_time_relevance_and_delivery(self):
         recent = self.store.observe("INBOX", "44", 17, envelope(1))
         old = self.store.observe(

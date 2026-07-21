@@ -92,6 +92,14 @@ class EmailArchiveServiceTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(replace.call_count, 1)
 
+    def test_load_envelope_reconstructs_archived_message_by_hash(self):
+        service = self.service()
+        path = service.archive_envelope(self.envelope)
+
+        loaded = service.load_envelope(path.stem)
+
+        self.assertEqual(loaded, self.envelope)
+
     def test_digest_cache_key_includes_range_and_model(self):
         service = self.service()
 
