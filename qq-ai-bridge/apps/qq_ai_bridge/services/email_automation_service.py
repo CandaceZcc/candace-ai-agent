@@ -102,7 +102,7 @@ class EmailAutomationService:
         await self._classify_pending()
         await self._deliver_pending_immediate(now)
 
-    async def run_digest(self, now: datetime, slot: str) -> None:
+    async def run_digest(self, now: datetime, slot: str | datetime) -> None:
         if not self._digest_push_enabled or self._shadow_mode:
             return
         slot_token = _digest_slot_token(now, slot)
@@ -284,11 +284,16 @@ def _append_digest_section(
             lines.append(f"  行动：{_one_line(item.action, 160)}")
 
 
-def _digest_slot_token(now: datetime, slot: str) -> str:
-    normalized_slot = str(slot or "").strip()
+def _digest_slot_token(now: datetime, slot: str | datetime) -> str:
+    slot_date = now.date()
+    if isinstance(slot, datetime):
+        slot_date = slot.date()
+        normalized_slot = slot.strftime("%H:%M")
+    else:
+        normalized_slot = str(slot or "").strip()
     if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", normalized_slot):
         raise ValueError("digest slot must use HH:MM format")
-    return f"email_digest:{now.date().isoformat()}:{normalized_slot}"
+    return f"email_digest:{slot_date.isoformat()}:{normalized_slot}"
 
 
 def _send_succeeded(result: Any) -> bool:

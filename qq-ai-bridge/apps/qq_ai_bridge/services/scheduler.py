@@ -22,14 +22,21 @@ from apps.qq_ai_bridge.config.settings import (
     TOMORROW_SCHEDULE_TIME,
     VOCAT_DAILY_BROADCAST_TO_DEVICE,
 )
-from apps.qq_ai_bridge.logging.bridge_log import log_change, log_debug, log_event, log_warn
+from apps.qq_ai_bridge.logging.bridge_log import log_change, log_debug, log_warn
+from apps.qq_ai_bridge.services.email_automation_runner import start_email_automation
 from apps.qq_ai_bridge.services.reminder_store import ReminderStore, SchedulerStateStore
 from apps.qq_ai_bridge.services.schedule_service import (
     build_tomorrow_schedule_message,
     ensure_schedule_file,
 )
 from apps.qq_ai_bridge.services.time_utils import get_now_local
-from apps.qq_ai_bridge.services.trace_store import add_trace_step, finish_trace, new_trace_id, start_trace, trace_prefix
+from apps.qq_ai_bridge.services.trace_store import (
+    add_trace_step,
+    finish_trace,
+    new_trace_id,
+    start_trace,
+    trace_prefix,
+)
 from apps.qq_ai_bridge.services.vocat_command_queue import enqueue_vocat_tts
 
 _START_LOCK = threading.Lock()
@@ -52,6 +59,7 @@ def start_scheduler() -> None:
         ensure_schedule_file(SCHEDULE_PATH)
         worker = threading.Thread(target=_scheduler_loop, name="qq-reminder-scheduler", daemon=True)
         worker.start()
+        start_email_automation()
         print(
             f"[SCHEDULER] started tick_seconds={SCHEDULER_TICK_SECONDS}"
             f" owner_qq={OWNER_QQ}"
