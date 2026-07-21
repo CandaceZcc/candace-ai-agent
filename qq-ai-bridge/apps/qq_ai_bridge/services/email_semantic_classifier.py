@@ -79,7 +79,10 @@ def _build_prompt(
     max_body_chars: int,
     max_total_chars: int,
 ) -> str:
-    wrappers = [_record_wrapper(alias, envelope, decision) for alias, envelope, decision in candidates]
+    wrappers = [
+        _record_wrapper(alias, envelope, decision)
+        for alias, envelope, decision in candidates
+    ]
     fixed_length = len(_PROMPT_PREFIX) + len(_PROMPT_SUFFIX) + sum(
         len(header) + len(footer) for header, _, footer in wrappers
     )
@@ -125,7 +128,11 @@ def _record_wrapper(
     return header, body, "\n</email_body>\n</email_record>\n"
 
 
-def _parse_result(output_text: str, *, expected_aliases: tuple[str, ...]) -> tuple[EmailClassification, ...]:
+def _parse_result(
+    output_text: str,
+    *,
+    expected_aliases: tuple[str, ...],
+) -> tuple[EmailClassification, ...]:
     try:
         payload = json.loads(_strip_json_fence(output_text))
         if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
@@ -135,7 +142,10 @@ def _parse_result(output_text: str, *, expected_aliases: tuple[str, ...]) -> tup
         actual_aliases = tuple(item.alias for item in parsed)
         if len(set(actual_aliases)) != len(actual_aliases):
             raise ValueError("duplicate alias")
-        if set(actual_aliases) != set(expected_aliases) or len(actual_aliases) != len(expected_aliases):
+        if (
+            set(actual_aliases) != set(expected_aliases)
+            or len(actual_aliases) != len(expected_aliases)
+        ):
             raise ValueError("alias mismatch")
         by_alias = {item.alias: item for item in parsed}
         return tuple(by_alias[alias] for alias in expected_aliases)

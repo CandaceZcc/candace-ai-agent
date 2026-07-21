@@ -8,6 +8,12 @@
 
 **Tech Stack:** Python 3.10+, OpenAI Agents SDK 0.18.3, OpenAI Responses or verified third-party Responses proxy, compatible Chat Completions fallback, NapCat, existing PC Agent, IMAP over TLS, `unittest`
 
+> **Superseded email schedule:** The old daily/weekly Milestone 3 and Tasks 7–9 in
+> `2026-07-20-qq-email-digest.md` are replaced by
+> `2026-07-21-personalized-email-push.md`. The replacement uses five-minute
+> read-only monitoring, priority alerts, 12:30/20:30 incremental 24-hour digests,
+> and reversible owner feedback. All live automation flags remain default-off.
+
 ---
 
 ## Locked decisions
@@ -60,6 +66,9 @@ Milestone 1 exits only when provider capability, usage, latency, and rollback ar
 Milestone 2 exits after all commands work, summaries expose zero tools, and the privacy boundary has been accepted.
 
 ## Milestone 3: Daily and weekly QQ delivery
+
+This milestone is retained for history and must not be executed. Follow the
+superseding personalized email push plan referenced above.
 
 - [ ] Execute Tasks 7–9 of `2026-07-20-qq-email-digest.md`.
 - [ ] Enable the daily job first and observe at least three successful daily sends.

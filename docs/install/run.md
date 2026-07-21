@@ -41,6 +41,9 @@ source .venv/bin/activate
 
 如果仓库中有 `.env.example`，建议先复制成 `~/.candace/qq-ai-bridge.env`（推荐，不会进 Git）或 `qq-ai-bridge/.local.env`，再填入真实 Key。`qq-ai-bridge/.env` 仅可放非敏感默认项；模板见 `qq-ai-bridge/.env.example`。
 
+个性化校园邮件的只读 IMAP 配置、影子模式、诊断和分阶段启用见
+[`qq-email-agent.md`](qq-email-agent.md)。不要在仓库文件中填写邮箱密码或 API key。
+
 ## Agents SDK provider probes
 
 Phase A 的私聊 canary 可以使用 official OpenAI、第三方 Responses proxy，或
