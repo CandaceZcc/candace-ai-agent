@@ -25,6 +25,32 @@ def _binding():
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_applies_reasoning_effort_and_disables_response_storage(self):
+        from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
+
+        with (
+            patch("shared.ai.agent_runtime.build_agent_model_binding", return_value=_binding()),
+            patch("shared.ai.agent_runtime.Agent") as mock_agent,
+            patch("shared.ai.agent_runtime.Runner.run", new_callable=AsyncMock) as mock_run,
+            patch("shared.ai.agent_runtime.AGENT_MODEL_REASONING_EFFORT", "high"),
+            patch("shared.ai.agent_runtime.AGENT_DISABLE_RESPONSE_STORAGE", True),
+        ):
+            mock_run.return_value = SimpleNamespace(final_output="OK")
+            result = await AgentRuntime().run(
+                AgentRunRequest(
+                    route="private_chat",
+                    user_text="hello",
+                    compact_context="",
+                    allowed_tool_names=(),
+                    trace_id="trace-1",
+                )
+            )
+
+        self.assertTrue(result.ok)
+        model_settings = mock_agent.call_args.kwargs["model_settings"]
+        self.assertEqual(model_settings.reasoning.effort, "high")
+        self.assertFalse(model_settings.store)
+
     async def test_passes_max_turns_to_runner(self):
         from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
 

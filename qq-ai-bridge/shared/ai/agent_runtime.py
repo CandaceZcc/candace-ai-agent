@@ -7,16 +7,19 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from agents import Agent, Runner
-
+from agents import Agent, ModelSettings, Runner
 from apps.qq_ai_bridge.config.settings import (
+    AGENT_DISABLE_RESPONSE_STORAGE,
     AGENT_FALLBACK_TO_LEGACY,
     AGENT_MAX_TOOL_CALLS,
     AGENT_MAX_TURNS,
+    AGENT_MODEL_REASONING_EFFORT,
     AGENT_RUN_TIMEOUT_SECONDS,
     validate_agent_settings,
 )
 from apps.qq_ai_bridge.services.response_action import sanitize_model_visible_text
+from openai.types.shared import Reasoning
+
 from shared.ai.agent_provider import build_agent_model_binding
 from shared.ai.agent_telemetry import build_agent_metric, log_agent_metric, redact_sensitive_text
 from shared.ai.llm_client import call_ai
@@ -76,6 +79,7 @@ class AgentRuntime:
             name="Candace QQ Agent",
             instructions=_build_instructions(request.route),
             model=binding.model,
+            model_settings=_build_model_settings(binding.capabilities.responses),
             tools=tools,
         )
         input_text = _build_input_text(request)
@@ -163,6 +167,18 @@ class AgentRuntime:
             tool_names=tuple(),
             used_legacy_fallback=True,
         )
+
+
+def _build_model_settings(responses_capable: bool) -> ModelSettings:
+    if not responses_capable:
+        return ModelSettings()
+    reasoning = (
+        Reasoning(effort=AGENT_MODEL_REASONING_EFFORT)
+        if AGENT_MODEL_REASONING_EFFORT
+        else None
+    )
+    store = False if AGENT_DISABLE_RESPONSE_STORAGE else None
+    return ModelSettings(reasoning=reasoning, store=store)
 
 
 def _build_instructions(route: str) -> str:

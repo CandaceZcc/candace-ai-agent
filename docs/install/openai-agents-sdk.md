@@ -37,6 +37,9 @@ that traffic.
   hosted web search and computer probes can only be trusted after Responses
   response items prove them. Use `chat_compatible` only for text plus local
   function tools.
+- Responses providers can set `AGENT_MODEL_REASONING_EFFORT` to a supported
+  effort such as `high`. Set `AGENT_DISABLE_RESPONSE_STORAGE=true` to send
+  `store=false` on each Responses request.
 
 Before enabling the runtime, record the quota API base URL, model name, endpoint
 type, and whether each billable probe was accepted. Keep

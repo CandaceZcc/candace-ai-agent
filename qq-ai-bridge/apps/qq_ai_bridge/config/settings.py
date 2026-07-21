@@ -297,6 +297,30 @@ OPENAI_COMPUTER_USE_ENABLED = _get_bool_env("OPENAI_COMPUTER_USE_ENABLED", False
 RESPONSES_PROXY_API_KEY = os.getenv("RESPONSES_PROXY_API_KEY", "").strip()
 RESPONSES_PROXY_BASE_URL = os.getenv("RESPONSES_PROXY_BASE_URL", "").strip()
 RESPONSES_PROXY_MODEL = os.getenv("RESPONSES_PROXY_MODEL", "").strip()
+AGENT_MODEL_REASONING_EFFORT_VALUES = {
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+}
+_RAW_AGENT_MODEL_REASONING_EFFORT = os.getenv(
+    "AGENT_MODEL_REASONING_EFFORT", ""
+).strip().lower()
+_AGENT_MODEL_REASONING_EFFORT_IS_VALID = (
+    not _RAW_AGENT_MODEL_REASONING_EFFORT
+    or _RAW_AGENT_MODEL_REASONING_EFFORT in AGENT_MODEL_REASONING_EFFORT_VALUES
+)
+AGENT_MODEL_REASONING_EFFORT = (
+    _RAW_AGENT_MODEL_REASONING_EFFORT
+    if _AGENT_MODEL_REASONING_EFFORT_IS_VALID
+    else ""
+)
+AGENT_DISABLE_RESPONSE_STORAGE = _get_bool_env(
+    "AGENT_DISABLE_RESPONSE_STORAGE", False
+)
 CHAT_COMPATIBLE_API_KEY = os.getenv("CHAT_COMPATIBLE_API_KEY", "").strip()
 CHAT_COMPATIBLE_BASE_URL = os.getenv("CHAT_COMPATIBLE_BASE_URL", "").strip()
 CHAT_COMPATIBLE_MODEL = os.getenv("CHAT_COMPATIBLE_MODEL", "").strip()
@@ -360,6 +384,11 @@ def validate_agent_settings() -> list[str]:
         errors.append(
             "AGENT_PROVIDER must be one of: chat_compatible, openai, responses_proxy"
         )
+    if not _AGENT_MODEL_REASONING_EFFORT_IS_VALID:
+        errors.append(
+            "AGENT_MODEL_REASONING_EFFORT must be one of: "
+            "none, minimal, low, medium, high, xhigh, max"
+        )
 
     _validate_positive_int_env("AGENT_MAX_TURNS", errors)
     _validate_positive_int_env("AGENT_MAX_TOOL_CALLS", errors)
@@ -405,6 +434,10 @@ def agent_config_summary() -> dict[str, object]:
             "hosted_web_search_enabled": OPENAI_HOSTED_WEB_SEARCH_ENABLED,
             "computer_use_enabled": OPENAI_COMPUTER_USE_ENABLED,
             "strict": AGENT_PROVIDER_CAPABILITY_STRICT,
+        },
+        "model_settings": {
+            "reasoning_effort": AGENT_MODEL_REASONING_EFFORT or "provider_default",
+            "response_storage_disabled": AGENT_DISABLE_RESPONSE_STORAGE,
         },
         "limits": {
             "max_turns": AGENT_MAX_TURNS,

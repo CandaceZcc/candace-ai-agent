@@ -4,8 +4,9 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import requests
-
 from apps.qq_ai_bridge.config.settings import (
+    AGENT_DISABLE_RESPONSE_STORAGE,
+    AGENT_MODEL_REASONING_EFFORT,
     CHAT_COMPATIBLE_BASE_URL,
     CHAT_COMPATIBLE_MODEL,
     OPENAI_AGENT_MODEL,
@@ -14,6 +15,7 @@ from apps.qq_ai_bridge.config.settings import (
     RESPONSES_PROXY_BASE_URL,
     RESPONSES_PROXY_MODEL,
 )
+
 from shared.ai.agent_provider import ProviderCapabilities, ProviderName
 
 ProbeName = Literal["text", "web_search", "computer"]
@@ -157,27 +159,38 @@ def run_probe(
 def _build_payload(provider: ProviderName, probe: ProbeName) -> dict[str, Any]:
     model = _model_for_provider(provider)
     if probe == "text":
-        return {"model": model, "input": "Reply with exactly OK.", "max_output_tokens": 32}
-    if probe == "web_search":
-        return {
+        payload = {
+            "model": model,
+            "input": "Reply with exactly OK.",
+            "max_output_tokens": 32,
+        }
+    elif probe == "web_search":
+        payload = {
             "model": model,
             "input": "What is the title of the current OpenAI API documentation home page?",
             "tools": [{"type": "web_search_preview", "search_context_size": "low"}],
             "max_output_tokens": 256,
         }
-    return {
-        "model": model,
-        "input": "Observe the screen and return one computer_call. Do not execute anything.",
-        "tools": [
-            {
-                "type": "computer_use_preview",
-                "display_width": 1024,
-                "display_height": 768,
-                "environment": "browser",
-            }
-        ],
-        "max_output_tokens": 256,
-    }
+    else:
+        payload = {
+            "model": model,
+            "input": "Observe the screen and return one computer_call. Do not execute anything.",
+            "tools": [
+                {
+                    "type": "computer_use_preview",
+                    "display_width": 1024,
+                    "display_height": 768,
+                    "environment": "browser",
+                }
+            ],
+            "max_output_tokens": 256,
+        }
+    if provider in {"openai", "responses_proxy"}:
+        if AGENT_MODEL_REASONING_EFFORT:
+            payload["reasoning"] = {"effort": AGENT_MODEL_REASONING_EFFORT}
+        if AGENT_DISABLE_RESPONSE_STORAGE:
+            payload["store"] = False
+    return payload
 
 
 def _responses_url(provider: ProviderName) -> str:

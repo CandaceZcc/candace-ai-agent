@@ -1,10 +1,44 @@
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, "qq-ai-bridge")
 
 
 class CapabilityProbeTests(unittest.TestCase):
+    def test_responses_probe_applies_reasoning_and_storage_settings(self):
+        from shared.ai import capability_probe
+
+        response = SimpleNamespace(
+            status_code=200,
+            text="",
+            json=lambda: {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "OK"}],
+                    }
+                ]
+            },
+        )
+        post = MagicMock(return_value=response)
+        with patch.multiple(
+            capability_probe,
+            AGENT_MODEL_REASONING_EFFORT="high",
+            AGENT_DISABLE_RESPONSE_STORAGE=True,
+        ):
+            result = capability_probe.run_probe(
+                provider="responses_proxy",
+                probe="text",
+                post=post,
+            )
+
+        self.assertTrue(result.supported)
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["reasoning"], {"effort": "high"})
+        self.assertFalse(payload["store"])
+
     def test_chat_compatible_skips_hosted_probes(self):
         from shared.ai.capability_probe import interpret_probe_response
 

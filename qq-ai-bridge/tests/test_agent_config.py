@@ -17,6 +17,8 @@ AGENT_ENV_NAMES = (
     "RESPONSES_PROXY_API_KEY",
     "RESPONSES_PROXY_BASE_URL",
     "RESPONSES_PROXY_MODEL",
+    "AGENT_MODEL_REASONING_EFFORT",
+    "AGENT_DISABLE_RESPONSE_STORAGE",
     "CHAT_COMPATIBLE_API_KEY",
     "CHAT_COMPATIBLE_BASE_URL",
     "CHAT_COMPATIBLE_MODEL",
@@ -68,6 +70,26 @@ class AgentConfigTests(unittest.TestCase):
         self.assertIn("RESPONSES_PROXY_BASE_URL", errors)
         self.assertIn("RESPONSES_PROXY_API_KEY", errors)
         self.assertIn("RESPONSES_PROXY_MODEL", errors)
+
+    def test_model_settings_support_high_reasoning_and_disabled_storage(self):
+        settings = reload_settings_with(
+            {
+                "AGENT_MODEL_REASONING_EFFORT": "high",
+                "AGENT_DISABLE_RESPONSE_STORAGE": "true",
+            }
+        )
+
+        self.assertEqual(settings.AGENT_MODEL_REASONING_EFFORT, "high")
+        self.assertTrue(settings.AGENT_DISABLE_RESPONSE_STORAGE)
+        summary = settings.agent_config_summary()
+        self.assertEqual(summary["model_settings"]["reasoning_effort"], "high")
+        self.assertTrue(summary["model_settings"]["response_storage_disabled"])
+
+    def test_invalid_reasoning_effort_is_rejected(self):
+        settings = reload_settings_with({"AGENT_MODEL_REASONING_EFFORT": "ultra"})
+
+        errors = "\n".join(settings.validate_agent_settings())
+        self.assertIn("AGENT_MODEL_REASONING_EFFORT", errors)
 
     def test_chat_compatible_rejects_hosted_web_search(self):
         settings = reload_settings_with(
