@@ -7,7 +7,12 @@ from contextlib import suppress
 from datetime import date, timedelta
 from typing import Callable
 
-from apps.qq_ai_bridge.services.email_models import EmailEnvelope, EmailQuery
+from apps.qq_ai_bridge.services.email_models import (
+    EmailEnvelope,
+    EmailFetchedMessage,
+    EmailQuery,
+    EmailUidBatch,
+)
 from apps.qq_ai_bridge.services.email_parser import parse_email
 
 EmailParser = Callable[..., EmailEnvelope]
@@ -90,6 +95,54 @@ class EmailImapService:
                 with suppress(Exception):
                     connection.logout()
 
+    def fetch_new(self, *, last_uid: int, limit: int) -> EmailUidBatch:
+        self._validate_config()
+        if int(last_uid) < 0:
+            raise ValueError("last_uid must not be negative")
+        if int(limit) <= 0:
+            raise ValueError("limit must be positive")
+        connection = None
+        try:
+            connection = self._connect()
+            self._login(connection)
+            self._expect_ok(
+                connection.select(self._mailbox, readonly=True),
+                operation="select",
+            )
+            uid_validity = _uid_validity(connection.response("UIDVALIDITY"))
+            if not uid_validity:
+                raise self._protocol_error("uidvalidity")
+            search_result = connection.uid(
+                "search",
+                None,
+                "UID",
+                f"{int(last_uid) + 1}:*",
+            )
+            _, search_data = self._expect_ok(search_result, operation="uid_search")
+            message_ids = _new_uid_ids(
+                search_data,
+                last_uid=int(last_uid),
+                limit=int(limit),
+            )
+            messages = tuple(
+                EmailFetchedMessage(
+                    uid=int(message_id),
+                    envelope=self._fetch_one_uid(connection, message_id),
+                )
+                for message_id in message_ids
+            )
+            return EmailUidBatch(uid_validity=uid_validity, messages=messages)
+        except EmailImapError:
+            raise
+        except OSError as exc:
+            raise self._network_error() from exc
+        except imaplib.IMAP4.error as exc:
+            raise self._protocol_error("uid_command") from exc
+        finally:
+            if connection is not None:
+                with suppress(Exception):
+                    connection.logout()
+
     def _validate_config(self) -> None:
         if (
             not self._host
@@ -149,6 +202,24 @@ class EmailImapService:
                 "Unable to parse a fetched email message",
             ) from exc
 
+    def _fetch_one_uid(self, connection, message_id: bytes) -> EmailEnvelope:
+        _, fetch_data = self._expect_ok(
+            connection.uid("fetch", message_id, "(RFC822)"),
+            operation="uid_fetch",
+        )
+        raw_message = _raw_message(fetch_data)
+        if raw_message is None:
+            raise self._protocol_error("uid_fetch")
+        try:
+            return self._parser(raw_message, max_body_chars=self._max_body_chars)
+        except EmailImapError:
+            raise
+        except Exception as exc:
+            raise EmailImapError(
+                "email_parse_error",
+                "Unable to parse a fetched email message",
+            ) from exc
+
     def _expect_ok(self, result, *, operation: str):
         try:
             status, data = result
@@ -190,6 +261,29 @@ def _search_ids(search_data) -> list[bytes]:
     if not isinstance(first, bytes):
         return []
     return first.split()
+
+
+def _new_uid_ids(search_data, *, last_uid: int, limit: int) -> list[bytes]:
+    values = {
+        int(value)
+        for value in _search_ids(search_data)
+        if value.isdigit() and int(value) > last_uid
+    }
+    return [str(value).encode("ascii") for value in sorted(values)[:limit]]
+
+
+def _uid_validity(response) -> str:
+    try:
+        _, data = response
+    except (TypeError, ValueError):
+        return ""
+    if not data:
+        return ""
+    value = data[0]
+    if isinstance(value, bytes):
+        value = value.decode("ascii", errors="ignore")
+    normalized = str(value or "").strip()
+    return normalized if normalized.isdigit() else ""
 
 
 def _raw_message(fetch_data) -> bytes | None:

@@ -13,6 +13,8 @@ class FakeImapConnection:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
         self.search_result = ("OK", [b"1 2 3 4"])
+        self.uid_search_result = ("OK", [b"42 43 44"])
+        self.uid_validity_result = ("UIDVALIDITY", [b"9001"])
         self.fetch_failures: set[bytes] = set()
 
     def login(self, username, password):
@@ -32,6 +34,22 @@ class FakeImapConnection:
         if message_id in self.fetch_failures:
             return "NO", [b"private-body-must-not-leak"]
         return "OK", [(b"RFC822", b"raw-" + message_id)]
+
+    def response(self, name):
+        self.calls.append(("response", name))
+        return self.uid_validity_result
+
+    def uid(self, command, *args):
+        normalized = str(command).lower()
+        self.calls.append(("uid", normalized, *args))
+        if normalized == "search":
+            return self.uid_search_result
+        if normalized == "fetch":
+            message_id = args[0]
+            if message_id in self.fetch_failures:
+                return "NO", [b"private-body-must-not-leak"]
+            return "OK", [(b"RFC822", b"raw-" + message_id)]
+        raise AssertionError(f"unexpected UID command: {command!r}")
 
     def logout(self):
         self.calls.append(("logout",))
@@ -57,7 +75,7 @@ def parsed_envelope(raw_message: bytes, *, max_body_chars: int) -> EmailEnvelope
         subject=f"Subject {message_number}",
         sender="sender@example.invalid",
         recipients=("student@example.invalid",),
-        sent_at=datetime(2026, 7, message_number, tzinfo=timezone.utc),
+        sent_at=datetime(2026, 7, ((message_number - 1) % 28) + 1, tzinfo=timezone.utc),
         body_text="Body"[:max_body_chars],
         attachments=(),
     )
@@ -90,6 +108,14 @@ class EmailImapServiceTests(unittest.TestCase):
             return_value=self.connection,
         ) as factory:
             result = self.service(**service_overrides).fetch(self.query)
+        return result, factory
+
+    def fetch_new(self, *, last_uid: int = 41, limit: int = 2, **service_overrides):
+        with patch(
+            "apps.qq_ai_bridge.services.email_imap_service.imaplib.IMAP4_SSL",
+            return_value=self.connection,
+        ) as factory:
+            result = self.service(**service_overrides).fetch_new(last_uid=last_uid, limit=limit)
         return result, factory
 
     def test_connects_with_ssl_and_timeout(self):
@@ -166,6 +192,61 @@ class EmailImapServiceTests(unittest.TestCase):
 
     def test_client_never_calls_store_copy_move_or_expunge(self):
         self.fetch()
+
+        called_names = {call[0] for call in self.connection.calls}
+        self.assertTrue({"store", "copy", "move", "expunge"}.isdisjoint(called_names))
+
+    def test_uid_poll_selects_readonly_and_reads_uidvalidity(self):
+        batch, _ = self.fetch_new()
+
+        self.assertEqual(batch.uid_validity, "9001")
+        self.assertIn(("select", "INBOX", True), self.connection.calls)
+        self.assertIn(("response", "UIDVALIDITY"), self.connection.calls)
+
+    def test_uid_poll_searches_after_cursor_and_processes_oldest_first(self):
+        batch, _ = self.fetch_new(last_uid=41, limit=2)
+
+        self.assertIn(("uid", "search", None, "UID", "42:*"), self.connection.calls)
+        fetch_calls = [call for call in self.connection.calls if call[:2] == ("uid", "fetch")]
+        self.assertEqual(
+            fetch_calls,
+            [("uid", "fetch", b"42", "(RFC822)"), ("uid", "fetch", b"43", "(RFC822)")],
+        )
+        self.assertEqual([item.uid for item in batch.messages], [42, 43])
+        self.assertEqual([item.envelope.message_id for item in batch.messages], ["message-42", "message-43"])
+
+    def test_uid_poll_filters_stale_results_and_sorts_before_limiting(self):
+        self.connection.uid_search_result = ("OK", [b"44 41 43 42"])
+
+        batch, _ = self.fetch_new(last_uid=41, limit=2)
+
+        self.assertEqual([item.uid for item in batch.messages], [42, 43])
+
+    def test_uid_poll_from_empty_cursor_starts_at_one(self):
+        self.fetch_new(last_uid=0, limit=2)
+
+        self.assertIn(("uid", "search", None, "UID", "1:*"), self.connection.calls)
+
+    def test_empty_uid_search_returns_empty_batch_without_fetch(self):
+        self.connection.uid_search_result = ("OK", [b""])
+
+        batch, _ = self.fetch_new()
+
+        self.assertEqual(batch.messages, ())
+        self.assertFalse(any(call[:2] == ("uid", "fetch") for call in self.connection.calls))
+
+    def test_uid_poll_rejects_missing_uidvalidity(self):
+        from apps.qq_ai_bridge.services.email_imap_service import EmailImapError
+
+        self.connection.uid_validity_result = ("UIDVALIDITY", [None])
+
+        with self.assertRaises(EmailImapError) as caught:
+            self.fetch_new()
+
+        self.assertEqual(caught.exception.code, "email_protocol_error")
+
+    def test_uid_poll_never_calls_mutating_commands(self):
+        self.fetch_new()
 
         called_names = {call[0] for call in self.connection.calls}
         self.assertTrue({"store", "copy", "move", "expunge"}.isdisjoint(called_names))

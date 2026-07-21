@@ -50,6 +50,16 @@ class EmailFetchedMessage:
             raise ValueError("uid must be positive")
 
 
+@dataclass(frozen=True)
+class EmailUidBatch:
+    uid_validity: str
+    messages: tuple[EmailFetchedMessage, ...]
+
+    def __post_init__(self) -> None:
+        if not self.uid_validity.strip():
+            raise ValueError("uid_validity must not be empty")
+
+
 EmailRuleEligibility = Literal[
     "semantic_required",
     "explicit_hard_ignore",
@@ -137,4 +147,5 @@ __all__ = [
     "EmailFetchedMessage",
     "EmailQuery",
     "EmailRuleDecision",
+    "EmailUidBatch",
 ]
