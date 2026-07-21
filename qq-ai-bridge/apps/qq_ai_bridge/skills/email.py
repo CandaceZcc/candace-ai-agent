@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
+from email.utils import parseaddr
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,6 +16,8 @@ from apps.qq_ai_bridge.config.settings import (
     BASE_DATA_DIR,
     CHAT_COMPATIBLE_MODEL,
     EMAIL_AGENT_ENABLED,
+    EMAIL_AUTOMATION_STATE_PATH,
+    EMAIL_FEEDBACK_PATH,
     EMAIL_IMAP_HOST,
     EMAIL_IMAP_MAILBOX,
     EMAIL_IMAP_PASSWORD,
@@ -25,6 +28,7 @@ from apps.qq_ai_bridge.config.settings import (
     EMAIL_MAX_MESSAGES_PER_RUN,
     EMAIL_MAX_RANGE_DAYS,
     EMAIL_MAX_TOTAL_CHARS,
+    EMAIL_PROFILE_PATH,
     EMAIL_SUMMARY_MODEL,
     OPENAI_AGENT_MODEL,
     OWNER_QQ,
@@ -35,6 +39,8 @@ from apps.qq_ai_bridge.services.email_archive_service import EmailArchiveService
 from apps.qq_ai_bridge.services.email_digest_service import EmailDigestError, EmailDigestService
 from apps.qq_ai_bridge.services.email_imap_service import EmailImapError, EmailImapService
 from apps.qq_ai_bridge.services.email_models import EmailCommand
+from apps.qq_ai_bridge.services.email_preference_service import EmailPreferenceStore
+from apps.qq_ai_bridge.services.email_processing_store import EmailProcessingStore
 from apps.qq_ai_bridge.services.email_query_service import parse_email_command
 from apps.qq_ai_bridge.services.private_chat_service import run_agent_runtime_sync
 from apps.qq_ai_bridge.services.runtime_resources import submit_chat_task
@@ -47,6 +53,8 @@ _EMAIL_HELP = """邮件命令：
 - 邮件 本周
 - 邮件 上周
 - 邮件 最近 N 天
+- 邮件 E-1042 有用/忽略/忽略此类/关注发件人/撤销反馈
+- 邮件 偏好
 - 邮件 状态
 - 邮件 帮助"""
 _EMAIL_QUEUED = "正在读取并整理邮件，完成后会发给你。"
@@ -68,6 +76,9 @@ class EmailSkill:
         provider_name: str = AGENT_PROVIDER,
         model_name: str | None = None,
         now: Callable[[], datetime] = get_now_local,
+        processing_store: Any | None = None,
+        preference_store: Any | None = None,
+        archive_service: Any | None = None,
     ) -> None:
         self._enabled = bool(enabled)
         self._owner_qq = int(owner_qq or 0)
@@ -78,6 +89,9 @@ class EmailSkill:
         self._provider_name = str(provider_name or "")
         self._model_name = str(model_name or _configured_summary_model())
         self._now = now
+        self._processing_store = processing_store
+        self._preference_store = preference_store
+        self._archive_service = archive_service
         self._state_lock = threading.Lock()
         self._last_success_at: datetime | None = None
 
@@ -108,6 +122,10 @@ class EmailSkill:
             return self._text_result("help", _EMAIL_HELP)
         if command.kind == "status":
             return self._text_result("status", self._status_text())
+        if command.kind == "preferences":
+            return self._text_result("preferences", self._preferences().summary())
+        if command.kind == "feedback":
+            return self._handle_feedback(command)
         if command.kind == "invalid" or command.query is None:
             return self._text_result("invalid", _EMAIL_HELP)
 
@@ -158,6 +176,76 @@ class EmailSkill:
             message = "邮件摘要生成失败，稍后再试。"
         log_warn("EMAIL", "worker failed code=%s", code)
         self._send_private(user_id, message, quiet=True, redact_content=True)
+
+    def _handle_feedback(self, command: EmailCommand) -> SkillResult:
+        record = self._processing().find_by_alias(command.alias)
+        if record is None:
+            return self._text_result(
+                "feedback_not_found",
+                f"未找到邮件编号 {command.alias}，可能已过期。",
+            )
+        if command.feedback_action == "undo":
+            removed = self._preferences().undo_feedback(command.alias)
+            text = (
+                f"已撤销 {command.alias} 的反馈。"
+                if removed
+                else f"{command.alias} 没有可撤销的反馈。"
+            )
+            return self._text_result("feedback", text)
+
+        signals = self._feedback_signals(record, command.feedback_action)
+        if command.feedback_action == "watch_sender" and "sender" not in signals:
+            return self._text_result(
+                "feedback_archive_expired",
+                f"{command.alias} 的私有归档已过期，无法关注发件人。",
+            )
+        self._preferences().apply_feedback(
+            command.alias,
+            command.feedback_action,
+            signals,
+        )
+        action_label = {
+            "useful": "有用",
+            "ignore": "忽略",
+            "ignore_similar": "忽略此类",
+            "watch_sender": "关注发件人",
+        }[command.feedback_action]
+        return self._text_result(
+            "feedback",
+            f"已记录 {command.alias}：{action_label}。可用“邮件 {command.alias} 撤销反馈”撤销。",
+        )
+
+    def _feedback_signals(self, record: Any, action: str) -> dict[str, str]:
+        classification = getattr(record, "classification", None)
+        category = str(getattr(classification, "category", "") or "").strip().lower()
+        if action == "ignore_similar":
+            return {"category": category} if category else {}
+
+        envelope = self._archive().load_envelope(record.message_hash)
+        sender = parseaddr(str(getattr(envelope, "sender", "") or ""))[1].strip().lower()
+        if action == "watch_sender":
+            return {"sender": sender} if sender else {}
+        signals = {}
+        if sender:
+            signals["sender"] = sender
+        if category:
+            signals["category"] = category
+        return signals
+
+    def _processing(self) -> Any:
+        if self._processing_store is None:
+            self._processing_store = EmailProcessingStore(EMAIL_AUTOMATION_STATE_PATH)
+        return self._processing_store
+
+    def _preferences(self) -> Any:
+        if self._preference_store is None:
+            self._preference_store = EmailPreferenceStore(EMAIL_PROFILE_PATH, EMAIL_FEEDBACK_PATH)
+        return self._preference_store
+
+    def _archive(self) -> Any:
+        if self._archive_service is None:
+            self._archive_service = EmailArchiveService(Path(BASE_DATA_DIR) / "email")
+        return self._archive_service
 
     def _status_text(self) -> str:
         with self._state_lock:

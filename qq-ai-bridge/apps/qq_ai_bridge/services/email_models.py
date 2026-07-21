@@ -128,7 +128,15 @@ class EmailDigest:
     from_cache: bool
 
 
-EmailCommandKind = Literal["query", "status", "help", "invalid", "no_match"]
+EmailCommandKind = Literal[
+    "query",
+    "status",
+    "help",
+    "feedback",
+    "preferences",
+    "invalid",
+    "no_match",
+]
 
 
 @dataclass(frozen=True)
@@ -136,6 +144,8 @@ class EmailCommand:
     kind: EmailCommandKind
     query: EmailQuery | None = None
     period_label: str = ""
+    alias: str = ""
+    feedback_action: str = ""
 
 
 __all__ = [

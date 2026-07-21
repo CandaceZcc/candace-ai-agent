@@ -81,6 +81,12 @@ class EmailSkillTests(unittest.TestCase):
     def test_group_message_does_not_match(self):
         self.assertFalse(self.skill().can_handle(context("邮件 今天", message_type="group")))
 
+    def test_feedback_is_rejected_for_non_owner_and_group(self):
+        self.assertFalse(self.skill().can_handle(context("邮件 E-1042 有用", user_id=7)))
+        self.assertFalse(
+            self.skill().can_handle(context("邮件 E-1042 有用", message_type="group"))
+        )
+
     def test_explicit_command_is_enqueued(self):
         result = self.skill().handle(context("邮件 最近 7 天"))
 
@@ -120,6 +126,64 @@ class EmailSkillTests(unittest.TestCase):
 
     def test_plain_chat_containing_email_word_falls_through(self):
         self.assertFalse(self.skill().can_handle(context("我今天收到一封邮件，帮我看看")))
+
+    def test_feedback_resolves_alias_and_persists_private_signals(self):
+        processing = MagicMock()
+        processing.find_by_alias.return_value = SimpleNamespace(
+            alias="E-1042",
+            message_hash="a" * 64,
+            classification=SimpleNamespace(category="course_change"),
+            rule_decision=SimpleNamespace(positive_signals=("interest:robotics",)),
+        )
+        archive = MagicMock()
+        archive.load_envelope.return_value = SimpleNamespace(
+            sender="Teacher Name <teacher@example.invalid>"
+        )
+        preferences = MagicMock()
+
+        result = self.skill(
+            processing_store=processing,
+            archive_service=archive,
+            preference_store=preferences,
+        ).handle(context("邮件 E-1042 关注发件人"))
+
+        preferences.apply_feedback.assert_called_once_with(
+            "E-1042",
+            "watch_sender",
+            {"sender": "teacher@example.invalid"},
+        )
+        self.assertEqual(result.status, "feedback")
+        self.assertIn("E-1042", result.response_text)
+        self.assertNotIn("teacher@example.invalid", result.response_text)
+        self.submit.assert_not_called()
+
+    def test_feedback_not_found_and_undo_are_deterministic(self):
+        processing = MagicMock()
+        preferences = MagicMock()
+        processing.find_by_alias.return_value = None
+        skill = self.skill(processing_store=processing, preference_store=preferences)
+
+        missing = skill.handle(context("邮件 E-9999 有用"))
+        self.assertEqual(missing.status, "feedback_not_found")
+        self.assertIn("可能已过期", missing.response_text)
+        preferences.apply_feedback.assert_not_called()
+
+        processing.find_by_alias.return_value = SimpleNamespace(alias="E-1042")
+        preferences.undo_feedback.return_value = True
+        undone = skill.handle(context("邮件 E-1042 撤销反馈"))
+        self.assertEqual(undone.status, "feedback")
+        self.assertIn("已撤销", undone.response_text)
+
+    def test_preferences_summary_is_synchronous_and_redacted(self):
+        preferences = MagicMock()
+        preferences.summary.return_value = "邮件偏好版本：1\n已学习反馈：2"
+
+        result = self.skill(preference_store=preferences).handle(context("邮件 偏好"))
+
+        self.assertEqual(result.status, "preferences")
+        self.assertEqual(result.response_text, "邮件偏好版本：1\n已学习反馈：2")
+        preferences.summary.assert_called_once_with()
+        self.submit.assert_not_called()
 
     def test_queue_full_returns_busy_without_starting_work(self):
         result = self.skill(submit_task=MagicMock(return_value=None)).handle(context("邮件 今天"))

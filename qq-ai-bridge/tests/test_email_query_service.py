@@ -62,6 +62,26 @@ class EmailQueryServiceTests(unittest.TestCase):
         self.assertEqual(self.parse("邮件 帮助").kind, "help")
         self.assertEqual(self.parse("邮件 随便看看").kind, "invalid")
 
+    def test_feedback_commands_parse_alias_and_action(self):
+        expected = {
+            "有用": "useful",
+            "忽略": "ignore",
+            "忽略此类": "ignore_similar",
+            "关注发件人": "watch_sender",
+            "撤销反馈": "undo",
+        }
+        for label, action in expected.items():
+            with self.subTest(label=label):
+                command = self.parse(f"邮件 E-1042 {label}")
+                self.assertEqual(command.kind, "feedback")
+                self.assertEqual(command.alias, "E-1042")
+                self.assertEqual(command.feedback_action, action)
+
+    def test_preferences_and_malformed_feedback_are_distinct(self):
+        self.assertEqual(self.parse("邮件 偏好").kind, "preferences")
+        self.assertEqual(self.parse("邮件 E-12 有用").kind, "invalid")
+        self.assertEqual(self.parse("邮件 E-1042 未知操作").kind, "invalid")
+
 
 if __name__ == "__main__":
     unittest.main()

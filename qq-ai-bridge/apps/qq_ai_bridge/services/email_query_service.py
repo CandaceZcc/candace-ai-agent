@@ -14,6 +14,17 @@ from apps.qq_ai_bridge.services.time_utils import LOCAL_TIMEZONE, get_now_local
 
 _EMAIL_COMMAND_RE = re.compile(r"^\s*邮件(?:\s+(.*?))?\s*$")
 _RECENT_RE = re.compile(r"^最近\s+(\d+)\s+天$")
+_FEEDBACK_RE = re.compile(
+    r"^(E-\d{4,})\s+(有用|忽略|忽略此类|关注发件人|撤销反馈)$",
+    re.IGNORECASE,
+)
+_FEEDBACK_ACTIONS = {
+    "有用": "useful",
+    "忽略": "ignore",
+    "忽略此类": "ignore_similar",
+    "关注发件人": "watch_sender",
+    "撤销反馈": "undo",
+}
 
 
 def parse_email_command(
@@ -32,6 +43,15 @@ def parse_email_command(
         return EmailCommand("status")
     if subcommand == "帮助":
         return EmailCommand("help")
+    if subcommand == "偏好":
+        return EmailCommand("preferences")
+    feedback_match = _FEEDBACK_RE.fullmatch(subcommand)
+    if feedback_match:
+        return EmailCommand(
+            "feedback",
+            alias=feedback_match.group(1).upper(),
+            feedback_action=_FEEDBACK_ACTIONS[feedback_match.group(2)],
+        )
 
     current = now or get_now_local()
     if current.tzinfo is None:
