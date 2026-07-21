@@ -5,7 +5,6 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-
 _SKILL_SPECS = (
     ("apps.qq_ai_bridge.skills.draw", "DrawSkill"),
     ("apps.qq_ai_bridge.skills.image_understanding", "ImageUnderstandingSkill"),
@@ -16,6 +15,7 @@ _SKILL_SPECS = (
     ("apps.qq_ai_bridge.skills.reminder", "ReminderSkill"),
     ("apps.qq_ai_bridge.skills.overview", "OverviewSkill"),
     ("apps.qq_ai_bridge.skills.schedule", "ScheduleSkill"),
+    ("apps.qq_ai_bridge.skills.email", "EmailSkill"),
     ("apps.qq_ai_bridge.skills.chat", "ChatSkill"),
 )
 

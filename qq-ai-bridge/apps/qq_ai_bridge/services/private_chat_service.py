@@ -231,7 +231,7 @@ def _generate_private_model_reply(
         allowed_tool_names=decision.allowed_tool_names,
         trace_id=trace_id,
     )
-    result = _run_agent_runtime_sync(AgentRuntime(legacy_call=call_ai).run(request))
+    result = run_agent_runtime_sync(AgentRuntime(legacy_call=call_ai).run(request))
     return result.output_text
 
 
@@ -256,9 +256,12 @@ def _build_agent_compact_context(prompt_payload: dict) -> str:
     return prompt[:AGENT_COMPACT_CONTEXT_MAX_CHARS]
 
 
-def _run_agent_runtime_sync(coro):
+def run_agent_runtime_sync(coro):
     loop = _get_agent_runtime_loop()
     return asyncio.run_coroutine_threadsafe(coro, loop).result()
+
+
+_run_agent_runtime_sync = run_agent_runtime_sync
 
 
 def _get_agent_runtime_loop() -> asyncio.AbstractEventLoop:
@@ -524,4 +527,9 @@ def _run_private_chat_worker(user_id) -> None:
         )
 
 
-__all__ = ["build_private_ai_prompt", "enqueue_private_text", "get_user_workspace"]
+__all__ = [
+    "build_private_ai_prompt",
+    "enqueue_private_text",
+    "get_user_workspace",
+    "run_agent_runtime_sync",
+]
