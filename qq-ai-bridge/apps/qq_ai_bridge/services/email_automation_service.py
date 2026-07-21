@@ -197,7 +197,8 @@ def _select_digest_records(
         record
         for record in eligible
         if record.alias not in used
-        and route_classification(record.classification, record.rule_decision) in {"immediate", "digest"}
+        and route_classification(record.classification, record.rule_decision)
+        in {"immediate", "digest"}
     ][:4]
     used.update(record.alias for record in relevant)
     possible = [
@@ -250,7 +251,8 @@ def _format_digest(records: tuple[EmailProcessingRecord, ...]) -> str:
     relevant = [
         record
         for record in remaining
-        if route_classification(record.classification, record.rule_decision) in {"immediate", "digest"}
+        if route_classification(record.classification, record.rule_decision)
+        in {"immediate", "digest"}
     ]
     possible = [record for record in remaining if record not in relevant]
     lines = ["【最近 24 小时邮件摘要】"]

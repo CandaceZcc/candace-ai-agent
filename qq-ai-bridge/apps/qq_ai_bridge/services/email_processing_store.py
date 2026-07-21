@@ -134,7 +134,10 @@ class EmailProcessingStore:
             return _record_from_payload(record)
 
     def save_rule_decision(self, alias: str, decision: EmailRuleDecision) -> None:
-        self._update_record(alias, lambda record: record.update(rule_decision=_serialize_rule(decision)))
+        self._update_record(
+            alias,
+            lambda record: record.update(rule_decision=_serialize_rule(decision)),
+        )
 
     def save_classification(
         self,

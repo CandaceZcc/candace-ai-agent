@@ -194,7 +194,10 @@ class EmailAutomationServiceTests(unittest.IsolatedAsyncioTestCase):
 
         await self.service(imap=imap, archive=archive, store=store).poll(NOW)
 
-        self.assertEqual(events[:2], [("archive", message.message_id), ("observe", message.message_id)])
+        self.assertEqual(
+            events[:2],
+            [("archive", message.message_id), ("observe", message.message_id)],
+        )
 
     async def test_hard_ignore_skips_model_and_delivery(self):
         message = envelope(1)
@@ -219,7 +222,10 @@ class EmailAutomationServiceTests(unittest.IsolatedAsyncioTestCase):
         imap = FakeImap(
             EmailUidBatch(
                 "44",
-                tuple(EmailFetchedMessage(uid=16 + index, envelope=message) for index, message in enumerate(messages, 1)),
+                tuple(
+                    EmailFetchedMessage(uid=16 + index, envelope=message)
+                    for index, message in enumerate(messages, 1)
+                ),
             )
         )
 

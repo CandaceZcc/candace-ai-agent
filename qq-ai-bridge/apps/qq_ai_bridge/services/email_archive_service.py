@@ -56,7 +56,10 @@ class EmailArchiveService:
                 continue
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(payload, dict) or payload.get("schema_version") != _SCHEMA_VERSION:
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("schema_version") != _SCHEMA_VERSION
+                ):
                     continue
                 envelope = _deserialize_envelope(payload.get("message"))
                 actual_hash = hashlib.sha256(envelope.message_id.encode("utf-8")).hexdigest()
