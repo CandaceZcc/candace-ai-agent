@@ -77,6 +77,18 @@ class PcAgentToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("approval", result.approval_reason)
         mock_request.assert_not_called()
 
+    async def test_login_and_security_actions_require_approval(self):
+        from shared.ai.pc_agent_tools import pc_browser_click_text
+
+        with patch("shared.ai.pc_agent_tools.request_browser_action") as mock_request:
+            for target in ("Sign in", "登录", "Ignore security warning"):
+                with self.subTest(target=target):
+                    result = await pc_browser_click_text(target)
+                    self.assertFalse(result.ok)
+                    self.assertTrue(result.needs_approval)
+
+        mock_request.assert_not_called()
+
     async def test_tool_never_forwards_environment_or_secret_headers(self):
         from shared.ai.pc_agent_tools import pc_browser_inspect
 

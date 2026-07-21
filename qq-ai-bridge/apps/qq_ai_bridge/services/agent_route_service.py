@@ -60,6 +60,7 @@ def classify_agent_route(text: str) -> AgentRouteDecision:
                 "pc_open_http_url",
                 "pc_capture_screen",
                 "pc_browser_inspect",
+                "pc_browser_click_text",
             ),
         )
     if _looks_like_current_events_request(normalized, lowered):

@@ -29,6 +29,7 @@ class AgentRouteServiceTests(unittest.TestCase):
         self.assertEqual(decision.route, "pc_agent")
         self.assertIn("pc_agent_status", decision.allowed_tool_names)
         self.assertIn("pc_open_http_url", decision.allowed_tool_names)
+        self.assertIn("pc_browser_click_text", decision.allowed_tool_names)
         self.assertNotIn("web_search", decision.allowed_tool_names)
 
     def test_email_command_is_not_routed_to_general_agent(self):

@@ -7,7 +7,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 from agents import function_tool
-
 from apps.qq_ai_bridge.services.browser_agent_service import request_browser_action
 
 _HIGH_IMPACT_TOKENS = (
@@ -19,6 +18,12 @@ _HIGH_IMPACT_TOKENS = (
     "delete",
     "upload",
     "download",
+    "sign in",
+    "log in",
+    "login",
+    "security warning",
+    "ignore warning",
+    "bypass",
     "付款",
     "支付",
     "提交",
@@ -26,6 +31,11 @@ _HIGH_IMPACT_TOKENS = (
     "删除",
     "上传",
     "下载",
+    "登录",
+    "登入",
+    "登陆",
+    "安全警告",
+    "继续访问",
 )
 
 
