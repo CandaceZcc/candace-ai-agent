@@ -8,15 +8,6 @@ from email.utils import parseaddr
 from apps.qq_ai_bridge.services.email_models import EmailEnvelope, EmailRuleDecision
 from apps.qq_ai_bridge.services.email_preference_service import EmailPreferenceProfile
 
-_PERSONAL_DOMAINS = {
-    "126.com",
-    "163.com",
-    "gmail.com",
-    "hotmail.com",
-    "icloud.com",
-    "outlook.com",
-    "qq.com",
-}
 _ACADEMIC_ACTION_TERMS = (
     "exam",
     "quiz",
@@ -98,9 +89,6 @@ class EmailRuleClassifier:
         if re.match(r"^\s*(?:re|aw|sv)\s*:", str(envelope.subject or ""), re.IGNORECASE):
             positive.append("direct_reply")
             score += 25
-            if sender_domain in _PERSONAL_DOMAINS:
-                positive.append("personal_sender")
-                score += 10
 
         recipients = {str(value).strip().lower() for value in envelope.recipients}
         if (

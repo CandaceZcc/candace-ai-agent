@@ -19,6 +19,9 @@
 - Keep `EMAIL_MONITOR_ENABLED`, `EMAIL_IMMEDIATE_PUSH_ENABLED`, and `EMAIL_DIGEST_PUSH_ENABLED` false in live configuration until staged approval.
 - Email model runs use `tools=[]`, no fallback, and bounded untrusted content.
 - Email QQ sends use redacted outbound auditing before any automation can be enabled.
+- Do not infer teacher-versus-institution identity from domain or display name; school
+  and teacher mail share the same education domain. Use thread, subject, recipient,
+  action, and semantic signals unless the owner explicitly configures a sender rule.
 
 ### Task 1: Add Automation Configuration and Domain Contracts
 

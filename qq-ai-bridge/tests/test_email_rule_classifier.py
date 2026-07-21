@@ -65,6 +65,26 @@ class EmailRuleClassifierTests(unittest.TestCase):
         self.assertIn("direct_recipient", decision.positive_signals)
         self.assertGreaterEqual(decision.initial_score, 60)
 
+    def test_reply_score_does_not_depend_on_edu_or_external_domain(self):
+        school_reply = self.classifier.classify(
+            envelope(
+                subject="Re: course exam change",
+                sender="Teacher <teacher@school.example.invalid>",
+            ),
+            profile(),
+        )
+        external_reply = self.classifier.classify(
+            envelope(
+                subject="Re: course exam change",
+                sender="Teacher <teacher@gmail.com>",
+            ),
+            profile(),
+        )
+
+        self.assertEqual(school_reply.initial_score, external_reply.initial_score)
+        self.assertNotIn("personal_sender", school_reply.positive_signals)
+        self.assertNotIn("personal_sender", external_reply.positive_signals)
+
     def test_cohort_and_interest_terms_raise_relevance(self):
         decision = self.classifier.classify(
             envelope(subject="Year 3 CST robotics research opportunity"),

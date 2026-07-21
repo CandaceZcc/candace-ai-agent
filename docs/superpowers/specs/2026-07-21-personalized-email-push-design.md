@@ -51,7 +51,7 @@ That design is superseded by this specification.
 
 The initial profile uses the following positive signals:
 
-- a direct reply from a personal email account;
+- a direct person-to-person reply, regardless of whether it uses a school or external domain;
 - a message explicitly addressed to the owner rather than only a broad list;
 - computer science, computing, computer department, or CST;
 - Year 3, third year, 2024 cohort, 大三, or 2024级;
@@ -75,6 +75,12 @@ Recruiting or internship mail can still be relevant when it explicitly matches
 the owner's field, year, or technical interests. Mail from the school faculty or
 computer department is always eligible for semantic review; the sender domain
 alone never causes immediate delivery.
+
+Teacher and institutional mail commonly share the same school domain. Automatic
+scoring therefore must not infer a person, teacher, or institution from domain or
+display name alone. Reply-thread markers, course/exam/action language, recipient
+scope, and semantic content provide the default distinction. Sender and domain
+weights apply only after explicit manual configuration or owner feedback.
 
 ## Architecture
 
