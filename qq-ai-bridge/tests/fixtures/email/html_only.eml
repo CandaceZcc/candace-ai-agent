@@ -1,0 +1,24 @@
+From: Campus Office <office@example.invalid>
+To: student@example.invalid
+Subject: HTML bulletin
+Date: Tue, 21 Jul 2026 09:30:00 +0800
+Message-ID: <html-1@example.invalid>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+<!doctype html>
+<html>
+  <head>
+    <style>.hidden { display: none; }</style>
+    <script>alert('unsafe')</script>
+  </head>
+  <body>
+    <h1>Registration notice</h1>
+    <p>Review the <a href="https://portal.example.invalid/guide">course guide</a>.</p>
+    <p><a href="javascript:alert('x')">Unsafe action</a></p>
+    <p><a href="data:text/plain,secret">Embedded data</a></p>
+    <img src="https://tracker.example.invalid/pixel.gif" width="1" height="1" alt="tracking pixel">
+    <noscript>tracking fallback</noscript>
+  </body>
+</html>
