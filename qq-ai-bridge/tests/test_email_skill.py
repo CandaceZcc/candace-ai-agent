@@ -1,13 +1,23 @@
 import asyncio
 import sys
+import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, "qq-ai-bridge")
 
-from apps.qq_ai_bridge.services.email_models import EmailDigest
+from apps.qq_ai_bridge.services.email_archive_service import EmailArchiveService
+from apps.qq_ai_bridge.services.email_models import (
+    EmailClassification,
+    EmailDigest,
+    EmailEnvelope,
+    EmailRuleDecision,
+)
+from apps.qq_ai_bridge.services.email_preference_service import EmailPreferenceStore
+from apps.qq_ai_bridge.services.email_processing_store import EmailProcessingStore
 from apps.qq_ai_bridge.services.time_utils import LOCAL_TIMEZONE
 from apps.qq_ai_bridge.skills.base import SkillContext
 
@@ -43,10 +53,21 @@ def context(
 
 class EmailSkillTests(unittest.TestCase):
     def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self.temp_dir.name)
         self.submit = MagicMock(return_value=object())
         self.factory = MagicMock()
         self.send = MagicMock(return_value={"ok": True})
         self.run_async = MagicMock(side_effect=asyncio.run)
+        self.archive = EmailArchiveService(root / "email")
+        self.processing = EmailProcessingStore(root / "automation-state.json")
+        self.preferences = EmailPreferenceStore(
+            root / "profile.json",
+            root / "learned-feedback.json",
+        )
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
 
     def skill(self, **overrides):
         from apps.qq_ai_bridge.skills.email import EmailSkill
@@ -61,6 +82,9 @@ class EmailSkillTests(unittest.TestCase):
             "provider_name": "responses_proxy",
             "model_name": "gpt-5.6-terra",
             "now": lambda: datetime(2026, 7, 22, 10, 0, tzinfo=LOCAL_TIMEZONE),
+            "archive_service": self.archive,
+            "processing_store": self.processing,
+            "preference_store": self.preferences,
         }
         values.update(overrides)
         return EmailSkill(**values)
@@ -227,6 +251,97 @@ class EmailSkillTests(unittest.TestCase):
             quiet=True,
             redact_content=True,
         )
+
+    def test_feedback_updates_private_preferences_without_queuing(self):
+        alias = self._archive_classified_email()
+
+        result = self.skill().handle(context(f"邮件 {alias} 有用"))
+
+        self.assertEqual(result.status, "feedback")
+        self.assertIn(alias, result.response_text)
+        self.assertNotIn("Teacher", result.response_text)
+        self.assertNotIn("teacher@example.invalid", result.response_text)
+        self.assertEqual(
+            self.preferences.load().score_for("sender:teacher@example.invalid"),
+            5,
+        )
+        self.submit.assert_not_called()
+
+    def test_watch_sender_learns_exact_sender_not_shared_domain(self):
+        alias = self._archive_classified_email()
+
+        self.skill().handle(context(f"邮件 {alias} 关注发件人"))
+
+        profile = self.preferences.load()
+        self.assertEqual(profile.score_for("sender:teacher@example.invalid"), 15)
+        self.assertEqual(profile.score_for("domain:example.invalid"), 0)
+
+    def test_feedback_can_be_undone(self):
+        alias = self._archive_classified_email()
+        skill = self.skill()
+        skill.handle(context(f"邮件 {alias} 忽略此类"))
+
+        result = skill.handle(context(f"邮件 {alias} 撤销反馈"))
+
+        self.assertEqual(result.status, "feedback")
+        self.assertIn("已撤销", result.response_text)
+        self.assertEqual(
+            self.preferences.load().score_for("sender:teacher@example.invalid"),
+            0,
+        )
+
+    def test_preferences_returns_redacted_summary(self):
+        result = self.skill().handle(context("邮件 偏好"))
+
+        self.assertEqual(result.status, "preferences")
+        self.assertIn("邮件偏好版本", result.response_text)
+        self.assertNotIn("example.invalid", result.response_text)
+        self.submit.assert_not_called()
+
+    def test_feedback_unknown_alias_has_deterministic_response(self):
+        result = self.skill().handle(context("邮件 E-9999 忽略"))
+
+        self.assertEqual(result.status, "feedback_not_found")
+        self.assertEqual(result.response_text, "未找到邮件编号 E-9999，可能已过期。")
+
+    def test_feedback_remains_owner_private(self):
+        self.assertFalse(self.skill().can_handle(context("邮件 E-1042 有用", user_id=7)))
+        self.assertFalse(
+            self.skill().can_handle(context("邮件 E-1042 有用", message_type="group"))
+        )
+
+    def _archive_classified_email(self) -> str:
+        envelope = EmailEnvelope(
+            message_id="<feedback@example.invalid>",
+            subject="Private course update",
+            sender="Teacher <teacher@example.invalid>",
+            recipients=("student@example.invalid",),
+            sent_at=datetime(2026, 7, 22, 9, 0, tzinfo=timezone.utc),
+            body_text="Private body",
+            attachments=(),
+        )
+        self.archive.archive_envelope(envelope)
+        record = self.processing.observe("INBOX", "44", 17, envelope)
+        self.processing.save_rule_decision(
+            record.alias,
+            EmailRuleDecision(80, "semantic_required", ("course_code",), ()),
+        )
+        self.processing.save_classification(
+            record.alias,
+            EmailClassification(
+                alias=record.alias,
+                relevance_score=85,
+                urgency="high",
+                category="course_change",
+                concise_title="课程安排更新",
+                summary="课程安排有变化。",
+                action="查看新安排。",
+                deadline=None,
+                reason="与你的课程相关",
+                confidence=0.9,
+            ),
+        )
+        return record.alias
 
 
 if __name__ == "__main__":
