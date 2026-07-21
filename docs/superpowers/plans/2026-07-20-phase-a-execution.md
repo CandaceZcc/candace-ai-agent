@@ -79,7 +79,9 @@ superseding personalized email push plan referenced above.
 - [ ] Run retention dry-run before allowing actual cleanup.
 - [ ] Verify the three independent rollback switches: Agents SDK chat, email commands, and email schedules.
 
-Milestone 3 exits when daily/weekly idempotency survives restarts and the actual provider bill matches the observed model/tool usage.
+Milestone 3 is superseded; its replacement exits only after the personalized email
+push plan passes its shadow canary, restart-idempotency checks, and provider billing
+review.
 
 ## IDE handoff sequence
 
