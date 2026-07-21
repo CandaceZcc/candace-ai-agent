@@ -197,9 +197,10 @@ def _format_digest_text(
     truncated: bool,
 ) -> str:
     analysis = _normalize_analysis(model_output)
-    lines = [f"邮件摘要：{label}（共 {len(messages)} 封）", "", analysis]
+    heading = f"邮件摘要：{label}（共 {len(messages)} 封）"
     if truncated:
-        lines.extend(("", "注意：受内容上限影响，部分邮件正文或较早邮件未纳入摘要。"))
+        heading += "\n注意：受内容上限影响，部分邮件正文或较早邮件未纳入摘要。"
+    lines = [heading, "", analysis]
     lines.extend(("", "来源邮件："))
     lines.extend(
         f"- {_message_date(message)} | {_single_line(message.sender, 300)} | "

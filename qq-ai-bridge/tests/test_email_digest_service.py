@@ -95,6 +95,8 @@ class EmailDigestServiceTests(unittest.IsolatedAsyncioTestCase):
         self.runtime.run.assert_awaited_once()
 
     async def test_total_content_is_capped_before_model_call(self):
+        from apps.qq_ai_bridge.adapters.napcat_client import split_outbound_messages
+
         self.imap.fetch.return_value = [
             envelope(1, "OLDER-" + "x" * 2000),
             envelope(2, "NEWEST-" + "y" * 2000),
@@ -109,6 +111,8 @@ class EmailDigestServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(request.user_text), 1400)
         self.assertIn("NEWEST-", request.user_text)
         self.assertIn("受内容上限影响", digest.summary_text)
+        outbound_parts = split_outbound_messages(digest.summary_text)
+        self.assertTrue(any("来源邮件：" in part for part in outbound_parts))
 
     async def test_message_cap_prefers_newest_and_reports_truncation(self):
         self.imap.fetch.return_value = [envelope(1), envelope(2), envelope(3)]
