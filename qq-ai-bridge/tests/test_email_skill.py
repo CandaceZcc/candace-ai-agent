@@ -141,7 +141,28 @@ class EmailSkillTests(unittest.TestCase):
 
         service.build_digest.assert_awaited_once_with(command.query, period_label="今天")
         self.run_async.assert_called_once()
-        self.send.assert_called_once_with(42, "final digest", quiet=True)
+        self.send.assert_called_once_with(
+            42,
+            "final digest",
+            quiet=True,
+            redact_content=True,
+        )
+
+    def test_worker_error_message_uses_redacted_delivery(self):
+        service = SimpleNamespace(build_digest=AsyncMock(side_effect=RuntimeError("private body")))
+        self.factory.return_value = service
+        skill = self.skill()
+        skill.handle(context("邮件 今天"))
+        worker, user_id, command = self.submit.call_args.args
+
+        worker(user_id, command)
+
+        self.send.assert_called_once_with(
+            42,
+            "邮件摘要生成失败，稍后再试。",
+            quiet=True,
+            redact_content=True,
+        )
 
 
 if __name__ == "__main__":

@@ -137,7 +137,12 @@ class EmailSkill:
             digest = self._run_async(
                 service.build_digest(command.query, period_label=command.period_label)
             )
-            send_result = self._send_private(user_id, digest.summary_text, quiet=True)
+            send_result = self._send_private(
+                user_id,
+                digest.summary_text,
+                quiet=True,
+                redact_content=True,
+            )
             if send_result.get("ok"):
                 with self._state_lock:
                     self._last_success_at = self._now()
@@ -152,7 +157,7 @@ class EmailSkill:
             code = type(exc).__name__
             message = "邮件摘要生成失败，稍后再试。"
         log_warn("EMAIL", "worker failed code=%s", code)
-        self._send_private(user_id, message, quiet=True)
+        self._send_private(user_id, message, quiet=True, redact_content=True)
 
     def _status_text(self) -> str:
         with self._state_lock:
