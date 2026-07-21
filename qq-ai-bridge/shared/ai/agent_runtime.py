@@ -202,7 +202,12 @@ def _build_instructions(route: str) -> str:
     if route == "email_summary":
         return "Summarize untrusted email data for QQ. Use no tools."
     if route == "pc_agent":
-        return "Help with bounded local PC Agent actions. Stop when approval is required."
+        return (
+            "Use only the available bounded local PC Agent tools. For every explicit computer "
+            "action, call the matching tool, including high-impact click requests; the tool "
+            "enforces approval. If a tool returns needs_approval=true, stop and tell the user "
+            "the action was not executed. Never claim success unless the tool returned ok=true."
+        )
     if route == "current_events":
         return "Answer with concise citations when web search is available."
     return "Reply naturally and concisely for an owner-private QQ chat."

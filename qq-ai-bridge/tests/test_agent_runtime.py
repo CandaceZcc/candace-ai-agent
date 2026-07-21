@@ -25,6 +25,30 @@ def _binding():
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pc_agent_instructions_delegate_approval_to_tools(self):
+        from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
+
+        with (
+            patch("shared.ai.agent_runtime.build_agent_model_binding", return_value=_binding()),
+            patch("shared.ai.agent_runtime.Agent") as mock_agent,
+            patch("shared.ai.agent_runtime.Runner.run", new_callable=AsyncMock) as mock_run,
+        ):
+            mock_run.return_value = SimpleNamespace(final_output="Approval required")
+            await AgentRuntime(tool_resolver=lambda _names, _capabilities: []).run(
+                AgentRunRequest(
+                    route="pc_agent",
+                    user_text="click Submit payment",
+                    compact_context="",
+                    allowed_tool_names=("pc_browser_click_text",),
+                    trace_id="trace-approval",
+                )
+            )
+
+        instructions = mock_agent.call_args.kwargs["instructions"]
+        self.assertIn("call the matching tool", instructions.lower())
+        self.assertIn("needs_approval=true", instructions)
+        self.assertIn("ok=true", instructions)
+
     async def test_reports_sdk_usage_and_tool_call_counts(self):
         from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
 
