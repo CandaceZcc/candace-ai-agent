@@ -352,28 +352,32 @@ EMAIL_IMAP_PORT = min(65535, max(1, _get_int_env("EMAIL_IMAP_PORT", 993)))
 EMAIL_IMAP_USERNAME = os.getenv("EMAIL_IMAP_USERNAME", "").strip()
 EMAIL_IMAP_PASSWORD = os.getenv("EMAIL_IMAP_PASSWORD", "").strip()
 EMAIL_IMAP_MAILBOX = os.getenv("EMAIL_IMAP_MAILBOX", "INBOX").strip() or "INBOX"
-_EMAIL_DAILY_DIGEST_REQUESTED = _get_bool_env("EMAIL_DAILY_DIGEST_ENABLED", False)
-EMAIL_DAILY_DIGEST_TIME = os.getenv("EMAIL_DAILY_DIGEST_TIME", "20:30").strip() or "20:30"
-_EMAIL_DAILY_DIGEST_TIME_VALID = bool(
-    re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", EMAIL_DAILY_DIGEST_TIME)
+
+
+def _parse_email_digest_times(value: str) -> tuple[str, ...]:
+    parts = [part.strip() for part in str(value or "").split(",") if part.strip()]
+    if not parts or any(not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", part) for part in parts):
+        return ()
+    return tuple(sorted(set(parts)))
+
+
+EMAIL_MONITOR_ENABLED = _get_bool_env("EMAIL_MONITOR_ENABLED", False)
+EMAIL_IMMEDIATE_PUSH_ENABLED = _get_bool_env("EMAIL_IMMEDIATE_PUSH_ENABLED", False)
+_EMAIL_DIGEST_PUSH_REQUESTED = _get_bool_env("EMAIL_DIGEST_PUSH_ENABLED", False)
+EMAIL_SHADOW_MODE = _get_bool_env("EMAIL_SHADOW_MODE", True)
+EMAIL_POLL_INTERVAL_SECONDS = min(
+    3600, max(60, _get_int_env("EMAIL_POLL_INTERVAL_SECONDS", 300))
 )
-EMAIL_DAILY_DIGEST_ENABLED = (
-    _EMAIL_DAILY_DIGEST_REQUESTED and _EMAIL_DAILY_DIGEST_TIME_VALID
+_EMAIL_DIGEST_TIMES_RAW = os.getenv("EMAIL_DIGEST_TIMES", "12:30,20:30")
+EMAIL_DIGEST_TIMES = _parse_email_digest_times(_EMAIL_DIGEST_TIMES_RAW)
+EMAIL_DIGEST_PUSH_ENABLED = _EMAIL_DIGEST_PUSH_REQUESTED and bool(EMAIL_DIGEST_TIMES)
+EMAIL_PROFILE_PATH = os.path.expanduser(
+    os.getenv("EMAIL_PROFILE_PATH", "~/.candace/email-agent/profile.json")
 )
-_EMAIL_WEEKLY_DIGEST_REQUESTED = _get_bool_env("EMAIL_WEEKLY_DIGEST_ENABLED", False)
-EMAIL_WEEKLY_DIGEST_DAY = os.getenv("EMAIL_WEEKLY_DIGEST_DAY", "sun").strip().lower() or "sun"
-_EMAIL_WEEKLY_DIGEST_DAY_VALID = EMAIL_WEEKLY_DIGEST_DAY in {
-    "mon", "tue", "wed", "thu", "fri", "sat", "sun"
-}
-EMAIL_WEEKLY_DIGEST_TIME = os.getenv("EMAIL_WEEKLY_DIGEST_TIME", "21:00").strip() or "21:00"
-_EMAIL_WEEKLY_DIGEST_TIME_VALID = bool(
-    re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", EMAIL_WEEKLY_DIGEST_TIME)
+EMAIL_FEEDBACK_PATH = os.path.expanduser(
+    os.getenv("EMAIL_FEEDBACK_PATH", "~/.candace/email-agent/learned-feedback.json")
 )
-EMAIL_WEEKLY_DIGEST_ENABLED = (
-    _EMAIL_WEEKLY_DIGEST_REQUESTED
-    and _EMAIL_WEEKLY_DIGEST_DAY_VALID
-    and _EMAIL_WEEKLY_DIGEST_TIME_VALID
-)
+EMAIL_AUTOMATION_STATE_PATH = os.path.join(BASE_DATA_DIR, "email", "automation-state.json")
 EMAIL_SUMMARY_MODEL = os.getenv("EMAIL_SUMMARY_MODEL", "").strip()
 EMAIL_MAX_RANGE_DAYS = min(366, max(1, _get_int_env("EMAIL_MAX_RANGE_DAYS", 31)))
 EMAIL_MAX_MESSAGES_PER_RUN = min(
@@ -537,17 +541,17 @@ def agent_config_summary() -> dict[str, object]:
 def validate_email_settings() -> list[str]:
     """Return email validation errors without credential values."""
     errors: list[str] = []
-    if EMAIL_AGENT_ENABLED:
+    if EMAIL_AGENT_ENABLED or EMAIL_MONITOR_ENABLED:
         _validate_required(EMAIL_IMAP_USERNAME, "EMAIL_IMAP_USERNAME", errors)
         _validate_required(EMAIL_IMAP_PASSWORD, "EMAIL_IMAP_PASSWORD", errors)
-    if (_EMAIL_DAILY_DIGEST_REQUESTED or _EMAIL_WEEKLY_DIGEST_REQUESTED) and OWNER_QQ <= 0:
-        errors.append("OWNER_QQ must be configured for scheduled email digests")
-    if _EMAIL_DAILY_DIGEST_REQUESTED and not _EMAIL_DAILY_DIGEST_TIME_VALID:
-        errors.append("EMAIL_DAILY_DIGEST_TIME must use HH:MM")
-    if _EMAIL_WEEKLY_DIGEST_REQUESTED and not _EMAIL_WEEKLY_DIGEST_DAY_VALID:
-        errors.append("EMAIL_WEEKLY_DIGEST_DAY must be mon, tue, wed, thu, fri, sat, or sun")
-    if _EMAIL_WEEKLY_DIGEST_REQUESTED and not _EMAIL_WEEKLY_DIGEST_TIME_VALID:
-        errors.append("EMAIL_WEEKLY_DIGEST_TIME must use HH:MM")
+    if (
+        EMAIL_MONITOR_ENABLED
+        or EMAIL_IMMEDIATE_PUSH_ENABLED
+        or _EMAIL_DIGEST_PUSH_REQUESTED
+    ) and OWNER_QQ <= 0:
+        errors.append("OWNER_QQ must be configured for email automation")
+    if _EMAIL_DIGEST_PUSH_REQUESTED and not EMAIL_DIGEST_TIMES:
+        errors.append("EMAIL_DIGEST_TIMES must contain comma-separated HH:MM values")
     return errors
 
 
@@ -561,14 +565,13 @@ def email_config_summary() -> dict[str, object]:
             "mailbox": EMAIL_IMAP_MAILBOX,
             "timeout_seconds": EMAIL_IMAP_TIMEOUT_SECONDS,
         },
-        "daily": {
-            "enabled": EMAIL_DAILY_DIGEST_ENABLED,
-            "time": EMAIL_DAILY_DIGEST_TIME,
-        },
-        "weekly": {
-            "enabled": EMAIL_WEEKLY_DIGEST_ENABLED,
-            "day": EMAIL_WEEKLY_DIGEST_DAY,
-            "time": EMAIL_WEEKLY_DIGEST_TIME,
+        "automation": {
+            "monitor_enabled": EMAIL_MONITOR_ENABLED,
+            "immediate_push_enabled": EMAIL_IMMEDIATE_PUSH_ENABLED,
+            "digest_push_enabled": EMAIL_DIGEST_PUSH_ENABLED,
+            "shadow_mode": EMAIL_SHADOW_MODE,
+            "poll_interval_seconds": EMAIL_POLL_INTERVAL_SECONDS,
+            "digest_times": list(EMAIL_DIGEST_TIMES),
         },
         "summary_model": EMAIL_SUMMARY_MODEL or "agent_default",
         "secrets": {

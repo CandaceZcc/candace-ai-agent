@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
@@ -40,6 +41,70 @@ class EmailEnvelope:
 
 
 @dataclass(frozen=True)
+class EmailFetchedMessage:
+    uid: int
+    envelope: EmailEnvelope
+
+    def __post_init__(self) -> None:
+        if self.uid <= 0:
+            raise ValueError("uid must be positive")
+
+
+EmailRuleEligibility = Literal[
+    "semantic_required",
+    "explicit_hard_ignore",
+    "deterministic_low_value",
+]
+
+
+@dataclass(frozen=True)
+class EmailRuleDecision:
+    initial_score: int
+    eligibility: EmailRuleEligibility
+    positive_signals: tuple[str, ...]
+    negative_signals: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.initial_score <= 100:
+            raise ValueError("initial_score must be between 0 and 100")
+        if self.eligibility not in {
+            "semantic_required",
+            "explicit_hard_ignore",
+            "deterministic_low_value",
+        }:
+            raise ValueError("invalid email rule eligibility")
+
+
+EmailUrgency = Literal["low", "medium", "high", "critical"]
+
+
+@dataclass(frozen=True)
+class EmailClassification:
+    alias: str
+    relevance_score: int
+    urgency: EmailUrgency
+    category: str
+    concise_title: str
+    summary: str
+    action: str
+    deadline: datetime | None
+    reason: str
+    confidence: float
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"E-\d{4,}", self.alias):
+            raise ValueError("alias must use E-NNNN format")
+        if not 0 <= self.relevance_score <= 100:
+            raise ValueError("relevance_score must be between 0 and 100")
+        if self.urgency not in {"low", "medium", "high", "critical"}:
+            raise ValueError("invalid email urgency")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence must be between 0 and 1")
+        if not self.category.strip() or not self.concise_title.strip() or not self.summary.strip():
+            raise ValueError("classification text fields must not be empty")
+
+
+@dataclass(frozen=True)
 class EmailDigest:
     period_label: str
     message_count: int
@@ -61,7 +126,10 @@ class EmailCommand:
 __all__ = [
     "EmailAttachment",
     "EmailCommand",
+    "EmailClassification",
     "EmailDigest",
     "EmailEnvelope",
+    "EmailFetchedMessage",
     "EmailQuery",
+    "EmailRuleDecision",
 ]

@@ -48,8 +48,19 @@ class EmailConfigTests(unittest.TestCase):
         settings = reload_settings_with({})
 
         self.assertFalse(settings.EMAIL_AGENT_ENABLED)
-        self.assertFalse(settings.EMAIL_DAILY_DIGEST_ENABLED)
-        self.assertFalse(settings.EMAIL_WEEKLY_DIGEST_ENABLED)
+        self.assertFalse(settings.EMAIL_MONITOR_ENABLED)
+        self.assertFalse(settings.EMAIL_IMMEDIATE_PUSH_ENABLED)
+        self.assertFalse(settings.EMAIL_DIGEST_PUSH_ENABLED)
+        self.assertTrue(settings.EMAIL_SHADOW_MODE)
+
+    def test_email_automation_defaults_are_safe(self):
+        settings = reload_settings_with({})
+
+        self.assertEqual(settings.EMAIL_POLL_INTERVAL_SECONDS, 300)
+        self.assertEqual(settings.EMAIL_DIGEST_TIMES, ("12:30", "20:30"))
+        self.assertTrue(settings.EMAIL_PROFILE_PATH.endswith("profile.json"))
+        self.assertTrue(settings.EMAIL_FEEDBACK_PATH.endswith("learned-feedback.json"))
+        self.assertTrue(settings.EMAIL_AUTOMATION_STATE_PATH.endswith("automation-state.json"))
 
     def test_default_imap_endpoint_is_tls_port_993(self):
         settings = reload_settings_with({})
@@ -64,41 +75,46 @@ class EmailConfigTests(unittest.TestCase):
         self.assertIn("EMAIL_IMAP_USERNAME", errors)
         self.assertIn("EMAIL_IMAP_PASSWORD", errors)
 
-    def test_scheduled_digest_requires_owner_qq(self):
+    def test_email_automation_requires_owner_qq(self):
         settings = reload_settings_with(
             {
-                "EMAIL_DAILY_DIGEST_ENABLED": "true",
+                "EMAIL_MONITOR_ENABLED": "true",
                 "OWNER_QQ": "0",
             }
         )
 
         self.assertIn("OWNER_QQ", "\n".join(settings.validate_email_settings()))
 
-    def test_invalid_daily_time_disables_email_schedule_only(self):
+    def test_invalid_digest_times_disable_digest_push_only(self):
         settings = reload_settings_with(
             {
                 "EMAIL_AGENT_ENABLED": "true",
                 "EMAIL_IMAP_USERNAME": "student@example.invalid",
                 "EMAIL_IMAP_PASSWORD": "test-password",
-                "EMAIL_DAILY_DIGEST_ENABLED": "true",
-                "EMAIL_DAILY_DIGEST_TIME": "25:90",
+                "EMAIL_DIGEST_PUSH_ENABLED": "true",
+                "EMAIL_DIGEST_TIMES": "12:30,25:90",
             }
         )
 
         self.assertTrue(settings.EMAIL_AGENT_ENABLED)
-        self.assertFalse(settings.EMAIL_DAILY_DIGEST_ENABLED)
-        self.assertIn("EMAIL_DAILY_DIGEST_TIME", "\n".join(settings.validate_email_settings()))
+        self.assertFalse(settings.EMAIL_DIGEST_PUSH_ENABLED)
+        self.assertIn("EMAIL_DIGEST_TIMES", "\n".join(settings.validate_email_settings()))
 
-    def test_invalid_weekday_is_rejected(self):
+    def test_digest_times_are_normalized_and_deduplicated(self):
         settings = reload_settings_with(
             {
-                "EMAIL_WEEKLY_DIGEST_ENABLED": "true",
-                "EMAIL_WEEKLY_DIGEST_DAY": "someday",
+                "EMAIL_DIGEST_TIMES": "20:30, 12:30,20:30",
             }
         )
 
-        self.assertFalse(settings.EMAIL_WEEKLY_DIGEST_ENABLED)
-        self.assertIn("EMAIL_WEEKLY_DIGEST_DAY", "\n".join(settings.validate_email_settings()))
+        self.assertEqual(settings.EMAIL_DIGEST_TIMES, ("12:30", "20:30"))
+
+    def test_poll_interval_has_safe_bounds(self):
+        settings = reload_settings_with({"EMAIL_POLL_INTERVAL_SECONDS": "99999"})
+        self.assertEqual(settings.EMAIL_POLL_INTERVAL_SECONDS, 3600)
+
+        settings = reload_settings_with({"EMAIL_POLL_INTERVAL_SECONDS": "1"})
+        self.assertEqual(settings.EMAIL_POLL_INTERVAL_SECONDS, 60)
 
     def test_limits_have_safe_caps(self):
         settings = reload_settings_with(
@@ -130,6 +146,20 @@ class EmailConfigTests(unittest.TestCase):
         self.assertNotIn("super-secret-password", summary_text)
         self.assertEqual(settings.email_config_summary()["secrets"]["username"], "set")
         self.assertEqual(settings.email_config_summary()["secrets"]["password"], "set")
+
+    def test_config_summary_exposes_only_safe_automation_state(self):
+        settings = reload_settings_with(
+            {
+                "EMAIL_MONITOR_ENABLED": "true",
+                "EMAIL_SHADOW_MODE": "true",
+                "EMAIL_DIGEST_TIMES": "12:30,20:30",
+            }
+        )
+
+        summary = settings.email_config_summary()
+        self.assertTrue(summary["automation"]["monitor_enabled"])
+        self.assertTrue(summary["automation"]["shadow_mode"])
+        self.assertEqual(summary["automation"]["digest_times"], ["12:30", "20:30"])
 
 
 if __name__ == "__main__":
