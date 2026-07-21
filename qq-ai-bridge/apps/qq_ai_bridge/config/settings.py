@@ -1,6 +1,7 @@
 """Runtime settings for the QQ AI bridge."""
 
 import os
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -345,6 +346,50 @@ AGENT_RUN_TIMEOUT_SECONDS = min(300, max(1, _get_int_env("AGENT_RUN_TIMEOUT_SECO
 AGENT_TRACE_EXPORT_ENABLED = _get_bool_env("AGENT_TRACE_EXPORT_ENABLED", False)
 AGENT_FALLBACK_TO_LEGACY = _get_bool_env("AGENT_FALLBACK_TO_LEGACY", True)
 
+EMAIL_AGENT_ENABLED = _get_bool_env("EMAIL_AGENT_ENABLED", False)
+EMAIL_IMAP_HOST = os.getenv("EMAIL_IMAP_HOST", "imap.exmail.qq.com").strip() or "imap.exmail.qq.com"
+EMAIL_IMAP_PORT = min(65535, max(1, _get_int_env("EMAIL_IMAP_PORT", 993)))
+EMAIL_IMAP_USERNAME = os.getenv("EMAIL_IMAP_USERNAME", "").strip()
+EMAIL_IMAP_PASSWORD = os.getenv("EMAIL_IMAP_PASSWORD", "").strip()
+EMAIL_IMAP_MAILBOX = os.getenv("EMAIL_IMAP_MAILBOX", "INBOX").strip() or "INBOX"
+_EMAIL_DAILY_DIGEST_REQUESTED = _get_bool_env("EMAIL_DAILY_DIGEST_ENABLED", False)
+EMAIL_DAILY_DIGEST_TIME = os.getenv("EMAIL_DAILY_DIGEST_TIME", "20:30").strip() or "20:30"
+_EMAIL_DAILY_DIGEST_TIME_VALID = bool(
+    re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", EMAIL_DAILY_DIGEST_TIME)
+)
+EMAIL_DAILY_DIGEST_ENABLED = (
+    _EMAIL_DAILY_DIGEST_REQUESTED and _EMAIL_DAILY_DIGEST_TIME_VALID
+)
+_EMAIL_WEEKLY_DIGEST_REQUESTED = _get_bool_env("EMAIL_WEEKLY_DIGEST_ENABLED", False)
+EMAIL_WEEKLY_DIGEST_DAY = os.getenv("EMAIL_WEEKLY_DIGEST_DAY", "sun").strip().lower() or "sun"
+_EMAIL_WEEKLY_DIGEST_DAY_VALID = EMAIL_WEEKLY_DIGEST_DAY in {
+    "mon", "tue", "wed", "thu", "fri", "sat", "sun"
+}
+EMAIL_WEEKLY_DIGEST_TIME = os.getenv("EMAIL_WEEKLY_DIGEST_TIME", "21:00").strip() or "21:00"
+_EMAIL_WEEKLY_DIGEST_TIME_VALID = bool(
+    re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", EMAIL_WEEKLY_DIGEST_TIME)
+)
+EMAIL_WEEKLY_DIGEST_ENABLED = (
+    _EMAIL_WEEKLY_DIGEST_REQUESTED
+    and _EMAIL_WEEKLY_DIGEST_DAY_VALID
+    and _EMAIL_WEEKLY_DIGEST_TIME_VALID
+)
+EMAIL_SUMMARY_MODEL = os.getenv("EMAIL_SUMMARY_MODEL", "").strip()
+EMAIL_MAX_RANGE_DAYS = min(366, max(1, _get_int_env("EMAIL_MAX_RANGE_DAYS", 31)))
+EMAIL_MAX_MESSAGES_PER_RUN = min(
+    500, max(1, _get_int_env("EMAIL_MAX_MESSAGES_PER_RUN", 100))
+)
+EMAIL_MAX_BODY_CHARS = min(100000, max(1000, _get_int_env("EMAIL_MAX_BODY_CHARS", 20000)))
+EMAIL_MAX_TOTAL_CHARS = min(
+    1000000, max(1000, _get_int_env("EMAIL_MAX_TOTAL_CHARS", 200000))
+)
+EMAIL_ARCHIVE_RETENTION_DAYS = min(
+    3650, max(1, _get_int_env("EMAIL_ARCHIVE_RETENTION_DAYS", 30))
+)
+EMAIL_IMAP_TIMEOUT_SECONDS = min(
+    120, max(1, _get_int_env("EMAIL_IMAP_TIMEOUT_SECONDS", 30))
+)
+
 
 def _secret_state(value: str) -> str:
     return "set" if str(value or "").strip() else "missing"
@@ -486,6 +531,51 @@ def agent_config_summary() -> dict[str, object]:
         "trace_export_enabled": AGENT_TRACE_EXPORT_ENABLED,
         "fallback_to_legacy": AGENT_FALLBACK_TO_LEGACY,
         "validation_errors": validate_agent_settings(),
+    }
+
+
+def validate_email_settings() -> list[str]:
+    """Return email validation errors without credential values."""
+    errors: list[str] = []
+    if EMAIL_AGENT_ENABLED:
+        _validate_required(EMAIL_IMAP_USERNAME, "EMAIL_IMAP_USERNAME", errors)
+        _validate_required(EMAIL_IMAP_PASSWORD, "EMAIL_IMAP_PASSWORD", errors)
+    if (_EMAIL_DAILY_DIGEST_REQUESTED or _EMAIL_WEEKLY_DIGEST_REQUESTED) and OWNER_QQ <= 0:
+        errors.append("OWNER_QQ must be configured for scheduled email digests")
+    if _EMAIL_DAILY_DIGEST_REQUESTED and not _EMAIL_DAILY_DIGEST_TIME_VALID:
+        errors.append("EMAIL_DAILY_DIGEST_TIME must use HH:MM")
+    if _EMAIL_WEEKLY_DIGEST_REQUESTED and not _EMAIL_WEEKLY_DIGEST_DAY_VALID:
+        errors.append("EMAIL_WEEKLY_DIGEST_DAY must be mon, tue, wed, thu, fri, sat, or sun")
+    if _EMAIL_WEEKLY_DIGEST_REQUESTED and not _EMAIL_WEEKLY_DIGEST_TIME_VALID:
+        errors.append("EMAIL_WEEKLY_DIGEST_TIME must use HH:MM")
+    return errors
+
+
+def email_config_summary() -> dict[str, object]:
+    """Return redacted email feature state for diagnostics."""
+    return {
+        "enabled": EMAIL_AGENT_ENABLED,
+        "imap": {
+            "host": EMAIL_IMAP_HOST,
+            "port": EMAIL_IMAP_PORT,
+            "mailbox": EMAIL_IMAP_MAILBOX,
+            "timeout_seconds": EMAIL_IMAP_TIMEOUT_SECONDS,
+        },
+        "daily": {
+            "enabled": EMAIL_DAILY_DIGEST_ENABLED,
+            "time": EMAIL_DAILY_DIGEST_TIME,
+        },
+        "weekly": {
+            "enabled": EMAIL_WEEKLY_DIGEST_ENABLED,
+            "day": EMAIL_WEEKLY_DIGEST_DAY,
+            "time": EMAIL_WEEKLY_DIGEST_TIME,
+        },
+        "summary_model": EMAIL_SUMMARY_MODEL or "agent_default",
+        "secrets": {
+            "username": _secret_state(EMAIL_IMAP_USERNAME),
+            "password": _secret_state(EMAIL_IMAP_PASSWORD),
+        },
+        "validation_errors": validate_email_settings(),
     }
 
 DRAW_API_KEY = (
