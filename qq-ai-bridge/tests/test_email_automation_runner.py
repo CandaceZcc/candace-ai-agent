@@ -102,6 +102,23 @@ class EmailAutomationRunnerTests(unittest.TestCase):
         self.assertEqual(service.poll_calls, [NOW])
         sleep.assert_called_once_with(300)
 
+    def test_run_forever_retries_after_service_factory_failure(self):
+        service = FakeService()
+        service_factory = MagicMock(side_effect=(RuntimeError("invalid state"), service))
+        sleep = MagicMock(side_effect=(None, KeyboardInterrupt))
+        runner = self.runner(
+            service,
+            service_factory=service_factory,
+            sleep=sleep,
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            runner.run_forever()
+
+        self.assertEqual(service.poll_calls, [NOW])
+        self.assertEqual(service_factory.call_count, 2)
+        self.assertEqual(sleep.call_args_list[0].args, (300,))
+
     def test_disabled_start_does_not_create_thread(self):
         from apps.qq_ai_bridge.services.email_automation_runner import start_email_automation
 

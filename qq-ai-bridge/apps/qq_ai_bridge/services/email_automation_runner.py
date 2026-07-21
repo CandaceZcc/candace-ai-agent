@@ -68,8 +68,19 @@ class EmailAutomationRunner:
         self._run_async = run_async
 
     def run_forever(self) -> None:
-        service = self._service_factory()
+        service = None
         while True:
+            if service is None:
+                try:
+                    service = self._service_factory()
+                except Exception as exc:
+                    log_warn(
+                        "EMAIL_AUTOMATION",
+                        "service setup failed type=%s",
+                        type(exc).__name__,
+                    )
+                    self._sleep(self._poll_interval_seconds)
+                    continue
             self.run_once(service, self._now())
             self._sleep(self._poll_interval_seconds)
 

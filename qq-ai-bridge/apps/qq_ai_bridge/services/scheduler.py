@@ -59,7 +59,14 @@ def start_scheduler() -> None:
         ensure_schedule_file(SCHEDULE_PATH)
         worker = threading.Thread(target=_scheduler_loop, name="qq-reminder-scheduler", daemon=True)
         worker.start()
-        start_email_automation()
+        try:
+            start_email_automation()
+        except Exception as exc:
+            log_warn(
+                "EMAIL_AUTOMATION",
+                "startup failed type=%s",
+                type(exc).__name__,
+            )
         print(
             f"[SCHEDULER] started tick_seconds={SCHEDULER_TICK_SECONDS}"
             f" owner_qq={OWNER_QQ}"

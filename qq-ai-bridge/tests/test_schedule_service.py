@@ -60,6 +60,24 @@ class ScheduleServiceTests(unittest.TestCase):
         reminder_thread.start.assert_called_once_with()
         start_email.assert_called_once_with()
 
+    def test_email_runner_start_failure_does_not_break_reminder_scheduler(self):
+        from apps.qq_ai_bridge.services import scheduler
+
+        reminder_thread = MagicMock()
+        with (
+            patch.object(scheduler, "_STARTED", False),
+            patch.object(scheduler, "ensure_schedule_file"),
+            patch.object(scheduler.threading, "Thread", return_value=reminder_thread),
+            patch.object(
+                scheduler,
+                "start_email_automation",
+                side_effect=RuntimeError("synthetic email startup failure"),
+            ),
+        ):
+            scheduler.start_scheduler()
+
+        reminder_thread.start.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()
