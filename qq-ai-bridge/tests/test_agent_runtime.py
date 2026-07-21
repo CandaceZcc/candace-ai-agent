@@ -25,6 +25,49 @@ def _binding():
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_email_summary_rejects_any_requested_tools(self):
+        from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
+
+        with patch("shared.ai.agent_runtime.Runner.run", new_callable=AsyncMock) as mock_run:
+            result = await AgentRuntime().run(
+                AgentRunRequest(
+                    route="email_summary",
+                    user_text="untrusted email",
+                    compact_context="",
+                    allowed_tool_names=("web_search",),
+                    trace_id=None,
+                )
+            )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failure_code, "email_tools_forbidden")
+        mock_run.assert_not_awaited()
+
+    async def test_email_summary_never_uses_legacy_chat_fallback(self):
+        from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
+
+        legacy_call = MagicMock(return_value="legacy summary")
+        with (
+            patch("shared.ai.agent_runtime.build_agent_model_binding", return_value=_binding()),
+            patch("shared.ai.agent_runtime.Agent"),
+            patch("shared.ai.agent_runtime.Runner.run", new_callable=AsyncMock) as mock_run,
+            patch("shared.ai.agent_runtime.AGENT_FALLBACK_TO_LEGACY", True),
+        ):
+            mock_run.side_effect = RuntimeError("provider down")
+            result = await AgentRuntime(legacy_call=legacy_call).run(
+                AgentRunRequest(
+                    route="email_summary",
+                    user_text="untrusted email",
+                    compact_context="",
+                    allowed_tool_names=(),
+                    trace_id=None,
+                )
+            )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failure_code, "provider_error")
+        legacy_call.assert_not_called()
+
     async def test_pc_agent_instructions_delegate_approval_to_tools(self):
         from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
 

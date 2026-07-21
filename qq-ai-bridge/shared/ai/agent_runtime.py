@@ -161,7 +161,12 @@ class AgentRuntime:
         model: str,
         exc: Exception,
     ) -> AgentRunResult | None:
-        if not AGENT_FALLBACK_TO_LEGACY or request.allowed_tool_names or not self._legacy_call:
+        if (
+            request.route == "email_summary"
+            or not AGENT_FALLBACK_TO_LEGACY
+            or request.allowed_tool_names
+            or not self._legacy_call
+        ):
             return None
         try:
             fallback_text = self._legacy_call(
@@ -190,9 +195,7 @@ def _build_model_settings(responses_capable: bool) -> ModelSettings:
     if not responses_capable:
         return ModelSettings()
     reasoning = (
-        Reasoning(effort=AGENT_MODEL_REASONING_EFFORT)
-        if AGENT_MODEL_REASONING_EFFORT
-        else None
+        Reasoning(effort=AGENT_MODEL_REASONING_EFFORT) if AGENT_MODEL_REASONING_EFFORT else None
     )
     store = False if AGENT_DISABLE_RESPONSE_STORAGE else None
     return ModelSettings(reasoning=reasoning, store=store)
