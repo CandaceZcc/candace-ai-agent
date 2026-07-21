@@ -1,4 +1,6 @@
+import asyncio
 import sys
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -6,7 +8,6 @@ from unittest.mock import patch
 sys.path.insert(0, "qq-ai-bridge")
 
 from apps.qq_ai_bridge.services import private_chat_service
-from apps.qq_ai_bridge.services.private_ledger_service import _PRIVATE_LEDGER_ARTIFACTS
 from apps.qq_ai_bridge.services.private_chat_service import (
     _PRIVATE_CHAT_STATES,
     _cleanup_private_chat_states,
@@ -14,9 +15,26 @@ from apps.qq_ai_bridge.services.private_chat_service import (
     _handle_private_emoji_request,
     enqueue_private_text,
 )
+from apps.qq_ai_bridge.services.private_ledger_service import _PRIVATE_LEDGER_ARTIFACTS
 
 
 class PrivateChatServiceTests(unittest.TestCase):
+    def test_agent_runtime_sync_keeps_loop_alive_for_delayed_cleanup(self):
+        cleanup_finished = threading.Event()
+
+        async def start_cleanup():
+            async def cleanup():
+                await asyncio.sleep(0.02)
+                cleanup_finished.set()
+
+            asyncio.create_task(cleanup())
+            return "started"
+
+        self.assertEqual(private_chat_service._run_agent_runtime_sync(start_cleanup()), "started")
+        private_chat_service._run_agent_runtime_sync(asyncio.sleep(0.05))
+
+        self.assertTrue(cleanup_finished.is_set())
+
     def test_cleanup_private_chat_states_evicts_only_expired_idle_state(self):
         _PRIVATE_CHAT_STATES.clear()
         expired = _get_private_chat_state(101)

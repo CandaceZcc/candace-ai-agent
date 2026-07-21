@@ -34,16 +34,16 @@ from apps.qq_ai_bridge.services.emoji_service import (
     detect_emoji_request_count,
     extract_emoji_name,
     infer_reaction_preferred_order,
+    is_emoji_request,
     is_face_fallback_request,
     is_message_reaction_request,
-    is_emoji_request,
     pick_face_cq,
 )
+from apps.qq_ai_bridge.services.private_ledger_service import maybe_handle_private_ledger_command
 from apps.qq_ai_bridge.services.prompt_service import (
     build_private_ai_prompt,
     prepare_private_ai_prompt,
 )
-from apps.qq_ai_bridge.services.private_ledger_service import maybe_handle_private_ledger_command
 from apps.qq_ai_bridge.services.response_action import (
     ActionKind,
     ResponseAction,
@@ -55,6 +55,9 @@ from apps.qq_ai_bridge.services.runtime_resources import submit_chat_task
 DEBOUNCE_MS = PRIVATE_DEBOUNCE_MS
 PRIVATE_REACTION_MIRROR_FACE = False
 AGENT_COMPACT_CONTEXT_MAX_CHARS = 4000
+_AGENT_RUNTIME_LOOP_LOCK = threading.Lock()
+_AGENT_RUNTIME_LOOP: asyncio.AbstractEventLoop | None = None
+_AGENT_RUNTIME_LOOP_THREAD: threading.Thread | None = None
 
 
 @dataclass
@@ -254,25 +257,35 @@ def _build_agent_compact_context(prompt_payload: dict) -> str:
 
 
 def _run_agent_runtime_sync(coro):
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
+    loop = _get_agent_runtime_loop()
+    return asyncio.run_coroutine_threadsafe(coro, loop).result()
 
-    result_holder = {}
 
-    def run_in_thread() -> None:
-        try:
-            result_holder["result"] = asyncio.run(coro)
-        except BaseException as exc:
-            result_holder["error"] = exc
+def _get_agent_runtime_loop() -> asyncio.AbstractEventLoop:
+    global _AGENT_RUNTIME_LOOP, _AGENT_RUNTIME_LOOP_THREAD
 
-    thread = threading.Thread(target=run_in_thread, name="agent-runtime-sync", daemon=True)
-    thread.start()
-    thread.join()
-    if "error" in result_holder:
-        raise result_holder["error"]
-    return result_holder.get("result")
+    with _AGENT_RUNTIME_LOOP_LOCK:
+        if (
+            _AGENT_RUNTIME_LOOP is not None
+            and _AGENT_RUNTIME_LOOP_THREAD is not None
+            and _AGENT_RUNTIME_LOOP_THREAD.is_alive()
+        ):
+            return _AGENT_RUNTIME_LOOP
+
+        loop = asyncio.new_event_loop()
+        ready = threading.Event()
+
+        def run_loop() -> None:
+            asyncio.set_event_loop(loop)
+            ready.set()
+            loop.run_forever()
+
+        thread = threading.Thread(target=run_loop, name="agent-runtime-loop", daemon=True)
+        thread.start()
+        ready.wait()
+        _AGENT_RUNTIME_LOOP = loop
+        _AGENT_RUNTIME_LOOP_THREAD = thread
+        return loop
 
 
 # enqueue_private_text：私聊文本入队合并
