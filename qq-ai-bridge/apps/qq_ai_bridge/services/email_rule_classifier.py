@@ -81,12 +81,13 @@ class EmailRuleClassifier:
         is_routine_event = _contains_any(combined, _ROUTINE_EVENT_TERMS)
         is_mass_mail = _contains_any(combined, _MASS_MAIL_TERMS)
         recipients = {str(value).strip().lower() for value in envelope.recipients}
+        scope_recipients = recipients - {self._owner_address}
         is_broad_recipient = len(recipients) > 3 or any(
             re.search(
                 r"(?:^|[-_.])(all|students|staff|faculty|announce|newsletter)(?:[-_.@]|$)",
                 value,
             )
-            for value in recipients
+            for value in scope_recipients
         )
 
         if _matches_explicit_ignore(sender_address, sender_domain, combined, profile):
@@ -187,9 +188,12 @@ class EmailRuleClassifier:
             profile=profile,
         )
         bounded_score = max(0, min(100, score))
+        has_strong_negative = bool(
+            is_generic_recruiting or is_routine_event or matched_negative
+        )
         eligibility = (
             "deterministic_low_value"
-            if len(negative) >= 2 and not positive and bounded_score <= 25
+            if has_strong_negative and not positive and bounded_score <= 25
             else "semantic_required"
         )
         return EmailRuleDecision(

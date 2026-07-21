@@ -189,6 +189,11 @@ Only an explicit owner hard-ignore bypasses all semantic analysis. A
 deterministic low-value decision requires both strong negative evidence and no
 positive owner signal.
 
+A broad recipient, mailing-list marker, or bulk header is only weak evidence.
+Bulk school mail still reaches semantic classification unless its subject or
+content also carries a strong low-value signal such as generic recruiting or a
+routine activity notice.
+
 ## Model Classification
 
 Eligible candidates are classified in bounded batches by `gpt-5.6-terra` with

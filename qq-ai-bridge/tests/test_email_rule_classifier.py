@@ -106,17 +106,17 @@ class EmailRuleClassifierTests(unittest.TestCase):
 
         self.assertIn("course_code", decision.positive_signals)
 
-    def test_broad_recipient_scope_is_a_negative_signal(self):
+    def test_broad_recipient_scope_is_a_weak_signal_that_still_reaches_model(self):
         decision = self.classifier.classify(
             envelope(
-                subject="Invitation to annual gathering",
+                subject="Faculty information update",
                 recipients=("all-students@school.example.invalid",),
             ),
             profile(),
         )
 
         self.assertIn("broad_recipient", decision.negative_signals)
-        self.assertEqual(decision.eligibility, "deterministic_low_value")
+        self.assertEqual(decision.eligibility, "semantic_required")
 
     def test_cohort_and_interest_terms_raise_relevance(self):
         decision = self.classifier.classify(

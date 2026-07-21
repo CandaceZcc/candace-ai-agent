@@ -24,7 +24,18 @@ class EmailPreferenceStoreTests(unittest.TestCase):
     def test_default_profile_contains_approved_interests(self):
         profile = self.store.load()
 
-        for term in ("computer science", "ai", "robotics", "embedded", "year 3", "2024级"):
+        for term in (
+            "computer science",
+            "ai",
+            "deep learning",
+            "nvidia",
+            "fintech",
+            "robotics",
+            "embedded",
+            "fpga",
+            "year 3",
+            "2024级",
+        ):
             self.assertIn(term, profile.interest_terms + profile.cohort_terms)
         self.assertEqual(profile.profile_version, 1)
 

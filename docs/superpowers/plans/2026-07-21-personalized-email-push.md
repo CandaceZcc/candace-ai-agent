@@ -225,7 +225,9 @@ Normalize case and whitespace, inspect sender display/address, recipients, subje
 and a bounded body prefix. Return `EmailRuleDecision` with `initial_score`,
 `eligibility`, positive signals, and negative signals. Only explicit owner hard-ignore
 rules can return `explicit_hard_ignore`; generic low-value requires strong negative
-evidence and no positive evidence.
+evidence and no positive evidence. Recipient breadth or a bulk marker alone remains
+`semantic_required`; it becomes deterministic low-value only with a strong content
+signal such as generic recruiting or a routine activity notice.
 
 - [ ] **Step 4: Run tests and commit**
 
