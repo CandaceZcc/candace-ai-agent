@@ -85,6 +85,39 @@ class EmailRuleClassifierTests(unittest.TestCase):
         self.assertNotIn("personal_sender", school_reply.positive_signals)
         self.assertNotIn("personal_sender", external_reply.positive_signals)
 
+    def test_reply_chain_inside_body_is_a_positive_signal(self):
+        decision = self.classifier.classify(
+            envelope(
+                subject="Exam arrangement",
+                body="Please confirm.\nFrom: Student\nEarlier thread content",
+                sender="Teacher <teacher@school.example.invalid>",
+            ),
+            profile(),
+        )
+
+        self.assertIn("reply_thread", decision.positive_signals)
+        self.assertEqual(decision.eligibility, "semantic_required")
+
+    def test_course_code_in_subject_is_a_positive_signal(self):
+        decision = self.classifier.classify(
+            envelope(subject="CST2040 tutorial arrangement"),
+            profile(),
+        )
+
+        self.assertIn("course_code", decision.positive_signals)
+
+    def test_broad_recipient_scope_is_a_negative_signal(self):
+        decision = self.classifier.classify(
+            envelope(
+                subject="Invitation to annual gathering",
+                recipients=("all-students@school.example.invalid",),
+            ),
+            profile(),
+        )
+
+        self.assertIn("broad_recipient", decision.negative_signals)
+        self.assertEqual(decision.eligibility, "deterministic_low_value")
+
     def test_cohort_and_interest_terms_raise_relevance(self):
         decision = self.classifier.classify(
             envelope(subject="Year 3 CST robotics research opportunity"),
@@ -159,6 +192,20 @@ class EmailRuleClassifierTests(unittest.TestCase):
         self.assertEqual(decision.eligibility, "deterministic_low_value")
         self.assertIn("routine_event", decision.negative_signals)
         self.assertIn("mass_mail", decision.negative_signals)
+
+    def test_mass_mail_signal_alone_still_requires_semantic_review(self):
+        decision = self.classifier.classify(
+            envelope(
+                subject="Faculty opportunity announcement",
+                body="Dear students, this message was sent to the all students mailing list.",
+                recipients=("all-students@school.example.invalid",),
+            ),
+            profile(),
+        )
+
+        self.assertEqual(decision.eligibility, "semantic_required")
+        self.assertEqual(decision.positive_signals, ())
+        self.assertEqual(decision.negative_signals, ("mass_mail",))
 
     def test_explicit_ignored_sender_is_a_hard_ignore(self):
         decision = self.classifier.classify(

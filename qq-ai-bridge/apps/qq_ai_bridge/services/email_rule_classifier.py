@@ -30,9 +30,11 @@ _RESEARCH_COMPETITION_TERMS = (
     "competition",
     "contest",
     "hackathon",
+    "challenge",
     "科研",
     "竞赛",
     "比赛",
+    "大赛",
 )
 _GENERIC_RECRUITING_TERMS = (
     "campus recruitment",
@@ -47,6 +49,7 @@ _ROUTINE_EVENT_TERMS = (
     "weekly campus activity",
     "activity newsletter",
     "event newsletter",
+    "annual gathering",
     "校园活动周报",
     "例行活动通知",
 )
@@ -77,6 +80,14 @@ class EmailRuleClassifier:
         is_generic_recruiting = _contains_any(combined, _GENERIC_RECRUITING_TERMS)
         is_routine_event = _contains_any(combined, _ROUTINE_EVENT_TERMS)
         is_mass_mail = _contains_any(combined, _MASS_MAIL_TERMS)
+        recipients = {str(value).strip().lower() for value in envelope.recipients}
+        is_broad_recipient = len(recipients) > 3 or any(
+            re.search(
+                r"(?:^|[-_.])(all|students|staff|faculty|announce|newsletter)(?:[-_.@]|$)",
+                value,
+            )
+            for value in recipients
+        )
 
         if _matches_explicit_ignore(sender_address, sender_domain, combined, profile):
             return EmailRuleDecision(0, "explicit_hard_ignore", (), ("explicit_hard_ignore",))
@@ -90,11 +101,19 @@ class EmailRuleClassifier:
             positive.append("direct_reply")
             score += 25
 
-        recipients = {str(value).strip().lower() for value in envelope.recipients}
+        if re.search(r"(?:^| )(?:from:|发件人[:：]|on .+ wrote:)", body, re.IGNORECASE):
+            positive.append("reply_thread")
+            score += 20
+
         if (
             self._owner_address
             and self._owner_address in recipients
-            and not (is_generic_recruiting or is_routine_event or is_mass_mail)
+            and not (
+                is_generic_recruiting
+                or is_routine_event
+                or is_mass_mail
+                or is_broad_recipient
+            )
         ):
             positive.append("direct_recipient")
             score += 15
@@ -117,6 +136,11 @@ class EmailRuleClassifier:
             positive.extend(f"cohort:{term}" for term in matched_cohorts[:3])
             score += 20
             categories.add("cohort")
+
+        if re.search(r"(?<![a-z])[a-z]{2,5}\s*\d{3,4}(?!\d)", subject, re.IGNORECASE):
+            positive.append("course_code")
+            score += 15
+            categories.add("academic_action")
 
         if _contains_any(combined, _ACADEMIC_ACTION_TERMS):
             positive.append("academic_action")
@@ -144,6 +168,9 @@ class EmailRuleClassifier:
         if is_mass_mail:
             negative.append("mass_mail")
             score -= 20
+        if is_broad_recipient and not is_mass_mail:
+            negative.append("broad_recipient")
+            score -= 20
 
         matched_negative = _matched_terms(combined, profile.negative_terms)
         if matched_negative:
@@ -162,7 +189,7 @@ class EmailRuleClassifier:
         bounded_score = max(0, min(100, score))
         eligibility = (
             "deterministic_low_value"
-            if negative and not positive and bounded_score <= 25
+            if len(negative) >= 2 and not positive and bounded_score <= 25
             else "semantic_required"
         )
         return EmailRuleDecision(
