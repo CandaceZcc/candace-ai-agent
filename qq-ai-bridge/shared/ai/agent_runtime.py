@@ -22,6 +22,7 @@ from openai.types.shared import Reasoning
 
 from shared.ai.agent_provider import build_agent_model_binding
 from shared.ai.agent_telemetry import build_agent_metric, log_agent_metric, redact_sensitive_text
+from shared.ai.agent_tools import format_response_with_citations
 from shared.ai.llm_client import call_ai
 
 
@@ -41,6 +42,11 @@ class AgentRunResult:
     provider: str
     model: str
     tool_names: tuple[str, ...]
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    output_tokens: int = 0
+    hosted_search_calls: int = 0
+    local_tool_calls: int = 0
     failure_code: str | None = None
     used_legacy_fallback: bool = False
 
@@ -93,17 +99,28 @@ class AgentRuntime:
                     session=None,
                     conversation_id=None,
                 )
-            output_text = sanitize_model_visible_text(
+            output_with_citations = format_response_with_citations(
                 _extract_final_output(run_result),
+                _extract_raw_run_items(run_result),
+            )
+            output_text = sanitize_model_visible_text(
+                output_with_citations,
                 surface="private",
             )
             output_text = output_text or "我这边没有拿到有效回复。"
+            usage = _extract_usage(run_result)
+            hosted_search_calls, local_tool_calls = _count_tool_calls(run_result)
             result = AgentRunResult(
                 ok=True,
                 output_text=output_text,
                 provider=binding.provider,
                 model=binding.model_name,
                 tool_names=tool_names,
+                input_tokens=usage["input_tokens"],
+                cached_input_tokens=usage["cached_input_tokens"],
+                output_tokens=usage["output_tokens"],
+                hosted_search_calls=hosted_search_calls,
+                local_tool_calls=local_tool_calls,
             )
             _log_metric(request, result, started_at, status="ok")
             return result
@@ -206,6 +223,44 @@ def _extract_final_output(run_result: Any) -> str:
     return str(final_output or "")
 
 
+def _extract_raw_run_items(run_result: Any) -> list[Any]:
+    items = getattr(run_result, "new_items", None)
+    if not isinstance(items, list):
+        return []
+    return [getattr(item, "raw_item", item) for item in items]
+
+
+def _extract_usage(run_result: Any) -> dict[str, int]:
+    totals = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
+    responses = getattr(run_result, "raw_responses", None)
+    if not isinstance(responses, list):
+        return totals
+    for response in responses:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            continue
+        totals["input_tokens"] += max(0, int(getattr(usage, "input_tokens", 0) or 0))
+        totals["output_tokens"] += max(0, int(getattr(usage, "output_tokens", 0) or 0))
+        details = getattr(usage, "input_tokens_details", None)
+        totals["cached_input_tokens"] += max(
+            0,
+            int(getattr(details, "cached_tokens", 0) or 0),
+        )
+    return totals
+
+
+def _count_tool_calls(run_result: Any) -> tuple[int, int]:
+    hosted_search_calls = 0
+    local_tool_calls = 0
+    for item in _extract_raw_run_items(run_result):
+        item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+        if item_type == "web_search_call":
+            hosted_search_calls += 1
+        elif item_type == "function_call":
+            local_tool_calls += 1
+    return hosted_search_calls, local_tool_calls
+
+
 def _failure_result(
     provider: str,
     model: str,
@@ -235,9 +290,13 @@ def _log_metric(
         model=result.model,
         tools=result.tool_names,
         latency_ms=int((time.monotonic() - started_at) * 1000),
-        usage=None,
-        hosted_search_calls=0,
-        local_tool_calls=0,
+        usage={
+            "input_tokens": result.input_tokens,
+            "cached_input_tokens": result.cached_input_tokens,
+            "output_tokens": result.output_tokens,
+        },
+        hosted_search_calls=result.hosted_search_calls,
+        local_tool_calls=result.local_tool_calls,
         status=status,
         failure_code=result.failure_code,
         raw_request_text=redact_sensitive_text(request.user_text),

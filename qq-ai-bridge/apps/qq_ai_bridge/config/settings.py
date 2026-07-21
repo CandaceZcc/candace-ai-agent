@@ -297,6 +297,15 @@ OPENAI_COMPUTER_USE_ENABLED = _get_bool_env("OPENAI_COMPUTER_USE_ENABLED", False
 RESPONSES_PROXY_API_KEY = os.getenv("RESPONSES_PROXY_API_KEY", "").strip()
 RESPONSES_PROXY_BASE_URL = os.getenv("RESPONSES_PROXY_BASE_URL", "").strip()
 RESPONSES_PROXY_MODEL = os.getenv("RESPONSES_PROXY_MODEL", "").strip()
+RESPONSES_PROXY_TEXT_VERIFIED = _get_bool_env(
+    "RESPONSES_PROXY_TEXT_VERIFIED", False
+)
+RESPONSES_PROXY_WEB_SEARCH_VERIFIED = _get_bool_env(
+    "RESPONSES_PROXY_WEB_SEARCH_VERIFIED", False
+)
+RESPONSES_PROXY_COMPUTER_VERIFIED = _get_bool_env(
+    "RESPONSES_PROXY_COMPUTER_VERIFIED", False
+)
 AGENT_MODEL_REASONING_EFFORT_VALUES = {
     "none",
     "minimal",
@@ -398,6 +407,22 @@ def validate_agent_settings() -> list[str]:
         errors.append("chat_compatible provider cannot use hosted web search")
     if AGENT_PROVIDER == "chat_compatible" and OPENAI_COMPUTER_USE_ENABLED:
         errors.append("chat_compatible provider cannot use built-in computer use")
+    if (
+        AGENT_PROVIDER == "responses_proxy"
+        and OPENAI_HOSTED_WEB_SEARCH_ENABLED
+        and not RESPONSES_PROXY_WEB_SEARCH_VERIFIED
+    ):
+        errors.append(
+            "RESPONSES_PROXY_WEB_SEARCH_VERIFIED is required for hosted web search"
+        )
+    if (
+        AGENT_PROVIDER == "responses_proxy"
+        and OPENAI_COMPUTER_USE_ENABLED
+        and not RESPONSES_PROXY_COMPUTER_VERIFIED
+    ):
+        errors.append(
+            "RESPONSES_PROXY_COMPUTER_VERIFIED is required for built-in computer use"
+        )
 
     _validate_url(RESPONSES_PROXY_BASE_URL, "RESPONSES_PROXY_BASE_URL", errors)
     _validate_url(CHAT_COMPATIBLE_BASE_URL, "CHAT_COMPATIBLE_BASE_URL", errors)
@@ -411,6 +436,10 @@ def validate_agent_settings() -> list[str]:
         _validate_required(RESPONSES_PROXY_BASE_URL, "RESPONSES_PROXY_BASE_URL", errors)
         _validate_required(RESPONSES_PROXY_API_KEY, "RESPONSES_PROXY_API_KEY", errors)
         _validate_required(RESPONSES_PROXY_MODEL, "RESPONSES_PROXY_MODEL", errors)
+        if AGENT_PROVIDER_CAPABILITY_STRICT and not RESPONSES_PROXY_TEXT_VERIFIED:
+            errors.append(
+                "RESPONSES_PROXY_TEXT_VERIFIED is required in strict capability mode"
+            )
     elif AGENT_PROVIDER == "chat_compatible":
         _validate_required(CHAT_COMPATIBLE_BASE_URL, "CHAT_COMPATIBLE_BASE_URL", errors)
         _validate_required(CHAT_COMPATIBLE_API_KEY, "CHAT_COMPATIBLE_API_KEY", errors)
@@ -438,6 +467,11 @@ def agent_config_summary() -> dict[str, object]:
         "model_settings": {
             "reasoning_effort": AGENT_MODEL_REASONING_EFFORT or "provider_default",
             "response_storage_disabled": AGENT_DISABLE_RESPONSE_STORAGE,
+        },
+        "proxy_verification": {
+            "text": RESPONSES_PROXY_TEXT_VERIFIED,
+            "web_search": RESPONSES_PROXY_WEB_SEARCH_VERIFIED,
+            "computer": RESPONSES_PROXY_COMPUTER_VERIFIED,
         },
         "limits": {
             "max_turns": AGENT_MAX_TURNS,

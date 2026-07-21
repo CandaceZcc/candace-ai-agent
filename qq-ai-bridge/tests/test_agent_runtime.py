@@ -25,6 +25,89 @@ def _binding():
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reports_sdk_usage_and_tool_call_counts(self):
+        from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
+
+        usage = SimpleNamespace(
+            input_tokens=120,
+            output_tokens=30,
+            input_tokens_details=SimpleNamespace(cached_tokens=40),
+        )
+        new_items = [
+            SimpleNamespace(raw_item={"type": "web_search_call"}),
+            SimpleNamespace(raw_item={"type": "function_call"}),
+        ]
+        with (
+            patch("shared.ai.agent_runtime.build_agent_model_binding", return_value=_binding()),
+            patch("shared.ai.agent_runtime.Agent"),
+            patch("shared.ai.agent_runtime.Runner.run", new_callable=AsyncMock) as mock_run,
+        ):
+            mock_run.return_value = SimpleNamespace(
+                final_output="OK",
+                new_items=new_items,
+                raw_responses=[SimpleNamespace(usage=usage)],
+            )
+            result = await AgentRuntime().run(
+                AgentRunRequest(
+                    route="current_events",
+                    user_text="查一下最新消息",
+                    compact_context="",
+                    allowed_tool_names=(),
+                    trace_id="trace-usage",
+                )
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.input_tokens, 120)
+        self.assertEqual(result.cached_input_tokens, 40)
+        self.assertEqual(result.output_tokens, 30)
+        self.assertEqual(result.hosted_search_calls, 1)
+        self.assertEqual(result.local_tool_calls, 1)
+
+    async def test_appends_visible_citations_from_sdk_items(self):
+        from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
+
+        citation_item = SimpleNamespace(
+            raw_item={
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Answer",
+                        "annotations": [
+                            {
+                                "type": "url_citation",
+                                "title": "QuotaAPI Docs",
+                                "url": "https://quotarouter.ai/docs/zh/quickstart",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        with (
+            patch("shared.ai.agent_runtime.build_agent_model_binding", return_value=_binding()),
+            patch("shared.ai.agent_runtime.Agent"),
+            patch("shared.ai.agent_runtime.Runner.run", new_callable=AsyncMock) as mock_run,
+        ):
+            mock_run.return_value = SimpleNamespace(
+                final_output="这里是答案。",
+                new_items=[citation_item],
+            )
+            result = await AgentRuntime().run(
+                AgentRunRequest(
+                    route="current_events",
+                    user_text="查一下最新消息",
+                    compact_context="",
+                    allowed_tool_names=(),
+                    trace_id="trace-search",
+                )
+            )
+
+        self.assertTrue(result.ok)
+        self.assertIn("来源：", result.output_text)
+        self.assertIn("https://quotarouter.ai/docs/zh/quickstart", result.output_text)
+
     async def test_applies_reasoning_effort_and_disables_response_storage(self):
         from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
 

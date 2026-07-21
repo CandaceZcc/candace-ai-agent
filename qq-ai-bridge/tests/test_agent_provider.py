@@ -139,6 +139,27 @@ class AgentProviderTests(unittest.TestCase):
         self.assertFalse(binding.capabilities.builtin_computer)
         self.assertFalse(binding.capabilities.verified)
 
+    def test_proxy_exposes_only_persisted_verified_capabilities(self):
+        from shared.ai import agent_provider
+
+        with (
+            patch.object(agent_provider, "AsyncOpenAI"),
+            patch.object(agent_provider, "OpenAIResponsesModel"),
+            patch.object(agent_provider, "set_tracing_disabled"),
+            patch.multiple(
+                agent_provider,
+                RESPONSES_PROXY_TEXT_VERIFIED=True,
+                RESPONSES_PROXY_WEB_SEARCH_VERIFIED=True,
+                RESPONSES_PROXY_COMPUTER_VERIFIED=False,
+            ),
+        ):
+            binding = agent_provider.build_agent_model_binding(provider="responses_proxy")
+
+        self.assertTrue(binding.capabilities.responses)
+        self.assertTrue(binding.capabilities.verified)
+        self.assertTrue(binding.capabilities.hosted_web_search)
+        self.assertFalse(binding.capabilities.builtin_computer)
+
     def test_official_provider_does_not_override_base_url(self):
         from shared.ai import agent_provider
 

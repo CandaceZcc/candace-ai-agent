@@ -168,21 +168,14 @@ def _build_payload(provider: ProviderName, probe: ProbeName) -> dict[str, Any]:
         payload = {
             "model": model,
             "input": "What is the title of the current OpenAI API documentation home page?",
-            "tools": [{"type": "web_search_preview", "search_context_size": "low"}],
+            "tools": [{"type": "web_search"}],
             "max_output_tokens": 256,
         }
     else:
         payload = {
             "model": model,
             "input": "Observe the screen and return one computer_call. Do not execute anything.",
-            "tools": [
-                {
-                    "type": "computer_use_preview",
-                    "display_width": 1024,
-                    "display_height": 768,
-                    "environment": "browser",
-                }
-            ],
+            "tools": [{"type": "computer"}],
             "max_output_tokens": 256,
         }
     if provider in {"openai", "responses_proxy"}:

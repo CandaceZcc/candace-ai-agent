@@ -17,6 +17,9 @@ AGENT_ENV_NAMES = (
     "RESPONSES_PROXY_API_KEY",
     "RESPONSES_PROXY_BASE_URL",
     "RESPONSES_PROXY_MODEL",
+    "RESPONSES_PROXY_TEXT_VERIFIED",
+    "RESPONSES_PROXY_WEB_SEARCH_VERIFIED",
+    "RESPONSES_PROXY_COMPUTER_VERIFIED",
     "AGENT_MODEL_REASONING_EFFORT",
     "AGENT_DISABLE_RESPONSE_STORAGE",
     "CHAT_COMPATIBLE_API_KEY",
@@ -70,6 +73,53 @@ class AgentConfigTests(unittest.TestCase):
         self.assertIn("RESPONSES_PROXY_BASE_URL", errors)
         self.assertIn("RESPONSES_PROXY_API_KEY", errors)
         self.assertIn("RESPONSES_PROXY_MODEL", errors)
+
+    def test_strict_responses_proxy_requires_text_verification(self):
+        settings = reload_settings_with(
+            {
+                "AGENT_RUNTIME_ENABLED": "true",
+                "AGENT_PROVIDER": "responses_proxy",
+                "RESPONSES_PROXY_BASE_URL": "https://proxy.example/v1",
+                "RESPONSES_PROXY_API_KEY": "sk-proxy-secret",
+                "RESPONSES_PROXY_MODEL": "gpt-5.6",
+                "AGENT_PROVIDER_CAPABILITY_STRICT": "true",
+            }
+        )
+
+        errors = "\n".join(settings.validate_agent_settings())
+        self.assertIn("RESPONSES_PROXY_TEXT_VERIFIED", errors)
+
+    def test_responses_proxy_rejects_unverified_hosted_capabilities(self):
+        settings = reload_settings_with(
+            {
+                "AGENT_RUNTIME_ENABLED": "true",
+                "AGENT_PROVIDER": "responses_proxy",
+                "RESPONSES_PROXY_BASE_URL": "https://proxy.example/v1",
+                "RESPONSES_PROXY_API_KEY": "sk-proxy-secret",
+                "RESPONSES_PROXY_MODEL": "gpt-5.6",
+                "RESPONSES_PROXY_TEXT_VERIFIED": "true",
+                "OPENAI_HOSTED_WEB_SEARCH_ENABLED": "true",
+                "OPENAI_COMPUTER_USE_ENABLED": "true",
+            }
+        )
+
+        errors = "\n".join(settings.validate_agent_settings())
+        self.assertIn("RESPONSES_PROXY_WEB_SEARCH_VERIFIED", errors)
+        self.assertIn("RESPONSES_PROXY_COMPUTER_VERIFIED", errors)
+
+    def test_proxy_verification_flags_are_visible_in_redacted_summary(self):
+        settings = reload_settings_with(
+            {
+                "RESPONSES_PROXY_TEXT_VERIFIED": "true",
+                "RESPONSES_PROXY_WEB_SEARCH_VERIFIED": "true",
+                "RESPONSES_PROXY_COMPUTER_VERIFIED": "false",
+            }
+        )
+
+        verification = settings.agent_config_summary()["proxy_verification"]
+        self.assertTrue(verification["text"])
+        self.assertTrue(verification["web_search"])
+        self.assertFalse(verification["computer"])
 
     def test_model_settings_support_high_reasoning_and_disabled_storage(self):
         settings = reload_settings_with(

@@ -9,7 +9,6 @@ from agents import (
     OpenAIResponsesModel,
     set_tracing_disabled,
 )
-
 from apps.qq_ai_bridge.config.settings import (
     AGENT_PROVIDER,
     AGENT_TRACE_EXPORT_ENABLED,
@@ -22,7 +21,10 @@ from apps.qq_ai_bridge.config.settings import (
     OPENAI_HOSTED_WEB_SEARCH_ENABLED,
     RESPONSES_PROXY_API_KEY,
     RESPONSES_PROXY_BASE_URL,
+    RESPONSES_PROXY_COMPUTER_VERIFIED,
     RESPONSES_PROXY_MODEL,
+    RESPONSES_PROXY_TEXT_VERIFIED,
+    RESPONSES_PROXY_WEB_SEARCH_VERIFIED,
 )
 
 ProviderName = Literal["openai", "responses_proxy", "chat_compatible"]
@@ -88,10 +90,10 @@ def _build_responses_proxy_binding() -> AgentModelBinding:
     capabilities = ProviderCapabilities(
         responses=True,
         function_tools=True,
-        hosted_web_search=False,
-        builtin_computer=False,
+        hosted_web_search=RESPONSES_PROXY_WEB_SEARCH_VERIFIED,
+        builtin_computer=RESPONSES_PROXY_COMPUTER_VERIFIED,
         openai_trace_export=False,
-        verified=False,
+        verified=RESPONSES_PROXY_TEXT_VERIFIED,
     )
     return AgentModelBinding(
         provider="responses_proxy",

@@ -7,6 +7,15 @@ sys.path.insert(0, "qq-ai-bridge")
 
 
 class CapabilityProbeTests(unittest.TestCase):
+    def test_hosted_probes_use_current_agents_sdk_tool_types(self):
+        from shared.ai import capability_probe
+
+        web_payload = capability_probe._build_payload("responses_proxy", "web_search")
+        computer_payload = capability_probe._build_payload("responses_proxy", "computer")
+
+        self.assertEqual(web_payload["tools"], [{"type": "web_search"}])
+        self.assertEqual(computer_payload["tools"], [{"type": "computer"}])
+
     def test_responses_probe_applies_reasoning_and_storage_settings(self):
         from shared.ai import capability_probe
 

@@ -40,6 +40,11 @@ that traffic.
 - Responses providers can set `AGENT_MODEL_REASONING_EFFORT` to a supported
   effort such as `high`. Set `AGENT_DISABLE_RESPONSE_STORAGE=true` to send
   `store=false` on each Responses request.
+- Keep `RESPONSES_PROXY_TEXT_VERIFIED`,
+  `RESPONSES_PROXY_WEB_SEARCH_VERIFIED`, and
+  `RESPONSES_PROXY_COMPUTER_VERIFIED` false until the exact endpoint/model
+  passes each matching probe. These flags persist the operator-reviewed result;
+  they never become true automatically.
 
 Before enabling the runtime, record the quota API base URL, model name, endpoint
 type, and whether each billable probe was accepted. Keep
