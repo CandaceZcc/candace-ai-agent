@@ -100,7 +100,12 @@ class EmailClassification:
             raise ValueError("invalid email urgency")
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be between 0 and 1")
-        if not self.category.strip() or not self.concise_title.strip() or not self.summary.strip():
+        if (
+            not self.category.strip()
+            or not self.concise_title.strip()
+            or not self.summary.strip()
+            or not self.reason.strip()
+        ):
             raise ValueError("classification text fields must not be empty")
 
 

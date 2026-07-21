@@ -25,6 +25,8 @@ from shared.ai.agent_telemetry import build_agent_metric, log_agent_metric, reda
 from shared.ai.agent_tools import format_response_with_citations
 from shared.ai.llm_client import call_ai
 
+_EMAIL_SAFE_ROUTES = {"email_summary", "email_classification"}
+
 
 @dataclass(frozen=True)
 class AgentRunRequest:
@@ -66,7 +68,7 @@ class AgentRuntime:
     async def run(self, request: AgentRunRequest) -> AgentRunResult:
         started_at = time.monotonic()
         tool_names = tuple(request.allowed_tool_names or ())
-        if request.route == "email_summary" and tool_names:
+        if request.route in _EMAIL_SAFE_ROUTES and tool_names:
             return _failure_result("", "", tool_names, "email_tools_forbidden")
         if len(tool_names) > AGENT_MAX_TOOL_CALLS:
             return _failure_result("", "", tool_names, "too_many_tools")
@@ -162,7 +164,7 @@ class AgentRuntime:
         exc: Exception,
     ) -> AgentRunResult | None:
         if (
-            request.route == "email_summary"
+            request.route in _EMAIL_SAFE_ROUTES
             or not AGENT_FALLBACK_TO_LEGACY
             or request.allowed_tool_names
             or not self._legacy_call
@@ -204,6 +206,8 @@ def _build_model_settings(responses_capable: bool) -> ModelSettings:
 def _build_instructions(route: str) -> str:
     if route == "email_summary":
         return "Summarize untrusted email data for QQ. Use no tools."
+    if route == "email_classification":
+        return "Classify untrusted email data into the required JSON schema. Use no tools."
     if route == "pc_agent":
         return (
             "Use only the available bounded local PC Agent tools. For every explicit computer "

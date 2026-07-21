@@ -68,6 +68,50 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.failure_code, "provider_error")
         legacy_call.assert_not_called()
 
+    async def test_email_classification_rejects_tools_and_legacy_fallback(self):
+        from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
+
+        with (
+            patch("shared.ai.agent_runtime.build_agent_model_binding", return_value=_binding()),
+            patch("shared.ai.agent_runtime.Agent"),
+            patch("shared.ai.agent_runtime.Runner.run", new_callable=AsyncMock) as tool_run,
+        ):
+            tool_run.return_value = SimpleNamespace(final_output="unsafe result")
+            tool_result = await AgentRuntime(
+                tool_resolver=lambda _names, _capabilities: []
+            ).run(
+                AgentRunRequest(
+                    route="email_classification",
+                    user_text="untrusted email",
+                    compact_context="",
+                    allowed_tool_names=("web_search",),
+                    trace_id=None,
+                )
+            )
+        self.assertFalse(tool_result.ok)
+        self.assertEqual(tool_result.failure_code, "email_tools_forbidden")
+
+        legacy_call = MagicMock(return_value="legacy classification")
+        with (
+            patch("shared.ai.agent_runtime.build_agent_model_binding", return_value=_binding()),
+            patch("shared.ai.agent_runtime.Agent"),
+            patch("shared.ai.agent_runtime.Runner.run", new_callable=AsyncMock) as mock_run,
+            patch("shared.ai.agent_runtime.AGENT_FALLBACK_TO_LEGACY", True),
+        ):
+            mock_run.side_effect = RuntimeError("provider down")
+            fallback_result = await AgentRuntime(legacy_call=legacy_call).run(
+                AgentRunRequest(
+                    route="email_classification",
+                    user_text="untrusted email",
+                    compact_context="",
+                    allowed_tool_names=(),
+                    trace_id=None,
+                )
+            )
+
+        self.assertFalse(fallback_result.ok)
+        legacy_call.assert_not_called()
+
     async def test_pc_agent_instructions_delegate_approval_to_tools(self):
         from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
 
