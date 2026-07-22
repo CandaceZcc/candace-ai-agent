@@ -173,6 +173,6 @@ PYTHONPATH=qq-ai-bridge .venv/bin/python qq-ai-bridge/scripts/email_agent_check.
 
 Expected: redacted configuration is valid, read-only IMAP succeeds, and no messages remain pending analysis or digest.
 
-- [ ] **Step 6: Update this plan, commit the rollout record, and push the retained branch**
+- [x] **Step 6: Update this plan, commit the rollout record, and push the retained branch**
 
 Mark completed checkboxes, commit only this plan, push `feat/phase-a-qq-email-digest`, and verify `HEAD...@{upstream}` reports `0 0`. Leave the user's untracked Chinese specification untouched.
