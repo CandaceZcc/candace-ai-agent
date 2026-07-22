@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `qq-ai-bridge/tests/test_email_automation_service.py`
 
-- [ ] **Step 1: Replace the existing empty-digest test with the required behavior**
+- [x] **Step 1: Replace the existing empty-digest test with the required behavior**
 
 ```python
 async def test_empty_digest_closes_slot_without_sending(self):
@@ -33,7 +33,7 @@ async def test_empty_digest_closes_slot_without_sending(self):
     self.assertEqual(self.sent, [])
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run:
 
@@ -50,7 +50,7 @@ Expected: exactly one failure at `test_empty_digest_closes_slot_without_sending`
 - Modify: `qq-ai-bridge/apps/qq_ai_bridge/services/email_automation_service.py`
 - Test: `qq-ai-bridge/tests/test_email_automation_service.py`
 
-- [ ] **Step 1: Add the minimal empty-selection persistence**
+- [x] **Step 1: Add the minimal empty-selection persistence**
 
 Change the empty-selection branch in `EmailAutomationService.run_digest` to:
 
@@ -61,7 +61,7 @@ if not selected:
     return
 ```
 
-- [ ] **Step 2: Run the focused test and verify GREEN**
+- [x] **Step 2: Run the focused test and verify GREEN**
 
 Run:
 
@@ -72,7 +72,7 @@ PYTHONPATH=qq-ai-bridge .venv/bin/python -m unittest \
 
 Expected: all tests pass.
 
-- [ ] **Step 3: Run adjacent scheduling and persistence tests**
+- [x] **Step 3: Run adjacent scheduling and persistence tests**
 
 Run:
 
@@ -85,7 +85,7 @@ PYTHONPATH=qq-ai-bridge .venv/bin/python -m unittest \
 
 Expected: all tests pass, including failed-send retries and 24-hour restart catch-up.
 
-- [ ] **Step 4: Commit the regression fix**
+- [x] **Step 4: Commit the regression fix**
 
 ```bash
 git add \
@@ -99,7 +99,7 @@ git commit -m "fix: close empty email digest slots"
 **Files:**
 - Verify only
 
-- [ ] **Step 1: Run the complete Bridge test suite**
+- [x] **Step 1: Run the complete Bridge test suite**
 
 ```bash
 PYTHONPATH=qq-ai-bridge .venv/bin/python -m unittest discover \
@@ -108,7 +108,7 @@ PYTHONPATH=qq-ai-bridge .venv/bin/python -m unittest discover \
 
 Expected: zero failures and zero errors.
 
-- [ ] **Step 2: Run focused static and compile checks**
+- [x] **Step 2: Run focused static and compile checks**
 
 ```bash
 .venv/bin/ruff check \
@@ -121,7 +121,7 @@ git diff --check
 
 Expected: all commands exit zero.
 
-- [ ] **Step 3: Verify current-tree secret hygiene**
+- [x] **Step 3: Verify current-tree secret hygiene**
 
 ```bash
 test -z "$(git ls-files -- zcc zcc.pub)"
@@ -138,15 +138,15 @@ Expected: the local key remains ignored and no tracked long hexadecimal API key 
 - Runtime only: `/home/cancade/candace-ai-agent/qq-ai-bridge/data/email/automation-state.json`
 - Runtime only: `/home/cancade/candace-ai-agent/qq-ai-bridge/data/logs/napcat_outbound.jsonl`
 
-- [ ] **Step 1: Capture the pre-restart state without message content**
+- [x] **Step 1: Capture the pre-restart state without message content**
 
 Record the verified Bridge PID, current outbound-audit line count, UID `4743` delivery state, and current digest-slot keys. Do not print sender, subject, body, model summary, credentials, or QQ identity.
 
-- [ ] **Step 2: Safely restart the verified feature-worktree Bridge**
+- [x] **Step 2: Safely restart the verified feature-worktree Bridge**
 
 Validate that the PID from `.runtime/pids/email-bridge.pid` belongs to this worktree and runs `qq-ai-bridge/bridge.py`. Send SIGTERM, require exit, then start with `/home/cancade/.candace/qq-ai-bridge.env`, write the new PID, and require two consecutive HTTP 200 checks from `http://127.0.0.1:5000/admin/groups`.
 
-- [ ] **Step 3: Verify the corrected slot state**
+- [x] **Step 3: Verify the corrected slot state**
 
 Wait for the startup runner pass, then require:
 
@@ -156,11 +156,11 @@ UID 4743 remains digest_sent
 outbound audit count has not increased
 ```
 
-- [ ] **Step 4: Verify one complete production poll is idempotent**
+- [x] **Step 4: Verify one complete production poll is idempotent**
 
 Wait at least 310 seconds. Require the cursor to remain `4743`, both acceptance records to retain their terminal states, and the outbound audit count to remain unchanged. Confirm the latest Bridge log has no email startup, poll, digest, or service-setup failure.
 
-- [ ] **Step 5: Re-run redacted live diagnostics**
+- [x] **Step 5: Re-run redacted live diagnostics**
 
 ```bash
 set -a
