@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from dataclasses import dataclass, field
 
+from shared.ai.agent_runtime import AgentRunRequest, AgentRuntime
 from shared.ai.llm_client import call_ai
 from storage_utils import (
     append_private_history,
@@ -17,28 +19,31 @@ from storage_utils import (
 
 from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
 from apps.qq_ai_bridge.config.settings import (
+    AGENT_RUNTIME_ENABLED,
     BASE_DATA_DIR,
     CHAT_STATE_TTL_SECONDS,
+    OWNER_QQ,
     PRIVATE_COOLDOWN_MODE,
     PRIVATE_DEBOUNCE_MS,
     PRIVATE_REPLY_COOLDOWN_SEC,
 )
+from apps.qq_ai_bridge.services.agent_route_service import classify_agent_route
 from apps.qq_ai_bridge.services.emoji_service import (
     build_face_cq,
     build_face_sequence,
     detect_emoji_request_count,
     extract_emoji_name,
     infer_reaction_preferred_order,
+    is_emoji_request,
     is_face_fallback_request,
     is_message_reaction_request,
-    is_emoji_request,
     pick_face_cq,
 )
+from apps.qq_ai_bridge.services.private_ledger_service import maybe_handle_private_ledger_command
 from apps.qq_ai_bridge.services.prompt_service import (
     build_private_ai_prompt,
     prepare_private_ai_prompt,
 )
-from apps.qq_ai_bridge.services.private_ledger_service import maybe_handle_private_ledger_command
 from apps.qq_ai_bridge.services.response_action import (
     ActionKind,
     ResponseAction,
@@ -49,6 +54,10 @@ from apps.qq_ai_bridge.services.runtime_resources import submit_chat_task
 
 DEBOUNCE_MS = PRIVATE_DEBOUNCE_MS
 PRIVATE_REACTION_MIRROR_FACE = False
+AGENT_COMPACT_CONTEXT_MAX_CHARS = 4000
+_AGENT_RUNTIME_LOOP_LOCK = threading.Lock()
+_AGENT_RUNTIME_LOOP: asyncio.AbstractEventLoop | None = None
+_AGENT_RUNTIME_LOOP_THREAD: threading.Thread | None = None
 
 
 @dataclass
@@ -198,6 +207,88 @@ def _cooldown_remaining_seconds(state: PrivateChatState) -> float:
 def _record_private_reply_sent(state: PrivateChatState) -> None:
     with state.lock:
         state.last_reply_monotonic = time.monotonic()
+
+
+def _generate_private_model_reply(
+    user_id: int,
+    merged_text: str,
+    prompt_payload: dict,
+    *,
+    merged_count: int,
+    trace_id: str | None,
+) -> str:
+    if not AGENT_RUNTIME_ENABLED or int(user_id or 0) != int(OWNER_QQ):
+        return _call_legacy_private_ai(user_id, prompt_payload, merged_count)
+
+    decision = classify_agent_route(merged_text)
+    if not decision.use_general_agent:
+        return "邮件功能正在接入中，这条命令稍后会由邮件技能处理。"
+
+    request = AgentRunRequest(
+        route=decision.route,
+        user_text=merged_text,
+        compact_context=_build_agent_compact_context(prompt_payload),
+        allowed_tool_names=decision.allowed_tool_names,
+        trace_id=trace_id,
+    )
+    result = run_agent_runtime_sync(AgentRuntime(legacy_call=call_ai).run(request))
+    return result.output_text
+
+
+def _call_legacy_private_ai(user_id: int, prompt_payload: dict, merged_count: int) -> str:
+    return call_ai(
+        prompt_payload["prompt"],
+        metadata={
+            "user_id": user_id,
+            "merged_message_count": merged_count,
+            "prompt_mode": prompt_payload["prompt_mode"],
+            "query_len": prompt_payload["query_len"],
+            "history_chars": prompt_payload["history_chars"],
+            "history_items": prompt_payload["history_items"],
+            "instruction_chars": prompt_payload["instruction_chars"],
+            "prompt_chars": prompt_payload["prompt_chars"],
+        },
+    )
+
+
+def _build_agent_compact_context(prompt_payload: dict) -> str:
+    prompt = str(prompt_payload.get("prompt") or "")
+    return prompt[:AGENT_COMPACT_CONTEXT_MAX_CHARS]
+
+
+def run_agent_runtime_sync(coro):
+    loop = _get_agent_runtime_loop()
+    return asyncio.run_coroutine_threadsafe(coro, loop).result()
+
+
+_run_agent_runtime_sync = run_agent_runtime_sync
+
+
+def _get_agent_runtime_loop() -> asyncio.AbstractEventLoop:
+    global _AGENT_RUNTIME_LOOP, _AGENT_RUNTIME_LOOP_THREAD
+
+    with _AGENT_RUNTIME_LOOP_LOCK:
+        if (
+            _AGENT_RUNTIME_LOOP is not None
+            and _AGENT_RUNTIME_LOOP_THREAD is not None
+            and _AGENT_RUNTIME_LOOP_THREAD.is_alive()
+        ):
+            return _AGENT_RUNTIME_LOOP
+
+        loop = asyncio.new_event_loop()
+        ready = threading.Event()
+
+        def run_loop() -> None:
+            asyncio.set_event_loop(loop)
+            ready.set()
+            loop.run_forever()
+
+        thread = threading.Thread(target=run_loop, name="agent-runtime-loop", daemon=True)
+        thread.start()
+        ready.wait()
+        _AGENT_RUNTIME_LOOP = loop
+        _AGENT_RUNTIME_LOOP_THREAD = thread
+        return loop
 
 
 # enqueue_private_text：私聊文本入队合并
@@ -375,18 +466,12 @@ def _run_private_chat_worker(user_id) -> None:
                 f" mode={PRIVATE_COOLDOWN_MODE}"
             )
             continue
-        llm_raw_reply = call_ai(
-            prompt_payload["prompt"],
-            metadata={
-                "user_id": user_id,
-                "merged_message_count": merged_count,
-                "prompt_mode": prompt_payload["prompt_mode"],
-                "query_len": prompt_payload["query_len"],
-                "history_chars": prompt_payload["history_chars"],
-                "history_items": prompt_payload["history_items"],
-                "instruction_chars": prompt_payload["instruction_chars"],
-                "prompt_chars": prompt_payload["prompt_chars"],
-            },
+        llm_raw_reply = _generate_private_model_reply(
+            user_id,
+            merged_text,
+            prompt_payload,
+            merged_count=merged_count,
+            trace_id=None,
         )
         llm_action = parse_llm_response_action(llm_raw_reply, surface="private")
         if llm_action.kind == ActionKind.NO_REPLY:
@@ -442,4 +527,9 @@ def _run_private_chat_worker(user_id) -> None:
         )
 
 
-__all__ = ["build_private_ai_prompt", "enqueue_private_text", "get_user_workspace"]
+__all__ = [
+    "build_private_ai_prompt",
+    "enqueue_private_text",
+    "get_user_workspace",
+    "run_agent_runtime_sync",
+]

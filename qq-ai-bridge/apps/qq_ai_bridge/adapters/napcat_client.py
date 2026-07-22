@@ -151,6 +151,7 @@ def send_private_msg(
     quiet: bool = False,
     force_parts: int | None = None,
     reply_to_message_id: int | None = None,
+    redact_content: bool = False,
 ):
     """Send a private message via NapCat."""
     parts = split_outbound_messages(msg, force_parts=force_parts)
@@ -164,10 +165,16 @@ def send_private_msg(
     try:
         for idx, part in enumerate(parts):
             if not quiet:
-                print(
-                    f"[SEND_PRIVATE] 准备发消息给 {user_id} "
-                    f"part={idx + 1}/{len(parts)}: {part[:120]!r}"
-                )
+                if redact_content:
+                    print(
+                        f"[SEND_PRIVATE] 准备发敏感消息给 {user_id} "
+                        f"part={idx + 1}/{len(parts)} chars={len(part)}"
+                    )
+                else:
+                    print(
+                        f"[SEND_PRIVATE] 准备发消息给 {user_id} "
+                        f"part={idx + 1}/{len(parts)}: {part[:120]!r}"
+                    )
             last_resp = _post_json(
                 "send_private_msg",
                 {
@@ -177,21 +184,32 @@ def send_private_msg(
                 timeout=15,
             )
             if not quiet:
-                print(
-                    f"[SEND_PRIVATE] NapCat 返回 part={idx + 1}/{len(parts)}: "
-                    f"{last_resp.status_code} {last_resp.text}"
-                )
+                if redact_content:
+                    print(
+                        f"[SEND_PRIVATE] NapCat 返回敏感消息 part={idx + 1}/{len(parts)}: "
+                        f"status_code={last_resp.status_code}"
+                    )
+                else:
+                    print(
+                        f"[SEND_PRIVATE] NapCat 返回 part={idx + 1}/{len(parts)}: "
+                        f"{last_resp.status_code} {last_resp.text}"
+                    )
             _append_outbound_event(
                 {
                     "type": "private_msg",
                     "user_id": user_id,
                     "part_index": idx + 1,
                     "parts_total": len(parts),
-                    "message_preview": part[:200],
+                    "message_preview": "[redacted]" if redact_content else part[:200],
+                    "message_chars": len(part),
                     "reply_to_message_id": reply_to_message_id,
                     "ok": bool(last_resp.ok),
                     "status_code": getattr(last_resp, "status_code", None),
-                    "response_preview": getattr(last_resp, "text", "")[:300],
+                    "response_preview": (
+                        "[redacted]"
+                        if redact_content
+                        else getattr(last_resp, "text", "")[:300]
+                    ),
                 }
             )
             sent += 1
@@ -206,19 +224,23 @@ def send_private_msg(
         }
     except Exception as e:
         if not quiet:
-            print(f"[SEND_PRIVATE] 异常: {e}")
-            traceback.print_exc()
+            if redact_content:
+                print(f"[SEND_PRIVATE] 敏感消息异常 type={type(e).__name__}")
+            else:
+                print(f"[SEND_PRIVATE] 异常: {e}")
+                traceback.print_exc()
+        safe_error = type(e).__name__ if redact_content else str(e)
         _append_outbound_event(
             {
                 "type": "private_msg",
                 "user_id": user_id,
                 "ok": False,
-                "error": str(e),
+                "error": safe_error,
                 "parts_sent": sent,
                 "parts_total": len(parts),
             }
         )
-        return {"ok": False, "error": str(e), "parts_sent": sent, "parts_total": len(parts)}
+        return {"ok": False, "error": safe_error, "parts_sent": sent, "parts_total": len(parts)}
 
 
 def send_group_msg(

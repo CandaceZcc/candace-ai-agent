@@ -9,6 +9,27 @@ from apps.qq_ai_bridge.skills.chat import ChatSkill
 
 
 class ChatSkillTests(unittest.TestCase):
+    def test_plain_email_mention_remains_available_to_chat_fallback(self):
+        context = SkillContext(
+            data={"message_id": 123},
+            post_type="message",
+            message_type="private",
+            user_id=1,
+            self_id=2,
+            group_id=None,
+            group_config={},
+            should_log=True,
+            msg="我今天收到一封邮件，帮我看看",
+            normalized_msg="我今天收到一封邮件，帮我看看",
+            effective_text="我今天收到一封邮件，帮我看看",
+            mentioned_self=False,
+            image_inputs={},
+            file_info=None,
+            logger=lambda *_args: None,
+        )
+
+        self.assertTrue(ChatSkill().can_handle(context))
+
     @patch("apps.qq_ai_bridge.skills.chat.group_strategy_decision")
     @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text", return_value={"queued": True})
     def test_local_question_bypasses_probabilistic_strategy(self, mock_enqueue, mock_strategy):

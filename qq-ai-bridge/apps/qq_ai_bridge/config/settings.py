@@ -1,7 +1,9 @@
 """Runtime settings for the QQ AI bridge."""
 
 import os
+import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def _get_int_env(name: str, default: int) -> int:
@@ -283,6 +285,301 @@ if LLM_BACKEND not in {"auto", "direct", "cli"}:
     LLM_BACKEND = "auto"
 LLM_MAX_CONCURRENCY = max(1, _get_int_env("LLM_MAX_CONCURRENCY", 4))
 LLM_QUEUE_TIMEOUT_SECONDS = max(0, _get_int_env("LLM_QUEUE_TIMEOUT_SECONDS", 1))
+
+AGENT_PROVIDER_VALUES = {"openai", "responses_proxy", "chat_compatible"}
+_RAW_AGENT_PROVIDER = os.getenv("AGENT_PROVIDER", "openai").strip().lower() or "openai"
+_AGENT_PROVIDER_IS_VALID = _RAW_AGENT_PROVIDER in AGENT_PROVIDER_VALUES
+AGENT_PROVIDER = _RAW_AGENT_PROVIDER if _AGENT_PROVIDER_IS_VALID else "openai"
+AGENT_RUNTIME_ENABLED = _get_bool_env("AGENT_RUNTIME_ENABLED", False) and _AGENT_PROVIDER_IS_VALID
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_AGENT_MODEL = os.getenv("OPENAI_AGENT_MODEL", "gpt-5.6").strip() or "gpt-5.6"
+OPENAI_HOSTED_WEB_SEARCH_ENABLED = _get_bool_env("OPENAI_HOSTED_WEB_SEARCH_ENABLED", False)
+OPENAI_COMPUTER_USE_ENABLED = _get_bool_env("OPENAI_COMPUTER_USE_ENABLED", False)
+RESPONSES_PROXY_API_KEY = os.getenv("RESPONSES_PROXY_API_KEY", "").strip()
+RESPONSES_PROXY_BASE_URL = os.getenv("RESPONSES_PROXY_BASE_URL", "").strip()
+RESPONSES_PROXY_MODEL = os.getenv("RESPONSES_PROXY_MODEL", "").strip()
+RESPONSES_PROXY_TEXT_VERIFIED = _get_bool_env(
+    "RESPONSES_PROXY_TEXT_VERIFIED", False
+)
+RESPONSES_PROXY_WEB_SEARCH_VERIFIED = _get_bool_env(
+    "RESPONSES_PROXY_WEB_SEARCH_VERIFIED", False
+)
+RESPONSES_PROXY_COMPUTER_VERIFIED = _get_bool_env(
+    "RESPONSES_PROXY_COMPUTER_VERIFIED", False
+)
+AGENT_MODEL_REASONING_EFFORT_VALUES = {
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+}
+_RAW_AGENT_MODEL_REASONING_EFFORT = os.getenv(
+    "AGENT_MODEL_REASONING_EFFORT", ""
+).strip().lower()
+_AGENT_MODEL_REASONING_EFFORT_IS_VALID = (
+    not _RAW_AGENT_MODEL_REASONING_EFFORT
+    or _RAW_AGENT_MODEL_REASONING_EFFORT in AGENT_MODEL_REASONING_EFFORT_VALUES
+)
+AGENT_MODEL_REASONING_EFFORT = (
+    _RAW_AGENT_MODEL_REASONING_EFFORT
+    if _AGENT_MODEL_REASONING_EFFORT_IS_VALID
+    else ""
+)
+AGENT_DISABLE_RESPONSE_STORAGE = _get_bool_env(
+    "AGENT_DISABLE_RESPONSE_STORAGE", False
+)
+CHAT_COMPATIBLE_API_KEY = os.getenv("CHAT_COMPATIBLE_API_KEY", "").strip()
+CHAT_COMPATIBLE_BASE_URL = os.getenv("CHAT_COMPATIBLE_BASE_URL", "").strip()
+CHAT_COMPATIBLE_MODEL = os.getenv("CHAT_COMPATIBLE_MODEL", "").strip()
+AGENT_PROVIDER_CAPABILITY_STRICT = _get_bool_env("AGENT_PROVIDER_CAPABILITY_STRICT", True)
+_AGENT_RAW_LIMIT_VALUES = {
+    "AGENT_MAX_TURNS": os.getenv("AGENT_MAX_TURNS", "").strip(),
+    "AGENT_MAX_TOOL_CALLS": os.getenv("AGENT_MAX_TOOL_CALLS", "").strip(),
+    "AGENT_RUN_TIMEOUT_SECONDS": os.getenv("AGENT_RUN_TIMEOUT_SECONDS", "").strip(),
+}
+AGENT_MAX_TURNS = min(12, max(1, _get_int_env("AGENT_MAX_TURNS", 6)))
+AGENT_MAX_TOOL_CALLS = min(20, max(1, _get_int_env("AGENT_MAX_TOOL_CALLS", 8)))
+AGENT_RUN_TIMEOUT_SECONDS = min(300, max(1, _get_int_env("AGENT_RUN_TIMEOUT_SECONDS", 90)))
+AGENT_TRACE_EXPORT_ENABLED = _get_bool_env("AGENT_TRACE_EXPORT_ENABLED", False)
+AGENT_FALLBACK_TO_LEGACY = _get_bool_env("AGENT_FALLBACK_TO_LEGACY", True)
+
+EMAIL_AGENT_ENABLED = _get_bool_env("EMAIL_AGENT_ENABLED", False)
+EMAIL_IMAP_HOST = os.getenv("EMAIL_IMAP_HOST", "imap.exmail.qq.com").strip() or "imap.exmail.qq.com"
+EMAIL_IMAP_PORT = min(65535, max(1, _get_int_env("EMAIL_IMAP_PORT", 993)))
+EMAIL_IMAP_USERNAME = os.getenv("EMAIL_IMAP_USERNAME", "").strip()
+EMAIL_IMAP_PASSWORD = os.getenv("EMAIL_IMAP_PASSWORD", "").strip()
+EMAIL_IMAP_MAILBOX = os.getenv("EMAIL_IMAP_MAILBOX", "INBOX").strip() or "INBOX"
+
+
+def _parse_email_digest_times(value: str) -> tuple[str, ...]:
+    parts = [part.strip() for part in str(value or "").split(",") if part.strip()]
+    if not parts or any(not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", part) for part in parts):
+        return ()
+    return tuple(sorted(set(parts)))
+
+
+EMAIL_MONITOR_ENABLED = _get_bool_env("EMAIL_MONITOR_ENABLED", False)
+EMAIL_IMMEDIATE_PUSH_ENABLED = _get_bool_env("EMAIL_IMMEDIATE_PUSH_ENABLED", False)
+_EMAIL_DIGEST_PUSH_REQUESTED = _get_bool_env("EMAIL_DIGEST_PUSH_ENABLED", False)
+EMAIL_SHADOW_MODE = _get_bool_env("EMAIL_SHADOW_MODE", True)
+EMAIL_POLL_INTERVAL_SECONDS = min(
+    3600, max(60, _get_int_env("EMAIL_POLL_INTERVAL_SECONDS", 300))
+)
+_EMAIL_DIGEST_TIMES_RAW = os.getenv("EMAIL_DIGEST_TIMES", "12:30,20:30")
+EMAIL_DIGEST_TIMES = _parse_email_digest_times(_EMAIL_DIGEST_TIMES_RAW)
+EMAIL_DIGEST_PUSH_ENABLED = _EMAIL_DIGEST_PUSH_REQUESTED and bool(EMAIL_DIGEST_TIMES)
+EMAIL_PROFILE_PATH = os.path.expanduser(
+    os.getenv("EMAIL_PROFILE_PATH", "~/.candace/email-agent/profile.json")
+)
+EMAIL_FEEDBACK_PATH = os.path.expanduser(
+    os.getenv("EMAIL_FEEDBACK_PATH", "~/.candace/email-agent/learned-feedback.json")
+)
+EMAIL_AUTOMATION_STATE_PATH = os.path.join(BASE_DATA_DIR, "email", "automation-state.json")
+EMAIL_SUMMARY_MODEL = os.getenv("EMAIL_SUMMARY_MODEL", "").strip()
+EMAIL_MAX_RANGE_DAYS = min(366, max(1, _get_int_env("EMAIL_MAX_RANGE_DAYS", 31)))
+EMAIL_MAX_MESSAGES_PER_RUN = min(
+    500, max(1, _get_int_env("EMAIL_MAX_MESSAGES_PER_RUN", 100))
+)
+EMAIL_MAX_BODY_CHARS = min(100000, max(1000, _get_int_env("EMAIL_MAX_BODY_CHARS", 20000)))
+EMAIL_MAX_TOTAL_CHARS = min(
+    1000000, max(1000, _get_int_env("EMAIL_MAX_TOTAL_CHARS", 200000))
+)
+EMAIL_ARCHIVE_RETENTION_DAYS = min(
+    3650, max(1, _get_int_env("EMAIL_ARCHIVE_RETENTION_DAYS", 30))
+)
+EMAIL_IMAP_TIMEOUT_SECONDS = min(
+    120, max(1, _get_int_env("EMAIL_IMAP_TIMEOUT_SECONDS", 30))
+)
+
+
+def _secret_state(value: str) -> str:
+    return "set" if str(value or "").strip() else "missing"
+
+
+def _is_loopback_hostname(hostname: str | None) -> bool:
+    return hostname in {"localhost", "127.0.0.1", "::1"}
+
+
+def _is_https_or_loopback_url(value: str) -> bool:
+    parsed = urlparse(value)
+    if parsed.scheme == "https" and parsed.netloc:
+        return True
+    if parsed.scheme == "http" and _is_loopback_hostname(parsed.hostname):
+        return True
+    return False
+
+
+def _validate_required(value: str, name: str, errors: list[str]) -> None:
+    if not str(value or "").strip():
+        errors.append(f"{name} is required")
+
+
+def _validate_url(value: str, name: str, errors: list[str]) -> None:
+    if value and not _is_https_or_loopback_url(value):
+        errors.append(f"{name} must use https or a loopback http URL")
+
+
+def _validate_positive_int_env(name: str, errors: list[str]) -> None:
+    raw = _AGENT_RAW_LIMIT_VALUES.get(name, "")
+    if not raw:
+        return
+    try:
+        value = int(raw)
+    except ValueError:
+        errors.append(f"{name} must be a positive integer")
+        return
+    if value <= 0:
+        errors.append(f"{name} must be a positive integer")
+
+
+def validate_agent_settings() -> list[str]:
+    """Return safe validation errors; never include credential values."""
+    errors: list[str] = []
+    if not _AGENT_PROVIDER_IS_VALID:
+        errors.append(
+            "AGENT_PROVIDER must be one of: chat_compatible, openai, responses_proxy"
+        )
+    if not _AGENT_MODEL_REASONING_EFFORT_IS_VALID:
+        errors.append(
+            "AGENT_MODEL_REASONING_EFFORT must be one of: "
+            "none, minimal, low, medium, high, xhigh, max"
+        )
+
+    _validate_positive_int_env("AGENT_MAX_TURNS", errors)
+    _validate_positive_int_env("AGENT_MAX_TOOL_CALLS", errors)
+    _validate_positive_int_env("AGENT_RUN_TIMEOUT_SECONDS", errors)
+
+    if AGENT_PROVIDER == "chat_compatible" and OPENAI_HOSTED_WEB_SEARCH_ENABLED:
+        errors.append("chat_compatible provider cannot use hosted web search")
+    if AGENT_PROVIDER == "chat_compatible" and OPENAI_COMPUTER_USE_ENABLED:
+        errors.append("chat_compatible provider cannot use built-in computer use")
+    if (
+        AGENT_PROVIDER == "responses_proxy"
+        and OPENAI_HOSTED_WEB_SEARCH_ENABLED
+        and not RESPONSES_PROXY_WEB_SEARCH_VERIFIED
+    ):
+        errors.append(
+            "RESPONSES_PROXY_WEB_SEARCH_VERIFIED is required for hosted web search"
+        )
+    if (
+        AGENT_PROVIDER == "responses_proxy"
+        and OPENAI_COMPUTER_USE_ENABLED
+        and not RESPONSES_PROXY_COMPUTER_VERIFIED
+    ):
+        errors.append(
+            "RESPONSES_PROXY_COMPUTER_VERIFIED is required for built-in computer use"
+        )
+
+    _validate_url(RESPONSES_PROXY_BASE_URL, "RESPONSES_PROXY_BASE_URL", errors)
+    _validate_url(CHAT_COMPATIBLE_BASE_URL, "CHAT_COMPATIBLE_BASE_URL", errors)
+
+    if not AGENT_RUNTIME_ENABLED:
+        return errors
+
+    if AGENT_PROVIDER == "openai":
+        _validate_required(OPENAI_API_KEY, "OPENAI_API_KEY", errors)
+    elif AGENT_PROVIDER == "responses_proxy":
+        _validate_required(RESPONSES_PROXY_BASE_URL, "RESPONSES_PROXY_BASE_URL", errors)
+        _validate_required(RESPONSES_PROXY_API_KEY, "RESPONSES_PROXY_API_KEY", errors)
+        _validate_required(RESPONSES_PROXY_MODEL, "RESPONSES_PROXY_MODEL", errors)
+        if AGENT_PROVIDER_CAPABILITY_STRICT and not RESPONSES_PROXY_TEXT_VERIFIED:
+            errors.append(
+                "RESPONSES_PROXY_TEXT_VERIFIED is required in strict capability mode"
+            )
+    elif AGENT_PROVIDER == "chat_compatible":
+        _validate_required(CHAT_COMPATIBLE_BASE_URL, "CHAT_COMPATIBLE_BASE_URL", errors)
+        _validate_required(CHAT_COMPATIBLE_API_KEY, "CHAT_COMPATIBLE_API_KEY", errors)
+        _validate_required(CHAT_COMPATIBLE_MODEL, "CHAT_COMPATIBLE_MODEL", errors)
+
+    return errors
+
+
+def agent_config_summary() -> dict[str, object]:
+    """Return provider, models, flags, and secret set/missing states only."""
+    return {
+        "runtime_enabled": AGENT_RUNTIME_ENABLED,
+        "provider": AGENT_PROVIDER,
+        "provider_valid": _AGENT_PROVIDER_IS_VALID,
+        "models": {
+            "openai": OPENAI_AGENT_MODEL,
+            "responses_proxy": RESPONSES_PROXY_MODEL,
+            "chat_compatible": CHAT_COMPATIBLE_MODEL,
+        },
+        "capabilities": {
+            "hosted_web_search_enabled": OPENAI_HOSTED_WEB_SEARCH_ENABLED,
+            "computer_use_enabled": OPENAI_COMPUTER_USE_ENABLED,
+            "strict": AGENT_PROVIDER_CAPABILITY_STRICT,
+        },
+        "model_settings": {
+            "reasoning_effort": AGENT_MODEL_REASONING_EFFORT or "provider_default",
+            "response_storage_disabled": AGENT_DISABLE_RESPONSE_STORAGE,
+        },
+        "proxy_verification": {
+            "text": RESPONSES_PROXY_TEXT_VERIFIED,
+            "web_search": RESPONSES_PROXY_WEB_SEARCH_VERIFIED,
+            "computer": RESPONSES_PROXY_COMPUTER_VERIFIED,
+        },
+        "limits": {
+            "max_turns": AGENT_MAX_TURNS,
+            "max_tool_calls": AGENT_MAX_TOOL_CALLS,
+            "timeout_seconds": AGENT_RUN_TIMEOUT_SECONDS,
+        },
+        "secrets": {
+            "openai_api_key": _secret_state(OPENAI_API_KEY),
+            "responses_proxy_api_key": _secret_state(RESPONSES_PROXY_API_KEY),
+            "chat_compatible_api_key": _secret_state(CHAT_COMPATIBLE_API_KEY),
+        },
+        "trace_export_enabled": AGENT_TRACE_EXPORT_ENABLED,
+        "fallback_to_legacy": AGENT_FALLBACK_TO_LEGACY,
+        "validation_errors": validate_agent_settings(),
+    }
+
+
+def validate_email_settings() -> list[str]:
+    """Return email validation errors without credential values."""
+    errors: list[str] = []
+    if EMAIL_AGENT_ENABLED or EMAIL_MONITOR_ENABLED:
+        _validate_required(EMAIL_IMAP_USERNAME, "EMAIL_IMAP_USERNAME", errors)
+        _validate_required(EMAIL_IMAP_PASSWORD, "EMAIL_IMAP_PASSWORD", errors)
+    if (
+        EMAIL_MONITOR_ENABLED
+        or EMAIL_IMMEDIATE_PUSH_ENABLED
+        or _EMAIL_DIGEST_PUSH_REQUESTED
+    ) and OWNER_QQ <= 0:
+        errors.append("OWNER_QQ must be configured for email automation")
+    if _EMAIL_DIGEST_PUSH_REQUESTED and not EMAIL_DIGEST_TIMES:
+        errors.append("EMAIL_DIGEST_TIMES must contain comma-separated HH:MM values")
+    return errors
+
+
+def email_config_summary() -> dict[str, object]:
+    """Return redacted email feature state for diagnostics."""
+    return {
+        "enabled": EMAIL_AGENT_ENABLED,
+        "imap": {
+            "host": EMAIL_IMAP_HOST,
+            "port": EMAIL_IMAP_PORT,
+            "mailbox": EMAIL_IMAP_MAILBOX,
+            "timeout_seconds": EMAIL_IMAP_TIMEOUT_SECONDS,
+        },
+        "automation": {
+            "monitor_enabled": EMAIL_MONITOR_ENABLED,
+            "immediate_push_enabled": EMAIL_IMMEDIATE_PUSH_ENABLED,
+            "digest_push_enabled": EMAIL_DIGEST_PUSH_ENABLED,
+            "shadow_mode": EMAIL_SHADOW_MODE,
+            "poll_interval_seconds": EMAIL_POLL_INTERVAL_SECONDS,
+            "digest_times": list(EMAIL_DIGEST_TIMES),
+        },
+        "summary_model": EMAIL_SUMMARY_MODEL or "agent_default",
+        "secrets": {
+            "username": _secret_state(EMAIL_IMAP_USERNAME),
+            "password": _secret_state(EMAIL_IMAP_PASSWORD),
+        },
+        "validation_errors": validate_email_settings(),
+    }
 
 DRAW_API_KEY = (
     os.getenv("DRAW_API_KEY", "").strip()

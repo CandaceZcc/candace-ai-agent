@@ -41,6 +41,43 @@ source .venv/bin/activate
 
 如果仓库中有 `.env.example`，建议先复制成 `~/.candace/qq-ai-bridge.env`（推荐，不会进 Git）或 `qq-ai-bridge/.local.env`，再填入真实 Key。`qq-ai-bridge/.env` 仅可放非敏感默认项；模板见 `qq-ai-bridge/.env.example`。
 
+个性化校园邮件的只读 IMAP 配置、影子模式、诊断和分阶段启用见
+[`qq-email-agent.md`](qq-email-agent.md)。不要在仓库文件中填写邮箱密码或 API key。
+
+## Agents SDK provider probes
+
+Phase A 的私聊 canary 可以使用 official OpenAI、第三方 Responses proxy，或
+OpenAI-compatible Chat Completions provider。底层模型名写着 GPT-5.5/5.6
+不代表网关一定转发 hosted tools；必须先验证实际 API surface。
+
+先保持：
+
+```dotenv
+AGENT_RUNTIME_ENABLED=false
+OPENAI_HOSTED_WEB_SEARCH_ENABLED=false
+OPENAI_COMPUTER_USE_ENABLED=false
+```
+
+然后从仓库根目录运行：
+
+```bash
+PYTHONPATH=qq-ai-bridge python qq-ai-bridge/scripts/probe_agent_provider.py --provider responses_proxy --text
+PYTHONPATH=qq-ai-bridge python qq-ai-bridge/scripts/probe_agent_provider.py --provider responses_proxy --web-search --accept-billable-probe
+PYTHONPATH=qq-ai-bridge python qq-ai-bridge/scripts/probe_agent_provider.py --provider responses_proxy --computer --accept-billable-probe
+```
+
+退出码含义：
+
+- `0`: 该探针通过。
+- `2`: 配置有效，但该 capability 不支持或未接受 billable hosted-tool probe。
+- `1`: 配置、鉴权、网络或上游错误。
+
+只有 exact endpoint/model 的 `--web-search` 返回真实 `web_search_call` 和引用时，
+才启用 `OPENAI_HOSTED_WEB_SEARCH_ENABLED=true`。只有 `--computer` 返回
+`computer_call` 时，才考虑启用 built-in computer flag；Phase A 的实际动作仍通过本地
+PC Agent 安全边界执行。第三方网关的账单和数据处理由该网关控制。ChatGPT Plus 不能作为
+这些脚本的 API 凭据。
+
 ## 启动 QQ bridge
 
 ```bash

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source qq-ai-bridge/venv/bin/activate
-ruff check qq-ai-bridge/apps/qq_ai_bridge/services/ --fix
+RUFF_BIN="${RUFF_BIN:-.venv/bin/ruff}"
+if [[ ! -x "$RUFF_BIN" ]]; then
+  printf 'Ruff executable not found: %s\n' "$RUFF_BIN" >&2
+  exit 2
+fi
+"$RUFF_BIN" check qq-ai-bridge/apps/qq_ai_bridge/services/

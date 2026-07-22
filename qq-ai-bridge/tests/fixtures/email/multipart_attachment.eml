@@ -1,0 +1,34 @@
+From: Course Team <course@example.invalid>
+To: Student One <student@example.invalid>, Student Two <student2@example.invalid>
+Subject: Course materials
+Date: Tue, 21 Jul 2026 10:45:00 +0800
+Message-ID: <multipart-1@example.invalid>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer-boundary"
+
+--outer-boundary
+Content-Type: multipart/alternative; boundary="alternative-boundary"
+
+--alternative-boundary
+Content-Type: text/plain; charset="utf-8"
+
+Preferred plain text body.
+--alternative-boundary
+Content-Type: text/html; charset="utf-8"
+
+<p>HTML body should not replace the plain text body.</p>
+--alternative-boundary--
+--outer-boundary
+Content-Type: application/pdf; name="../../private/report.pdf"
+Content-Disposition: attachment; filename="../../private/report.pdf"
+Content-Transfer-Encoding: base64
+
+U3ludGhldGljIFBERg==
+--outer-boundary
+Content-Type: image/png; name="inline.png"
+Content-Disposition: inline; filename="inline.png"
+Content-ID: <inline-image@example.invalid>
+Content-Transfer-Encoding: base64
+
+aW5saW5lLWltYWdl
+--outer-boundary--

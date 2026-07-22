@@ -1,0 +1,9 @@
+From: =?utf-8?Q?Broken_=ZZ?= <broken@example.invalid>
+To: student@example.invalid
+Subject: =?utf-8?Q?Incomplete_=E4=B8?=
+Date: definitely-not-a-date
+MIME-Version: 1.0
+Content-Type: text/plain; charset="unknown-charset"
+Content-Transfer-Encoding: 8bit
+
+Malformed headers must not stop digest generation.

@@ -12,6 +12,14 @@ class RunaiScriptTests(unittest.TestCase):
         self.assertIn('resolve_service_pid "$pid_file" "$BRIDGE_PORT"', text)
         self.assertIn('resolve_service_pid "$pid_file" "$PC_AGENT_PORT"', text)
 
+    def test_ruff_scripts_use_the_root_worktree_virtualenv(self):
+        for script_path in ("run_ruff.sh", "run_ruff_2.sh"):
+            with self.subTest(script=script_path):
+                text = Path(script_path).read_text(encoding="utf-8")
+                self.assertIn('RUFF_BIN="${RUFF_BIN:-.venv/bin/ruff}"', text)
+                self.assertNotIn("qq-ai-bridge/venv", text)
+                self.assertNotIn("--fix", text)
+
 
 if __name__ == "__main__":
     unittest.main()

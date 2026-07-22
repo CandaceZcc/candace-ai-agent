@@ -156,6 +156,39 @@ class NapcatClientTests(unittest.TestCase):
             ],
         )
 
+    @patch("builtins.print")
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._append_outbound_event")
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_sensitive_private_message_redacts_console_and_audit(
+        self,
+        mock_post,
+        mock_event,
+        mock_print,
+    ):
+        secret_text = "Private exam summary from Teacher"
+        mock_post.return_value = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            text='{"status":"ok","retcode":0}',
+        )
+
+        result = send_private_msg(
+            67890,
+            secret_text,
+            quiet=False,
+            redact_content=True,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(mock_post.call_args.args[1]["message"], secret_text)
+        console_text = " ".join(str(call) for call in mock_print.call_args_list)
+        event = mock_event.call_args.args[0]
+        self.assertNotIn(secret_text, console_text)
+        self.assertNotIn(secret_text, repr(event))
+        self.assertEqual(event["message_preview"], "[redacted]")
+        self.assertEqual(event["message_chars"], len(secret_text))
+        self.assertEqual(event["response_preview"], "[redacted]")
+
     @patch("apps.qq_ai_bridge.adapters.napcat_client.time.sleep", return_value=None)
     @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
     def test_send_group_msg_force_parts_sends_multiple_messages(self, mock_post, _mock_sleep):

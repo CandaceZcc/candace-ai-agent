@@ -42,6 +42,14 @@ QQ → NapCat → webhook → bridge → routing → QQ / 设备 / 任务
 - 到时间自动发 QQ  
 - 每日固定任务（睡觉 / 明日课程）  
 
+### 个性化校园邮件
+
+- 只读 IMAP，每 5 分钟增量检查
+- 本地规则与无工具模型共同筛选相关邮件
+- 高价值邮件分级 QQ 推送，12:30 / 20:30 生成最近 24 小时增量摘要
+- owner 私聊反馈可学习、可撤销；不通过 edu 域名猜测老师或机构
+- 自动化开关默认关闭，支持 24 小时 shadow canary
+
 
 ### VoCat（ESP32）
 
@@ -136,5 +144,9 @@ runai
 
 https://candacezcc.github.io/candace-ai-agent/
 
----
+Phase A owner-private Agents SDK canary:
 
+- `docs/install/openai-agents-sdk.md`
+- `docs/install/qq-email-agent.md`
+
+---
