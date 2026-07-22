@@ -144,21 +144,16 @@ def _call_cli_llm(text: str | list[dict[str, Any]], metadata: dict[str, Any] | N
 
         if result.returncode != 0:
             duration_ms = int((time.monotonic() - started_at) * 1000)
-            error_text = diagnostic_error or output or "无可见错误输出。"
             print(
                 "[OCAI] error"
                 f" user_id={user_id}"
                 f" duration_ms={duration_ms}"
                 f" returncode={result.returncode}"
             )
-            print(f"[OCAI] stderr/stdout:\n{error_text}")
-            return f"ocai 调用失败：\n{error_text}"
+            return ""
 
         if diagnostic_error:
-            print(f"[OCAI] diagnostic stderr ignored:\n{diagnostic_error[:500]}")
-
-        if not output:
-            output = "ocai 没有返回内容。"
+            print(f"[OCAI] diagnostic stderr ignored chars={len(diagnostic_error)}")
 
         duration_ms = int((time.monotonic() - started_at) * 1000)
         prompt_tokens = "na"
@@ -182,21 +177,19 @@ def _call_cli_llm(text: str | list[dict[str, Any]], metadata: dict[str, Any] | N
         return output
     except subprocess.CalledProcessError as e:
         duration_ms = int((time.monotonic() - started_at) * 1000)
-        output = e.output.decode("utf-8", errors="ignore")
         print(f"[OCAI] error user_id={user_id} duration_ms={duration_ms} type=CalledProcessError")
-        print(f"[OCAI] CalledProcessError:\n{output}")
-        return f"ocai 调用失败：\n{output}"
+        return ""
     except subprocess.TimeoutExpired:
         duration_ms = int((time.monotonic() - started_at) * 1000)
         print(f"[OCAI] timeout user_id={user_id} duration_ms={duration_ms}")
-        return "ocai 处理超时。"
+        return ""
     except FileNotFoundError:
         print(f"[OCAI] 找不到命令: {AI_CMD}")
-        return f"找不到 ocai 命令：{AI_CMD}"
+        return ""
     except Exception as e:
         duration_ms = int((time.monotonic() - started_at) * 1000)
         print(f"[OCAI] exception user_id={user_id} duration_ms={duration_ms} error={e}")
-        return f"发生错误：{e}"
+        return ""
 
 
 def _extract_kimi_text(payload: dict[str, Any]) -> str:
@@ -270,31 +263,46 @@ def _call_direct_llm(
 
     started_at = time.monotonic()
     try:
-        response = _HTTP_SESSION.post(
-            url,
-            headers=headers,
-            json=payload,
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        data = response.json()
-        output = _extract_kimi_text(data)
-        duration_ms = int((time.monotonic() - started_at) * 1000)
-        usage = data.get("usage") if isinstance(data, dict) else {}
-        prompt_tokens = usage.get("prompt_tokens", "na") if isinstance(usage, dict) else "na"
-        completion_tokens = usage.get("completion_tokens", "na") if isinstance(usage, dict) else "na"
-        total_tokens = usage.get("total_tokens", "na") if isinstance(usage, dict) else "na"
-        print(
-            "[LLM] success"
-            " backend=direct"
-            f" model={KIMI_MODEL}"
-            f" user_id={metadata.get('user_id', 'unknown')}"
-            f" duration_ms={duration_ms}"
-            f" prompt_tokens={prompt_tokens}"
-            f" completion_tokens={completion_tokens}"
-            f" total_tokens={total_tokens}"
-        )
-        return output or "模型没有返回内容。"
+        for attempt in range(1, 3):
+            response = _HTTP_SESSION.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+            output = _extract_kimi_text(data)
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            usage = data.get("usage") if isinstance(data, dict) else {}
+            prompt_tokens = usage.get("prompt_tokens", "na") if isinstance(usage, dict) else "na"
+            completion_tokens = usage.get("completion_tokens", "na") if isinstance(usage, dict) else "na"
+            total_tokens = usage.get("total_tokens", "na") if isinstance(usage, dict) else "na"
+            if output:
+                print(
+                    "[LLM] success"
+                    " backend=direct"
+                    f" model={KIMI_MODEL}"
+                    f" user_id={metadata.get('user_id', 'unknown')}"
+                    f" duration_ms={duration_ms}"
+                    f" attempt={attempt}"
+                    f" prompt_tokens={prompt_tokens}"
+                    f" completion_tokens={completion_tokens}"
+                    f" total_tokens={total_tokens}"
+                )
+                return output
+            print(
+                "[LLM] empty_visible_content"
+                " backend=direct"
+                f" model={KIMI_MODEL}"
+                f" user_id={metadata.get('user_id', 'unknown')}"
+                f" duration_ms={duration_ms}"
+                f" attempt={attempt}"
+                f" prompt_tokens={prompt_tokens}"
+                f" completion_tokens={completion_tokens}"
+                f" total_tokens={total_tokens}"
+            )
+        return ""
     except requests.RequestException as exc:
         duration_ms = int((time.monotonic() - started_at) * 1000)
         status_code = getattr(getattr(exc, "response", None), "status_code", "na")
@@ -306,7 +314,7 @@ def _call_direct_llm(
             f" status_code={status_code}"
             f" error_type={type(exc).__name__}"
         )
-        return "模型服务暂时不可用，请稍后再试。"
+        return ""
     except Exception as exc:
         duration_ms = int((time.monotonic() - started_at) * 1000)
         print(
@@ -316,7 +324,7 @@ def _call_direct_llm(
             f" duration_ms={duration_ms}"
             f" error_type={type(exc).__name__}"
         )
-        return "模型处理失败，请稍后再试。"
+        return ""
 
 
 def call_ai(text: str | list[dict[str, Any]], metadata: dict[str, Any] | None = None) -> str:

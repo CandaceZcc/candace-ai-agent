@@ -1,7 +1,19 @@
 import json
 import os
 import random
+import re
+import tempfile
+import threading
 import time
+
+
+_GROUP_CHAT_LOG_LOCKS: dict[str, threading.Lock] = {}
+_GROUP_CHAT_LOG_LOCKS_GUARD = threading.Lock()
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b(api[\s_-]?key|access[\s_-]?token|secret[\s_-]?key|password|密码|密钥)\s*[:=]?\s*"
+    r"(sk-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_./+=-]{8,})"
+)
+_OPENAI_STYLE_KEY_PATTERN = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
 
 DEFAULT_GROUP_CONFIG = {
     "default": {
@@ -47,9 +59,28 @@ def load_json_file(path: str, default_data):
 
 
 def save_json_file(path: str, data):
+    """通过同目录原子替换保存 JSON，避免读到半写文件。"""
     ensure_dir(os.path.dirname(path))
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    fd, temp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def redact_sensitive_text(text: str) -> str:
+    """遮蔽消息中的凭据值，同时保留普通 token 概念讨论。"""
+    value = str(text or "")
+    value = _SECRET_ASSIGNMENT_PATTERN.sub(
+        lambda match: f"{match.group(1)}{'=' if match.group(1).isascii() else ''}[REDACTED]",
+        value,
+    )
+    return _OPENAI_STYLE_KEY_PATTERN.sub("[REDACTED]", value)
 
 
 def read_text_file(path: str) -> str:
@@ -226,11 +257,42 @@ def get_group_workspace(base_dir: str, group_id) -> dict:
     }
 
 
+def _get_group_chat_log_lock(path: str) -> threading.Lock:
+    """为每个群聊日志文件复用一把锁，避免并发追加互相覆盖。"""
+    with _GROUP_CHAT_LOG_LOCKS_GUARD:
+        lock = _GROUP_CHAT_LOG_LOCKS.get(path)
+        if lock is None:
+            lock = threading.Lock()
+            _GROUP_CHAT_LOG_LOCKS[path] = lock
+        return lock
+
+
 def append_group_chat_log(base_dir: str, group_id, message_entry: dict, limit: int = 500):
+    """追加群聊事件；同一消息的角色事件再次到达时更新较完整内容。"""
     workspace = get_group_workspace(base_dir, group_id)
-    chat_log = load_json_file(workspace["chat_log_path"], [])
-    chat_log.append(message_entry)
-    save_json_file(workspace["chat_log_path"], chat_log[-limit:])
+    chat_log_path = workspace["chat_log_path"]
+    with _get_group_chat_log_lock(chat_log_path):
+        chat_log = load_json_file(chat_log_path, [])
+        role = str(message_entry.get("role") or "").strip()
+        message_id = message_entry.get("message_id")
+        source = str(message_entry.get("source") or "").strip()
+        replaced = False
+        if role and message_id is not None:
+            for index in range(len(chat_log) - 1, -1, -1):
+                existing = chat_log[index]
+                if not isinstance(existing, dict):
+                    continue
+                if (
+                    str(existing.get("role") or "").strip() == role
+                    and existing.get("message_id") == message_id
+                    and str(existing.get("source") or "").strip() == source
+                ):
+                    chat_log[index] = {**existing, **message_entry}
+                    replaced = True
+                    break
+        if not replaced:
+            chat_log.append(message_entry)
+        save_json_file(chat_log_path, chat_log[-limit:])
 
 
 def append_style_sample(base_dir: str, group_id, user_id, message: str, timestamp=None, max_lines: int = 5000):

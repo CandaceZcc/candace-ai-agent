@@ -1,4 +1,4 @@
-"""NapCat HTTP client helpers."""
+"""NapCat HTTP 消息、图片、文件与表情操作客户端。"""
 
 import asyncio
 import json
@@ -48,6 +48,21 @@ def _append_outbound_event(event: dict) -> None:
 def _post_json(api_name: str, payload: dict, timeout: int = 15):
     api_url = f"{NAPCAT_HTTP}/{api_name}?access_token={NAPCAT_TOKEN}"
     return requests.post(api_url, json=payload, timeout=timeout)
+
+
+def _napcat_response_status(response) -> tuple[bool, int | None, str]:
+    """同时校验 HTTP 与 NapCat retcode，返回统一成功语义。"""
+    response_text = str(getattr(response, "text", "") or "")
+    retcode = None
+    if response_text:
+        try:
+            payload = json.loads(response_text)
+            if isinstance(payload, dict):
+                retcode = payload.get("retcode")
+        except (TypeError, json.JSONDecodeError):
+            pass
+    ok = bool(getattr(response, "ok", False) and retcode in (0, "0"))
+    return ok, retcode, response_text
 
 
 def _build_group_message_payload(part: str, reply_to_message_id: int | None = None):
@@ -237,6 +252,8 @@ def send_group_msg(
 
     sent = 0
     last_resp = None
+    last_retcode = None
+    all_parts_ok = True
     try:
         for idx, part in enumerate(parts):
             if not quiet:
@@ -252,6 +269,8 @@ def send_group_msg(
                 },
                 timeout=15,
             )
+            part_ok, last_retcode, response_text = _napcat_response_status(last_resp)
+            all_parts_ok = all_parts_ok and part_ok
             if not quiet:
                 print(
                     f"[SEND_GROUP] NapCat 返回 part={idx + 1}/{len(parts)}: "
@@ -264,17 +283,19 @@ def send_group_msg(
                     "part_index": idx + 1,
                     "parts_total": len(parts),
                     "message_preview": part[:200],
-                    "ok": bool(last_resp.ok),
+                    "ok": part_ok,
                     "status_code": getattr(last_resp, "status_code", None),
-                    "response_preview": getattr(last_resp, "text", "")[:300],
+                    "retcode": last_retcode,
+                    "response_preview": response_text[:300],
                 }
             )
             sent += 1
             if idx < len(parts) - 1:
                 time.sleep(OUTBOUND_SEND_INTERVAL_SECONDS)
         return {
-            "ok": bool(last_resp and last_resp.ok and sent == len(parts)),
+            "ok": bool(last_resp and all_parts_ok and sent == len(parts)),
             "status_code": getattr(last_resp, "status_code", None),
+            "retcode": last_retcode,
             "text": getattr(last_resp, "text", ""),
             "parts_sent": sent,
             "parts_total": len(parts),
@@ -294,6 +315,59 @@ def send_group_msg(
             }
         )
         return {"ok": False, "error": str(e), "parts_sent": sent, "parts_total": len(parts)}
+
+
+def send_group_msg_verbatim(group_id, msg, quiet: bool = False):
+    """单条发送原始群文本，不执行清洗、换行转换或拆分。"""
+    text = "" if msg is None else str(msg)
+    if not text:
+        return {"ok": False, "reason": "empty_message"}
+    try:
+        response = _post_json(
+            "send_group_msg",
+            {"group_id": group_id, "message": text},
+            timeout=15,
+        )
+        ok, retcode, response_text = _napcat_response_status(response)
+        if not quiet:
+            print(
+                f"[SEND_GROUP_VERBATIM] group_id={group_id}"
+                f" status_code={getattr(response, 'status_code', None)} ok={ok}"
+            )
+        _append_outbound_event(
+            {
+                "type": "group_msg",
+                "group_id": group_id,
+                "parts_total": 1,
+                "message_preview": text[:200],
+                "verbatim": True,
+                "ok": ok,
+                "status_code": getattr(response, "status_code", None),
+                "retcode": retcode,
+                "response_preview": response_text[:300],
+            }
+        )
+        return {
+            "ok": ok,
+            "status_code": getattr(response, "status_code", None),
+            "retcode": retcode,
+            "text": response_text,
+            "parts_sent": 1,
+            "parts_total": 1,
+        }
+    except Exception as exc:
+        if not quiet:
+            print(f"[SEND_GROUP_VERBATIM] failed group_id={group_id} error={exc}")
+        _append_outbound_event(
+            {
+                "type": "group_msg",
+                "group_id": group_id,
+                "verbatim": True,
+                "ok": False,
+                "error": str(exc),
+            }
+        )
+        return {"ok": False, "error": str(exc), "parts_sent": 0, "parts_total": 1}
 
 
 def send_private_image(user_id, image_url: str, quiet: bool = False):

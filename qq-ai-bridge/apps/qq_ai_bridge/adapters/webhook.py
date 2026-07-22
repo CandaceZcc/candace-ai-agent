@@ -20,6 +20,7 @@ from apps.qq_ai_bridge.adapters.napcat_client import (
     send_private_msg as _send_private_msg_raw,
 )
 from apps.qq_ai_bridge.config.settings import (
+    BASE_DATA_DIR,
     IMAGE_CAPTION_PENDING_MAX,
     VOCAT_API_TOKEN,
     VOCAT_BOT_ID,
@@ -65,7 +66,7 @@ from apps.qq_ai_bridge.services.vocat_command_queue import (
 from apps.qq_ai_bridge.skills.base import SkillContext
 from apps.qq_ai_bridge.skills.registry import build_skill_registry
 from apps.qq_ai_bridge.skills.router import dispatch_skill
-from storage_utils import is_group_whitelisted
+from storage_utils import append_group_chat_log, is_group_whitelisted, redact_sensitive_text
 from apps.qq_ai_bridge.config.settings import GROUP_CONFIG_PATH
 
 webhook_bp = Blueprint("webhook", __name__)
@@ -239,8 +240,27 @@ class SkillDispatcher:
                 finish_trace(trace_id, result="group_ignored", status="ok", source="qq_webhook")
                 return
             should_log = should_log_group(group_id)
+            if group_config.get("capture_all_messages", False):
+                history_message = effective_text
+                if bool((parsed_data.get("image_inputs") or {}).get("has_image")):
+                    history_message = f"[图片] {effective_text}".strip()
+                if history_message:
+                    append_group_chat_log(
+                        BASE_DATA_DIR,
+                        group_id,
+                        {
+                            "timestamp": int(parsed_data.get("timestamp") or time.time()),
+                            "role": "user",
+                            "sender_name": parsed_data.get("nick") or str(user_id or "?"),
+                            "user_id": user_id,
+                            "message": redact_sensitive_text(history_message),
+                            "message_id": parsed_data.get("message_id"),
+                            "source": "group_inbound",
+                        },
+                        limit=500,
+                    )
             if group_config.get("learn_style", False):
-                capture_group_style("data", group_id, user_id, effective_text, log=print)
+                capture_group_style(BASE_DATA_DIR, group_id, user_id, redact_sensitive_text(effective_text), log=print)
 
         context = SkillContext(
             data=parsed_data,
@@ -387,7 +407,7 @@ def _run_async(coro):
 
 
 def _preview_text(text: str, limit: int = 80) -> str:
-    normalized = " ".join(str(text or "").split())
+    normalized = " ".join(redact_sensitive_text(text).split())
     if len(normalized) <= limit:
         return normalized
     return normalized[:limit].rstrip() + "..."
@@ -461,7 +481,8 @@ def qq_webhook():
             parsed = MessageParser.parse_common_data(data)
             if parsed:
                 parsed["trace_id"] = trace_id
-                start_trace(trace_id, source="qq_webhook", input_text=parsed.get("text") or parsed.get("raw_message") or "")
+                trace_input = redact_sensitive_text(parsed.get("text") or parsed.get("raw_message") or "")
+                start_trace(trace_id, source="qq_webhook", input_text=trace_input)
                 add_trace_step(trace_id, "webhook", post_type=post_type, message_type=parsed.get("msg_type"))
                 parsed = _attach_forward_text_if_present(data, parsed)
                 if parsed.get("msg_type") == "group" and not is_group_whitelisted(GROUP_CONFIG_PATH, parsed.get("group_id")):
@@ -485,8 +506,8 @@ def qq_webhook():
                             message_id=parsed.get("message_id"),
                             user_id=parsed.get("user_id"),
                             sender_name=parsed.get("nick", ""),
-                            text=parsed.get("text", ""),
-                            raw_message=parsed.get("raw_message", ""),
+                            text=redact_sensitive_text(parsed.get("text", "")),
+                            raw_message=redact_sensitive_text(parsed.get("raw_message", "")),
                             timestamp=parsed.get("timestamp"),
                         )
                 elif parsed.get("type") == "file":

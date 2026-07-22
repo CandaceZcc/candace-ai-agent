@@ -319,6 +319,7 @@ class SchedulerStateStore:
     KEY_MAP = {
         "sleep_reminder": "sleep_reminder_last_sent_date",
         "tomorrow_schedule": "tomorrow_schedule_last_sent_date",
+        "barrage_6657_sync": "barrage_6657_sync_last_sent_date",
     }
 
     # __init__：初始化对象状态
@@ -331,6 +332,7 @@ class SchedulerStateStore:
         return {
             "sleep_reminder_last_sent_date": "",
             "tomorrow_schedule_last_sent_date": "",
+            "barrage_6657_sync_last_sent_date": "",
             "meta": {},
         }
 

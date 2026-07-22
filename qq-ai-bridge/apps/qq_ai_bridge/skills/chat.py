@@ -1,16 +1,53 @@
+"""私聊、群聊与 6657 弹幕的最终消息路由。"""
+
+import threading
+import time
+
+from storage_utils import append_group_chat_log, get_group_workspace, load_json_file
+
+from apps.qq_ai_bridge.adapters.napcat_client import send_group_msg_verbatim
+from apps.qq_ai_bridge.config.settings import BASE_DATA_DIR, GLOBAL_LISTEN_GROUP_IDS
+from apps.qq_ai_bridge.services.barrage_6657_service import (
+    DEFAULT_CONTEXT_MESSAGES,
+    Barrage6657Store,
+    BarrageMatcher,
+)
 from apps.qq_ai_bridge.services.group_chat_service import (
     PendingGroupMessage,
     _local_group_response_mode,
     enqueue_group_text,
+    record_group_message_activity,
 )
-from apps.qq_ai_bridge.services.private_chat_service import enqueue_private_text
-from apps.qq_ai_bridge.config.settings import GLOBAL_LISTEN_GROUP_IDS
 from apps.qq_ai_bridge.services.group_strategy import group_strategy_decision
 from apps.qq_ai_bridge.services.private_admin_service import maybe_handle_private_admin_command
+from apps.qq_ai_bridge.services.private_chat_service import enqueue_private_text
 from apps.qq_ai_bridge.services.trace_store import add_trace_step
 from apps.qq_ai_bridge.skills.base import Skill, SkillContext, SkillResult
 
 _RUNTIME_BUSY_REPLY = "当前消息较多，请稍后再试。"
+_6657_MATCHER = None
+_6657_MATCHER_LOCK = threading.Lock()
+_6657_GROUP_LOCKS: dict[str, threading.Lock] = {}
+_6657_GROUP_LOCKS_LOCK = threading.Lock()
+
+
+def get_6657_matcher() -> BarrageMatcher:
+    global _6657_MATCHER
+    if _6657_MATCHER is None:
+        with _6657_MATCHER_LOCK:
+            if _6657_MATCHER is None:
+                _6657_MATCHER = BarrageMatcher(Barrage6657Store())
+    return _6657_MATCHER
+
+
+def _get_6657_group_lock(group_id: int) -> threading.Lock:
+    key = str(group_id)
+    with _6657_GROUP_LOCKS_LOCK:
+        lock = _6657_GROUP_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _6657_GROUP_LOCKS[key] = lock
+        return lock
 
 
 class ChatSkill(Skill):
@@ -83,6 +120,19 @@ class ChatSkill(Skill):
             if not query:
                 return SkillResult(handled=True, source=self.name, status="ignore")
 
+            record_group_message_activity(
+                context.group_id,
+                PendingGroupMessage(
+                    user_id=context.user_id,
+                    sender_name=context.nick,
+                    text=query,
+                    timestamp=context.timestamp,
+                    message_id=context.data.get("message_id"),
+                    reply_reference=context.data.get("reply_reference"),
+                    explicit_trigger=bool(context.mentioned_self or ai_prefix_triggered or bot_alias_triggered or _is_reply_to_self(context)),
+                ),
+            )
+
             configured_reply_all = bool(context.group_config.get("reply_all_messages", False))
             fallback_global_listen = int(context.group_id or 0) in GLOBAL_LISTEN_GROUP_IDS
             global_listen = configured_reply_all or fallback_global_listen
@@ -123,6 +173,10 @@ class ChatSkill(Skill):
                     )
                 ],
             )
+            if not (local_decision and local_decision.get("mode") == "silence"):
+                barrage_result = _maybe_send_6657_barrage(context, query)
+                if barrage_result is not None:
+                    return barrage_result
             if local_decision is not None:
                 strategy = {
                     "mode": local_decision["mode"],
@@ -210,6 +264,154 @@ class ChatSkill(Skill):
             )
 
         return SkillResult(handled=False, source=self.name, status="ignore")
+
+
+def _maybe_send_6657_barrage(context: SkillContext, query: str) -> SkillResult | None:
+    if not context.group_config.get("enable_6657_barrage", False) or context.group_id is None:
+        return None
+
+    with _get_6657_group_lock(context.group_id):
+        return _maybe_send_6657_barrage_locked(context, query)
+
+
+def _maybe_send_6657_barrage_locked(context: SkillContext, query: str) -> SkillResult | None:
+
+    context_limit = _positive_int(
+        context.group_config.get("6657_context_messages"),
+        DEFAULT_CONTEXT_MESSAGES,
+    )
+    matcher = get_6657_matcher()
+    match = matcher.match(
+        query,
+        _load_recent_6657_context(context.group_id, limit=context_limit),
+        context.group_config,
+        group_id=context.group_id,
+        now=context.timestamp,
+    )
+    add_trace_step(
+        context.data.get("trace_id"),
+        "6657_barrage",
+        matched=match.matched,
+        reason=match.reason,
+        barrage_id=match.candidate.barrage_id if match.candidate else None,
+        confidence=match.confidence,
+    )
+    if not match.matched or match.candidate is None:
+        context.log(f"[6657] skipped group_id={context.group_id} reason={match.reason}")
+        return None
+
+    candidate = match.candidate
+    # 先占用冷却与每日额度，避免同群并发发送越过限制。
+    try:
+        send_log_id = matcher.store.record_send(
+            group_id=context.group_id,
+            candidate=candidate,
+            confidence=match.confidence,
+            now=context.timestamp,
+        )
+    except Exception as exc:
+        context.log(
+            f"[6657] record_failed group_id={context.group_id}"
+            f" barrage_id={candidate.barrage_id} error={type(exc).__name__}"
+        )
+        return None
+
+    try:
+        send_result = send_group_msg_verbatim(
+            context.group_id,
+            candidate.text,
+            quiet=not context.should_log,
+        )
+    except Exception as exc:
+        send_result = {"ok": False, "error": type(exc).__name__}
+
+    if not isinstance(send_result, dict) or not send_result.get("ok"):
+        # 发送未确认成功时撤销预记账，让后续消息可以重新匹配。
+        try:
+            matcher.store.delete_send(send_log_id=send_log_id)
+        except Exception as exc:
+            context.log(
+                f"[6657] rollback_failed group_id={context.group_id}"
+                f" barrage_id={candidate.barrage_id} error={type(exc).__name__}"
+            )
+        context.log(
+            f"[6657] send_failed group_id={context.group_id}"
+            f" barrage_id={candidate.barrage_id}"
+        )
+        return None
+
+    # 聊天日志是旁路记录，失败不能改变已经完成的 QQ 发送结果。
+    try:
+        if context.group_config.get("capture_all_messages", False):
+            timeline_entry = {
+                "timestamp": int(time.time()),
+                "role": "assistant",
+                "sender_name": "机盖宁",
+                "assistant": candidate.text,
+                "reply_to_message_id": context.data.get("message_id"),
+                "source": "6657_barrage",
+                "barrage_id": candidate.barrage_id,
+                "barrage_tags": list(candidate.tags),
+                "barrage_confidence": match.confidence,
+            }
+        else:
+            timeline_entry = {
+                "timestamp": int(context.timestamp or 0),
+                "sender_name": context.nick or str(context.user_id or "?"),
+                "user_id": context.user_id,
+                "message": query,
+                "assistant": candidate.text,
+                "source": "6657_barrage",
+                "barrage_id": candidate.barrage_id,
+                "barrage_tags": list(candidate.tags),
+                "barrage_confidence": match.confidence,
+            }
+        append_group_chat_log(BASE_DATA_DIR, context.group_id, timeline_entry, limit=500)
+    except Exception as exc:
+        context.log(
+            f"[6657] chat_log_failed group_id={context.group_id}"
+            f" barrage_id={candidate.barrage_id} error={type(exc).__name__}"
+        )
+    context.log(
+        f"[6657] sent group_id={context.group_id}"
+        f" barrage_id={candidate.barrage_id}"
+        f" confidence={match.confidence:.3f}"
+    )
+    return SkillResult(
+        handled=True,
+        source="6657_barrage",
+        response_payload={
+            "status": "sent",
+            "barrage_id": candidate.barrage_id,
+            "tags": list(candidate.tags),
+            "confidence": match.confidence,
+        },
+        already_sent=True,
+    )
+
+
+def _load_recent_6657_context(group_id: int, *, limit: int) -> list[str]:
+    if limit <= 0:
+        return []
+    workspace = get_group_workspace(BASE_DATA_DIR, group_id)
+    chat_log = load_json_file(workspace["chat_log_path"], [])
+    lines: list[str] = []
+    for item in chat_log[-limit:]:
+        if not isinstance(item, dict):
+            continue
+        message = str(item.get("message") or "").strip()
+        if not message:
+            continue
+        sender = str(item.get("sender_name") or item.get("user_id") or "?").strip()
+        lines.append(f"{sender}: {message}")
+    return lines
+
+
+def _positive_int(value, default: int) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
 
 
 def _is_bot_alias_triggered(text: str, group_config: dict | None) -> bool:

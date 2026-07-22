@@ -9,6 +9,7 @@ from storage_utils import (
     get_group_workspace,
     load_json_file,
     load_private_context,
+    redact_sensitive_text,
     sample_style_lines,
 )
 
@@ -51,10 +52,11 @@ NORMAL_QUERY_HISTORY_LIMIT = 6
 SHORT_QUERY_HISTORY_CHAR_BUDGET = 220
 NORMAL_QUERY_HISTORY_CHAR_BUDGET = 800
 GROUP_COMPACT_QUERY_LEN = 8
-GROUP_COMPACT_HISTORY_LIMIT = 2
-GROUP_FULL_HISTORY_LIMIT = 4
+GROUP_COMPACT_HISTORY_LIMIT = 10
+GROUP_FULL_HISTORY_LIMIT = 16
 GROUP_COMPACT_HISTORY_CHAR_BUDGET = 80
 GROUP_FULL_HISTORY_CHAR_BUDGET = 220
+GROUP_HISTORY_MAX_AGE_SECONDS = 180
 GROUP_PERSONA_FULL_CHAR_BUDGET = 220
 GROUP_PERSONA_COMPACT_CHAR_BUDGET = 72
 GROUP_MARKDOWN_CHAR_BUDGET = 240
@@ -302,7 +304,8 @@ def prepare_group_ai_prompt(
 ) -> dict[str, Any]:
     """Build a compact or full prompt for group chat and return prompt statistics."""
     normalized_text = normalize_query_text(user_text)
-    query_len = len(normalized_text)
+    semantic_query = _group_query_text_for_mode(normalized_text, batch_context)
+    query_len = len(semantic_query)
     prompt_mode = "compact" if query_len <= GROUP_COMPACT_QUERY_LEN else "full"
     soul_info = _load_group_soul_cache()
     persona_seed = soul_info["compact"] if prompt_mode == "compact" else soul_info["full"]
@@ -311,7 +314,17 @@ def prepare_group_ai_prompt(
 
     history_limit = GROUP_COMPACT_HISTORY_LIMIT if prompt_mode == "compact" else GROUP_FULL_HISTORY_LIMIT
     history_budget = GROUP_COMPACT_HISTORY_CHAR_BUDGET if prompt_mode == "compact" else GROUP_FULL_HISTORY_CHAR_BUDGET
-    history_lines = _build_group_history_lines(workspace["chat_log_path"], history_limit, history_budget)
+    current_message_ids = {
+        str(message_id)
+        for message_id in ((batch_context or {}).get("message_ids") or [])
+        if message_id is not None
+    }
+    history_lines = _build_group_history_lines(
+        workspace["chat_log_path"],
+        history_limit,
+        history_budget,
+        exclude_message_ids=current_message_ids,
+    )
     history_text = "\n".join(history_lines)
     history_chars = len(history_text)
     recent_image_context = _build_recent_image_context(workspace["chat_log_path"], current_text=normalized_text)
@@ -389,7 +402,7 @@ def prepare_group_ai_prompt(
             identity_boundary,
             scene_persona,
             "场景：群聊深入回复。",
-            "保持像14-24岁的网友，带有中等攻击性，但别过度抽象、别突然喵化、别无意义胡闹。",
+            "保持年轻网友的自然口语，但别过度抽象、别突然喵化、别无意义胡闹。",
             "别泄露群友隐私，别提私聊内容、私有文件、真实身份信息。",
             safety_layer,
             silent_strategy,
@@ -415,7 +428,7 @@ def prepare_group_ai_prompt(
             prompt_parts.append("补充语气种子：\n" + persona_seed[:180])
         prompt_parts.append("当前群聊消息：\n" + normalized_text)
 
-    prompt = "\n\n".join(part for part in prompt_parts if part)
+    prompt = redact_sensitive_text("\n\n".join(part for part in prompt_parts if part))
     instruction_parts = prompt_parts[:-1] if len(prompt_parts) > 1 else prompt_parts
     instruction_chars = sum(len(part) for part in instruction_parts)
     return {
@@ -436,6 +449,21 @@ def prepare_group_ai_prompt(
         "instruction_chars": instruction_chars,
         "prompt_chars": len(prompt),
     }
+
+
+def _group_query_text_for_mode(user_text: str, batch_context: dict | None) -> str:
+    """仅用消息正文判断 prompt 模式，避免长群昵称把短追问放大。"""
+    if not isinstance(batch_context, dict):
+        return user_text
+    texts: list[str] = []
+    for block in batch_context.get("merged_blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        for text in block.get("texts") or []:
+            normalized = normalize_query_text(str(text or ""))
+            if normalized:
+                texts.append(normalized)
+    return "\n".join(texts) or user_text
 
 
 def _parse_persona_intensity(group_config: dict) -> int:
@@ -555,7 +583,7 @@ def _load_group_soul_cache() -> dict[str, str]:
 
 def _default_group_persona(mode: str) -> str:
     if mode == "compact":
-        return "单行短句，像群友接话。自然点，别像AI，可以带中等攻击性，可以骂人"
+        return "单行短句，像群友接话。自然点，别像AI；先读懂上下文，再接梗或轻吐槽"
     return (
         "单行、短句、口语化，像熟人群聊。别像AI或客服。"
         "优先接梗、附和、轻吐槽，保留一点抽象感，但别演过头。"
@@ -616,6 +644,10 @@ def _is_aggressive_persona_line(line: str) -> bool:
         "最高强度嘴臭",
         "不忌讳任何脏话和冒犯",
         "宁可骂错不要像ai",
+        "只骂不解释",
+        "被骂必反击",
+        "可以骂人",
+        "中等攻击性",
         "傻逼",
         "草拟吗",
     )
@@ -705,28 +737,77 @@ def _match_openclaw_rule_line(line: str) -> bool:
     return any(keyword in line or keyword in lowered for keyword in keywords)
 
 
-def _build_group_history_lines(chat_log_path: str, history_limit: int, history_char_budget: int) -> list[str]:
+def _build_group_history_lines(
+    chat_log_path: str,
+    history_limit: int,
+    history_char_budget: int,
+    *,
+    exclude_message_ids: set[str] | None = None,
+) -> list[str]:
     chat_log = load_json_file(chat_log_path, [])
-    lines: list[str] = []
-    total_chars = 0
-    for item in reversed(chat_log[-history_limit:]):
-        user_id = item.get("sender_name") or item.get("user_id", "?")
-        message = normalize_query_text(str(item.get("message", "")).strip())
-        if not message:
+    latest_timestamp = _latest_group_log_timestamp(chat_log)
+    excluded = exclude_message_ids or set()
+    event_groups: list[list[str]] = []
+    ordered_log = sorted(
+        enumerate(chat_log),
+        key=lambda pair: (_safe_int(pair[1].get("timestamp")) or latest_timestamp, pair[0])
+        if isinstance(pair[1], dict)
+        else (latest_timestamp, pair[0]),
+    )
+    for _index, item in ordered_log:
+        if not isinstance(item, dict):
             continue
+        role = normalize_query_text(str(item.get("role", "")).strip()).lower()
+        if role == "user" and str(item.get("message_id")) in excluded:
+            continue
+        try:
+            item_timestamp = int(item.get("timestamp") or 0)
+        except (TypeError, ValueError):
+            item_timestamp = 0
+        if (
+            latest_timestamp
+            and item_timestamp
+            and latest_timestamp - item_timestamp > GROUP_HISTORY_MAX_AGE_SECONDS
+        ):
+            continue
+        sender = item.get("sender_name") or item.get("user_id", "?")
+        message = normalize_query_text(str(item.get("message", "")).strip())
+        assistant = normalize_query_text(str(item.get("assistant", "")).strip())
         source = normalize_query_text(str(item.get("source", "")).strip())
         image_type = normalize_query_text(str(item.get("image_type", "")).strip())
         social_intent = normalize_query_text(str(item.get("social_intent", "")).strip())
         hint = _build_history_hint(source=source, image_type=image_type, social_intent=social_intent)
-        line = f"{user_id}: {message}"
-        if hint:
-            line = f"{line} {hint}"
-        line_len = len(line)
-        if lines and total_chars + line_len > history_char_budget:
+        group_lines: list[str] = []
+        if role == "assistant":
+            bot_text = assistant or message
+            if bot_text:
+                group_lines.append(f"机盖宁: {bot_text}")
+        else:
+            if message:
+                user_line = f"{sender}: {message}"
+                if hint:
+                    user_line = f"{user_line} {hint}"
+                group_lines.append(user_line)
+            if assistant:
+                group_lines.append(f"机盖宁: {assistant}")
+        if group_lines:
+            event_groups.append(group_lines)
+
+    selected_groups: list[list[str]] = []
+    total_chars = 0
+    selected_events = 0
+    for group_lines in reversed(event_groups):
+        if selected_groups and selected_events + len(group_lines) > history_limit:
             break
-        lines.insert(0, line)
-        total_chars += line_len
-    return lines
+        group_chars = sum(len(line) for line in group_lines)
+        if selected_groups and total_chars + group_chars > history_char_budget:
+            break
+        if not selected_groups and len(group_lines) > history_limit:
+            group_lines = group_lines[-history_limit:]
+        selected_groups.insert(0, group_lines)
+        total_chars += group_chars
+        selected_events += len(group_lines)
+    return [line for group_lines in selected_groups for line in group_lines]
 
 
 def _build_history_hint(source: str, image_type: str, social_intent: str) -> str:
@@ -793,13 +874,8 @@ def _looks_like_image_reference(text: str) -> bool:
 
 
 def _latest_group_log_timestamp(chat_log: list) -> int:
-    for item in reversed(chat_log):
-        if not isinstance(item, dict):
-            continue
-        timestamp = _safe_int(item.get("timestamp"))
-        if timestamp:
-            return timestamp
-    return int(time.time())
+    timestamps = [_safe_int(item.get("timestamp")) for item in chat_log if isinstance(item, dict)]
+    return max((timestamp for timestamp in timestamps if timestamp), default=int(time.time()))
 
 
 def _safe_int(value) -> int:

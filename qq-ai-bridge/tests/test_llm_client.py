@@ -60,6 +60,75 @@ class LlmClientTests(unittest.TestCase):
         self.assertEqual(result, "收到")
         self.assertEqual(mock_session.post.call_args.kwargs["json"]["messages"], messages)
 
+    @patch.object(llm_client, "KIMI_API_KEY", "sk-test")
+    @patch.object(llm_client, "LLM_BACKEND", "direct")
+    @patch.object(llm_client, "_HTTP_SESSION")
+    def test_direct_backend_retries_once_after_empty_visible_content(self, mock_session):
+        empty_response = MagicMock()
+        empty_response.json.return_value = {
+            "choices": [{"message": {"content": "", "reasoning_content": "内部推理"}}],
+            "usage": {"completion_tokens": 20},
+        }
+        success_response = MagicMock()
+        success_response.json.return_value = {
+            "choices": [{"message": {"content": "第二次成功"}}],
+            "usage": {"completion_tokens": 4},
+        }
+        mock_session.post.side_effect = [empty_response, success_response]
+
+        result = call_ai("测试空响应")
+
+        self.assertEqual(result, "第二次成功")
+        self.assertEqual(mock_session.post.call_count, 2)
+
+    @patch("builtins.print")
+    @patch.object(llm_client, "KIMI_API_KEY", "sk-test")
+    @patch.object(llm_client, "LLM_BACKEND", "direct")
+    @patch.object(llm_client, "_HTTP_SESSION")
+    def test_direct_backend_returns_empty_without_leaking_reasoning(self, mock_session, mock_print):
+        responses = []
+        for _index in range(2):
+            response = MagicMock()
+            response.json.return_value = {
+                "choices": [{"message": {"content": "", "reasoning_content": "不能发到群里的推理"}}],
+                "usage": {"completion_tokens": 20},
+            }
+            responses.append(response)
+        mock_session.post.side_effect = responses
+
+        result = call_ai("测试连续空响应")
+
+        self.assertEqual(result, "")
+        self.assertEqual(mock_session.post.call_count, 2)
+        printed = "\n".join(" ".join(str(arg) for arg in call.args) for call in mock_print.call_args_list)
+        self.assertNotIn("不能发到群里的推理", printed)
+        self.assertNotIn("模型没有返回内容", printed)
+
+    @patch.object(llm_client, "KIMI_API_KEY", "sk-test")
+    @patch.object(llm_client, "LLM_BACKEND", "direct")
+    @patch.object(llm_client, "_HTTP_SESSION")
+    def test_direct_backend_request_error_is_silent(self, mock_session):
+        mock_session.post.side_effect = llm_client.requests.RequestException("offline")
+
+        self.assertEqual(call_ai("测试错误"), "")
+
+    @patch.object(llm_client, "LLM_BACKEND", "cli")
+    @patch.object(llm_client.subprocess, "run")
+    def test_cli_backend_empty_output_is_silent(self, mock_run):
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        self.assertEqual(call_ai("测试 CLI 空响应"), "")
+
+    @patch("builtins.print")
+    @patch.object(llm_client, "LLM_BACKEND", "cli")
+    @patch.object(llm_client.subprocess, "run")
+    def test_cli_backend_error_is_silent_without_stderr_leak(self, mock_run, mock_print):
+        mock_run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="secret stderr payload")
+
+        self.assertEqual(call_ai("测试 CLI 错误"), "")
+        printed = "\n".join(" ".join(str(arg) for arg in call.args) for call in mock_print.call_args_list)
+        self.assertNotIn("secret stderr payload", printed)
+
     @patch.object(llm_client, "LLM_BACKEND", "cli")
     @patch.object(llm_client, "_HTTP_SESSION")
     @patch.object(llm_client.subprocess, "run")

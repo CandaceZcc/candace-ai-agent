@@ -40,12 +40,38 @@ _CODE_REQUEST_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _CODE_LIKE_PATTERN = re.compile(r"(def |class |function |import |from |const |let |var |<!DOCTYPE|<html|#include|public class |package )")
-_DANGEROUS_FILE_REQUEST_PATTERN = re.compile(
+_DESTRUCTIVE_SYSTEM_ACTION_PATTERN = re.compile(
     r"(rm\s+-rf\s+/|/下的都删|删掉\s*/|删除\s*/|格式化|清空磁盘|"
-    r"api[_-]?key|secret|token|密码|密钥|配置文件.*发|env|\.env|"
-    r"关机|shutdown\s+/s|重启|reboot|按\s*win\s*\+\s*r|输入\s*cmd|"
-    r"列出.*文件|文件.*发过来|发过来.*文件|发送.*文件夹|所有文件|"
-    r"/home/[^\s`'\"]+|~/.openclaw|openclaw|workspace)",
+    r"关机|shutdown(?:\s+/s)?|重启|reboot|按\s*win\s*\+\s*r|输入\s*cmd)",
+    re.IGNORECASE,
+)
+_DESTRUCTIVE_DISCUSSION_PATTERN = re.compile(r"(为什么|是什么|什么意思|危险|原理|区别|如何工作)", re.IGNORECASE)
+_PROTECTED_FILE_OBJECT_PATTERN = re.compile(
+    r"(/(?:home|etc|root|var|usr)/[^\s`'\"]+|~/\.(?:openclaw|ssh)[^\s`'\"]*|"
+    r"[A-Za-z]:\\[^\s`'\"]+|\.(?:openclaw|ssh)[^\s`'\"]*|"
+    r"openclaw|workspace|配置文件|\.env\b|文件夹|所有文件)",
+    re.IGNORECASE,
+)
+_FILE_OPERATION_PATTERN = re.compile(
+    r"(读取|打开|查看|显示|列出|发送|发过来|发给|导出|上传|复制|打印|删除|删掉|清空)",
+    re.IGNORECASE,
+)
+_SECRET_OBJECT_PATTERN = re.compile(
+    r"(api[\s_-]?key|apikey|access[\s_-]?token|secret[\s_-]?key|secret|token|密码|密钥|\.env\b|环境变量)",
+    re.IGNORECASE,
+)
+_SECRET_ACCESS_INTENT_PATTERN = re.compile(
+    r"(读取|打开|查看|显示|发送|发过来|发给|贴出|导出|上传|复制|打印|列出)",
+    re.IGNORECASE,
+)
+_SECRET_VERBAL_REQUEST_PATTERN = re.compile(r"(告诉|给我|提供|说出)", re.IGNORECASE)
+_LOCAL_SECRET_SCOPE_PATTERN = re.compile(
+    r"(你的|你用的|本机|当前|配置(?:文件)?里|环境变量里|服务器|电脑里|真实|完整|具体值|值是多少|原文)",
+    re.IGNORECASE,
+)
+_SECRET_DISCUSSION_PATTERN = re.compile(
+    r"(token.{0,8}(数量|消耗|成本|计算|怎么算|计费|上下文)|密码学|"
+    r"(?:api[\s_-]?key|secret).{0,8}(是什么|什么意思|概念|原理))",
     re.IGNORECASE,
 )
 _HEAVY_CODE_REQUEST_PATTERN = re.compile(r"(\d+)\s*(行|lines?|代码)", re.IGNORECASE)
@@ -77,6 +103,8 @@ class GroupChatState:
     last_enqueue_monotonic: float = 0.0
     debounce_started_monotonic: float = 0.0
     worker_running: bool = False
+    revision: int = 0
+    observed_messages: list[tuple[int, PendingGroupMessage]] = field(default_factory=list)
     last_activity_monotonic: float = field(default_factory=time.monotonic)
 
 
@@ -164,6 +192,7 @@ def enqueue_group_text(
 
         was_empty = not state.pending
         state.pending.append(pending_message)
+        state.revision += 1
         if was_empty:
             state.debounce_started_monotonic = time.monotonic()
         state.last_enqueue_monotonic = time.monotonic()
@@ -189,6 +218,16 @@ def enqueue_group_text(
         "pending_count": pending_count,
         "explicit_trigger": bool(explicit_trigger),
     }
+
+
+def record_group_message_activity(group_id, message: PendingGroupMessage) -> None:
+    """记录未入队消息，使静默更正也能淘汰生成中的旧回复。"""
+    state = _get_group_chat_state(group_id)
+    with state.lock:
+        state.revision += 1
+        state.last_activity_monotonic = time.monotonic()
+        state.observed_messages.append((state.revision, message))
+        state.observed_messages = state.observed_messages[-20:]
 
 
 def _get_group_chat_state(group_id) -> GroupChatState:
@@ -311,6 +350,7 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             debounce_started_monotonic = state.debounce_started_monotonic
             if not state.pending:
                 state.debounce_started_monotonic = 0.0
+            batch_revision = state.revision
 
         merged_batch = _merge_pending_group_messages(batch)
         merged_text = merged_batch["prompt_text"]
@@ -350,9 +390,20 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             )
             if action_result.get("ok"):
                 record_group_strategy_reply(group_id)
+                _append_group_reply_log(
+                    group_id,
+                    group_config,
+                    batch,
+                    merged_text,
+                    safety_action.text,
+                    source="group_chat:safety",
+                    reply_to_message_id=reply_to_message_id,
+                )
             log(
                 f"[GROUP_CHAT] safety_blocked group_id={group_id}"
-                f" reason={safety_action.reason!r} reply_to_message_id={reply_to_message_id or '-'}"
+                f" reason={safety_action.reason!r}"
+                f" category={_dangerous_group_request_category(merged_text) or '-'}"
+                f" reply_to_message_id={reply_to_message_id or '-'}"
             )
             continue
 
@@ -366,18 +417,14 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             )
             if action_result.get("ok"):
                 record_group_strategy_reply(group_id)
-                append_group_chat_log(
-                    BASE_DATA_DIR,
+                _append_group_reply_log(
                     group_id,
-                    {
-                        "timestamp": int(batch[-1].timestamp or 0) if batch else 0,
-                        "sender_name": "群聊复读",
-                        "user_id": batch[-1].user_id if batch else None,
-                        "message": repeat_text,
-                        "assistant": repeat_text,
-                        "source": "group_chat:repeat_follow",
-                    },
-                    limit=500,
+                    group_config,
+                    batch,
+                    repeat_text,
+                    repeat_text,
+                    source="group_chat:repeat_follow",
+                    sender_name="群聊复读",
                 )
                 log(
                     f"[GROUP_CHAT] repeat_followed group_id={group_id}"
@@ -508,6 +555,15 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
                 )
                 log(f"[GROUP_CHAT] llm_action=no_reply group_id={group_id} reason={llm_action.reason!r}")
                 continue
+        if _cancel_stale_group_reply(
+            group_id,
+            state,
+            batch,
+            batch_revision,
+            log=log,
+            checkpoint="after_model",
+        ):
+            continue
         if llm_action.kind == ActionKind.REACTION:
             target_message_id = _pick_reaction_target_message_id(batch)
             action_result = execute_group_action(
@@ -532,18 +588,14 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             log=log,
         )
         if code_file_result.get("handled"):
-            append_group_chat_log(
-                BASE_DATA_DIR,
+            _append_group_reply_log(
                 group_id,
-                {
-                    "timestamp": int(batch[-1].timestamp or 0) if batch else 0,
-                    "sender_name": "群聊汇总",
-                    "user_id": batch[-1].user_id if batch else None,
-                    "message": merged_text,
-                    "assistant": code_file_result.get("reply", ""),
-                    "source": "group_chat:generated_file",
-                },
-                limit=500,
+                group_config,
+                batch,
+                merged_text,
+                code_file_result.get("reply", ""),
+                source="group_chat:generated_file",
+                reply_to_message_id=_pick_text_reply_target_message_id(batch, code_file_result.get("reply", "")),
             )
             continue
         llm_action.text = _humanize_group_reply(llm_action.text, merged_text)
@@ -551,6 +603,15 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
         if strategy.get("mode") == "delay_text" and delay_ms > 0:
             log(f"[GROUP_CHAT] strategy_delay group_id={group_id} delay_ms={delay_ms}")
             time.sleep(delay_ms / 1000.0)
+        if _cancel_stale_group_reply(
+            group_id,
+            state,
+            batch,
+            batch_revision,
+            log=log,
+            checkpoint="after_delay",
+        ):
+            continue
         requested_parts = _detect_requested_parts(batch[-1].text if batch else "")
         reply_to_message_id = _pick_text_reply_target_message_id(batch, llm_action.text)
         action_result = execute_group_action(
@@ -570,18 +631,14 @@ def _run_group_chat_worker(group_id, group_config: dict, log) -> None:
             continue
         if action_result.get("ok"):
             record_group_strategy_reply(group_id)
-        append_group_chat_log(
-            BASE_DATA_DIR,
+        _append_group_reply_log(
             group_id,
-            {
-                "timestamp": int(batch[-1].timestamp or 0) if batch else 0,
-                "sender_name": "群聊汇总",
-                "user_id": batch[-1].user_id if batch else None,
-                "message": merged_text,
-                "assistant": llm_action.text,
-                "source": "group_chat",
-            },
-            limit=500,
+            group_config,
+            batch,
+            merged_text,
+            llm_action.text,
+            source="group_chat",
+            reply_to_message_id=reply_to_message_id,
         )
         log(
             f"[GROUP_CHAT] replied group_id={group_id}"
@@ -632,7 +689,84 @@ def _merge_pending_group_messages(messages: list[PendingGroupMessage]) -> dict:
         "message_count": raw_messages,
         "user_count": len({str(block['user_id']) for block in merged_blocks}),
         "merged_blocks": merged_blocks,
+        "message_ids": [item.message_id for item in messages if item.message_id is not None],
+        "reply_references": [item.reply_reference for item in messages if isinstance(item.reply_reference, dict)],
     }
+
+
+def _append_group_reply_log(
+    group_id,
+    group_config: dict,
+    batch: list[PendingGroupMessage],
+    message: str,
+    assistant: str,
+    *,
+    source: str,
+    reply_to_message_id: int | None = None,
+    sender_name: str = "群聊汇总",
+) -> None:
+    """按群配置写入新时间线事件，并兼容未开启全量捕获的旧格式。"""
+    assistant_text = normalize_query_text(str(assistant or ""))
+    if not assistant_text:
+        return
+    if group_config.get("capture_all_messages", False):
+        entry = {
+            "timestamp": int(time.time()),
+            "role": "assistant",
+            "sender_name": "机盖宁",
+            "assistant": assistant_text,
+            "reply_to_message_id": reply_to_message_id,
+            "source": source,
+        }
+    else:
+        entry = {
+            "timestamp": int(batch[-1].timestamp or 0) if batch else 0,
+            "sender_name": sender_name,
+            "user_id": batch[-1].user_id if batch else None,
+            "message": message,
+            "assistant": assistant_text,
+            "source": source,
+        }
+    append_group_chat_log(BASE_DATA_DIR, group_id, entry, limit=500)
+
+
+def _cancel_stale_group_reply(
+    group_id,
+    state: GroupChatState,
+    batch: list[PendingGroupMessage],
+    batch_revision: int,
+    *,
+    log,
+    checkpoint: str,
+) -> bool:
+    """当后续相关消息已改变语境时，丢弃尚未发送的旧回复。"""
+    with state.lock:
+        observed = [item for revision, item in state.observed_messages if revision > batch_revision]
+        if state.revision <= batch_revision or (not state.pending and not observed):
+            return False
+        pending = list(state.pending) + observed
+        current_revision = state.revision
+
+    batch_user_ids = {str(item.user_id) for item in batch if item.user_id is not None}
+    batch_message_ids = {str(item.message_id) for item in batch if item.message_id is not None}
+    superseding_ids: list[str] = []
+    for item in pending:
+        reference = item.reply_reference if isinstance(item.reply_reference, dict) else {}
+        referenced_id = str(reference.get("message_id") or "")
+        same_participant = item.user_id is not None and str(item.user_id) in batch_user_ids
+        replies_to_batch = bool(referenced_id and referenced_id in batch_message_ids)
+        if same_participant or replies_to_batch or item.explicit_trigger:
+            superseding_ids.append(str(item.message_id or "-"))
+
+    if not superseding_ids:
+        return False
+    log(
+        f"[GROUP_CHAT] stale_reply_cancelled group_id={group_id}"
+        f" checkpoint={checkpoint} batch_revision={batch_revision}"
+        f" current_revision={current_revision}"
+        f" superseding_message_ids={','.join(superseding_ids)}"
+    )
+    return True
 
 
 def _pick_batch_trace_id(messages: list[PendingGroupMessage]) -> str:
@@ -768,12 +902,27 @@ def _build_group_safety_action(merged_text: str) -> ResponseAction | None:
 
 
 def _is_dangerous_file_or_secret_request(text: str) -> bool:
+    return bool(_dangerous_group_request_category(text))
+
+
+def _dangerous_group_request_category(text: str) -> str:
+    """仅在存在明确危险操作意图时返回本地硬拦截类别。"""
     normalized = normalize_query_text(text)
     if not normalized:
-        return False
-    if _DANGEROUS_FILE_REQUEST_PATTERN.search(normalized):
-        return True
-    return any(token in normalized.lower() for token in ("api_key", "apikey", "access_token", "secret_key"))
+        return ""
+    if normalized.startswith("[聊天记录]"):
+        return ""
+    for segment in normalized.splitlines():
+        if _DESTRUCTIVE_SYSTEM_ACTION_PATTERN.search(segment) and not _DESTRUCTIVE_DISCUSSION_PATTERN.search(segment):
+            return "destructive_action"
+        if _PROTECTED_FILE_OBJECT_PATTERN.search(segment) and _FILE_OPERATION_PATTERN.search(segment):
+            return "protected_file_operation"
+        if _SECRET_OBJECT_PATTERN.search(segment) and not _SECRET_DISCUSSION_PATTERN.search(segment):
+            if _SECRET_ACCESS_INTENT_PATTERN.search(segment):
+                return "secret_exfiltration"
+            if _SECRET_VERBAL_REQUEST_PATTERN.search(segment) and _LOCAL_SECRET_SCOPE_PATTERN.search(segment):
+                return "secret_exfiltration"
+    return ""
 
 
 def _is_heavy_code_request(text: str) -> bool:
@@ -1069,19 +1218,7 @@ def _humanize_group_reply(reply: str, merged_text: str) -> str:
 
     if _REPLY_LOOP_PATTERN.fullmatch(normalized):
         return _build_context_fallback(merged_text)
-    normalized = _soften_plain_group_answer(normalized, merged_text)
     return normalized
-
-
-def _soften_plain_group_answer(reply: str, merged_text: str) -> str:
-    normalized = normalize_query_text(reply)
-    if not _looks_like_plain_answer(normalized, merged_text):
-        return normalized
-    if any(token in normalized for token in ("喵", "呀", "捏", "欸", "草", "笑死", "离谱")):
-        return normalized
-    if len(normalized) <= 18:
-        return normalized.rstrip("。！？!? ") + "喵"
-    return normalized.rstrip("。！？!? ") + "，大概是这样喵。"
 
 
 def _humanize_friendly_greeting_reply(reply: str, merged_text: str) -> str | None:
@@ -1095,20 +1232,6 @@ def _humanize_friendly_greeting_reply(reply: str, merged_text: str) -> str | Non
     if any(token in text for token in ("在吗", "在嘛", "在不", "喂", "醒醒")):
         return "在喵"
     return None
-
-
-def _looks_like_plain_answer(reply: str, merged_text: str) -> bool:
-    normalized_reply = normalize_query_text(reply)
-    normalized_query = normalize_query_text(merged_text)
-    if not normalized_reply or len(normalized_reply) > 80:
-        return False
-    if any(token in normalized_query for token in ("草", "妈", "操", "鸡巴", "几把", "色情", "政治", "敏感")):
-        return False
-    if any(token in normalized_reply for token in ("不能", "不要", "抱歉", "违法", "危险")):
-        return False
-    if "，" in normalized_reply or "。" in normalized_reply or any(token in normalized_reply for token in ("是", "不是", "适合", "更好", "因为", "没有")):
-        return True
-    return False
 
 
 def _looks_like_clarifying_type_question(reply: str) -> bool:
@@ -1144,7 +1267,7 @@ def _build_explicit_trigger_no_reply_fallback(
         return None
     if _looks_like_stop_talking_request(text):
         return None
-    if action.reason == "legacy_emoji_tag_blocked":
+    if action.reason in {"legacy_emoji_tag_blocked", "empty_reply", "upstream_api_error"}:
         return None
     if any(token in text for token in ("宝宝", "在吗", "在不", "醒醒", "喂")):
         return "在呢喵"

@@ -4,11 +4,249 @@ from unittest.mock import patch
 
 sys.path.insert(0, "qq-ai-bridge")
 
+from apps.qq_ai_bridge.services.barrage_6657_service import BarrageCandidate, BarrageMatchResult
 from apps.qq_ai_bridge.skills.base import SkillContext
-from apps.qq_ai_bridge.skills.chat import ChatSkill
+from apps.qq_ai_bridge.skills.chat import ChatSkill, _get_6657_group_lock
 
 
 class ChatSkillTests(unittest.TestCase):
+    @patch("apps.qq_ai_bridge.skills.chat.record_group_message_activity", create=True)
+    @patch("apps.qq_ai_bridge.skills.chat.group_strategy_decision")
+    def test_silenced_group_message_still_records_activity(self, mock_strategy, mock_record_activity):
+        mock_strategy.return_value = {
+            "mode": "silence",
+            "reason": "cooldown",
+            "delay_ms": 0,
+            "probabilities": {},
+            "cooldown_hit": True,
+        }
+        context = SkillContext(
+            data={"message_id": 123}, post_type="message", message_type="group",
+            user_id=1, self_id=2, group_id=3,
+            group_config={"reply_all_messages": True, "bot_can_reply": True},
+            should_log=True, msg="更正", normalized_msg="更正", effective_text="更正",
+            mentioned_self=False, image_inputs={}, file_info=None,
+            logger=lambda *_args: None, timestamp=10, nick="群友A",
+        )
+
+        result = ChatSkill().handle(context)
+
+        self.assertEqual(result.status, "ignore")
+        mock_record_activity.assert_called_once()
+
+    def test_6657_group_lock_is_shared_only_within_one_group(self):
+        self.assertIs(_get_6657_group_lock(1001), _get_6657_group_lock(1001))
+        self.assertIsNot(_get_6657_group_lock(1001), _get_6657_group_lock(1002))
+
+    @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text")
+    @patch("apps.qq_ai_bridge.skills.chat.append_group_chat_log")
+    @patch(
+        "apps.qq_ai_bridge.skills.chat._load_recent_6657_context",
+        return_value=["群友: 刚刚还在聊 NiKo 决赛"],
+    )
+    @patch("apps.qq_ai_bridge.skills.chat.send_group_msg_verbatim")
+    @patch("apps.qq_ai_bridge.skills.chat.get_6657_matcher")
+    def test_6657_match_sends_original_barrage_before_llm_queue(
+        self,
+        mock_get_matcher,
+        mock_send_group_msg,
+        mock_load_context,
+        mock_append_log,
+        mock_enqueue,
+    ):
+        candidate = BarrageCandidate(
+            barrage_id=21943,
+            text="6月22日 Niko：借一分 不管从哪借都行🙏\n\n7月20日 梅西：NiKo你做人真的可以",
+            tags=("07", "28"),
+            tag_labels=("NiKo", "足小子"),
+            copy_count=74,
+        )
+        matcher = mock_get_matcher.return_value
+        matcher.match.return_value = BarrageMatchResult(
+            matched=True,
+            reason="matched",
+            candidate=candidate,
+            confidence=0.91,
+        )
+        events = []
+        matcher.store.record_send.side_effect = lambda **_kwargs: events.append("record") or 42
+        mock_send_group_msg.side_effect = (
+            lambda *_args, **_kwargs: events.append("send") or {"ok": True}
+        )
+        mock_append_log.side_effect = OSError("chat log unavailable")
+        context = SkillContext(
+            data={"message_id": 123},
+            post_type="message",
+            message_type="group",
+            user_id=1,
+            self_id=2,
+            group_id=810938203,
+            group_config={
+                "reply_all_messages": True,
+                "bot_can_reply": True,
+                "enable_6657_barrage": True,
+                "capture_all_messages": True,
+            },
+            should_log=True,
+            msg="NiKo这个冠军是不是又借的",
+            normalized_msg="NiKo这个冠军是不是又借的",
+            effective_text="NiKo这个冠军是不是又借的",
+            mentioned_self=False,
+            image_inputs={},
+            file_info=None,
+            logger=lambda *_args: None,
+            timestamp=10,
+            nick="u",
+        )
+
+        result = ChatSkill().handle(context)
+
+        self.assertTrue(result.handled)
+        self.assertEqual(result.source, "6657_barrage")
+        self.assertEqual(result.response_payload["status"], "sent")
+        mock_send_group_msg.assert_called_once_with(810938203, candidate.text, quiet=False)
+        mock_load_context.assert_called_once_with(810938203, limit=5)
+        matcher.match.assert_called_once_with(
+            "NiKo这个冠军是不是又借的",
+            ["群友: 刚刚还在聊 NiKo 决赛"],
+            context.group_config,
+            group_id=810938203,
+            now=10,
+        )
+        matcher.store.record_send.assert_called_once_with(
+            group_id=810938203,
+            candidate=candidate,
+            confidence=0.91,
+            now=10,
+        )
+        self.assertEqual(events, ["record", "send"])
+        matcher.store.delete_send.assert_not_called()
+        mock_append_log.assert_called_once()
+        timeline_entry = mock_append_log.call_args.args[2]
+        self.assertEqual(timeline_entry.get("role"), "assistant")
+        self.assertEqual(timeline_entry["assistant"], candidate.text)
+        self.assertNotIn("message", timeline_entry)
+        mock_enqueue.assert_not_called()
+
+    @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text", return_value={"queued": True})
+    @patch("apps.qq_ai_bridge.skills.chat.append_group_chat_log")
+    @patch("apps.qq_ai_bridge.skills.chat._load_recent_6657_context", return_value=[])
+    @patch("apps.qq_ai_bridge.skills.chat.send_group_msg_verbatim", return_value={"ok": False})
+    @patch("apps.qq_ai_bridge.skills.chat.get_6657_matcher")
+    def test_6657_send_failure_falls_back_to_llm_queue(
+        self,
+        mock_get_matcher,
+        _mock_send_group_msg,
+        _mock_load_context,
+        mock_append_log,
+        mock_enqueue,
+    ):
+        candidate = BarrageCandidate(
+            barrage_id=1,
+            text="原弹幕",
+            tags=("07",),
+            tag_labels=("NiKo",),
+            copy_count=10,
+        )
+        matcher = mock_get_matcher.return_value
+        matcher.match.return_value = BarrageMatchResult(
+            matched=True,
+            reason="matched",
+            candidate=candidate,
+            confidence=0.9,
+        )
+        matcher.store.record_send.return_value = 42
+        context = SkillContext(
+            data={"message_id": 123},
+            post_type="message",
+            message_type="group",
+            user_id=1,
+            self_id=2,
+            group_id=3,
+            group_config={
+                "reply_all_messages": True,
+                "bot_can_reply": True,
+                "enable_6657_barrage": True,
+            },
+            should_log=True,
+            msg="NiKo这个冠军是不是又借的？",
+            normalized_msg="NiKo这个冠军是不是又借的？",
+            effective_text="NiKo这个冠军是不是又借的？",
+            mentioned_self=False,
+            image_inputs={},
+            file_info=None,
+            logger=lambda *_args: None,
+            timestamp=10,
+            nick="u",
+        )
+
+        result = ChatSkill().handle(context)
+
+        self.assertEqual(result.source, "chat")
+        self.assertTrue(mock_enqueue.called)
+        matcher.store.record_send.assert_called_once()
+        matcher.store.delete_send.assert_called_once_with(send_log_id=42)
+        mock_append_log.assert_not_called()
+
+    @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text", return_value={"queued": True})
+    @patch("apps.qq_ai_bridge.skills.chat.append_group_chat_log")
+    @patch("apps.qq_ai_bridge.skills.chat._load_recent_6657_context", return_value=[])
+    @patch("apps.qq_ai_bridge.skills.chat.send_group_msg_verbatim", return_value={"ok": True})
+    @patch("apps.qq_ai_bridge.skills.chat.get_6657_matcher")
+    def test_6657_record_failure_does_not_send_and_falls_back_to_llm_queue(
+        self,
+        mock_get_matcher,
+        mock_send_group_msg,
+        _mock_load_context,
+        mock_append_log,
+        mock_enqueue,
+    ):
+        candidate = BarrageCandidate(
+            barrage_id=1,
+            text="原弹幕",
+            tags=("07",),
+            tag_labels=("NiKo",),
+            copy_count=10,
+        )
+        matcher = mock_get_matcher.return_value
+        matcher.match.return_value = BarrageMatchResult(
+            matched=True,
+            reason="matched",
+            candidate=candidate,
+            confidence=0.9,
+        )
+        matcher.store.record_send.side_effect = OSError("sqlite unavailable")
+        context = SkillContext(
+            data={"message_id": 123},
+            post_type="message",
+            message_type="group",
+            user_id=1,
+            self_id=2,
+            group_id=3,
+            group_config={
+                "reply_all_messages": True,
+                "bot_can_reply": True,
+                "enable_6657_barrage": True,
+            },
+            should_log=True,
+            msg="NiKo这个冠军是不是又借的？",
+            normalized_msg="NiKo这个冠军是不是又借的？",
+            effective_text="NiKo这个冠军是不是又借的？",
+            mentioned_self=False,
+            image_inputs={},
+            file_info=None,
+            logger=lambda *_args: None,
+            timestamp=10,
+            nick="u",
+        )
+
+        result = ChatSkill().handle(context)
+
+        self.assertEqual(result.source, "chat")
+        self.assertTrue(mock_enqueue.called)
+        mock_send_group_msg.assert_not_called()
+        mock_append_log.assert_not_called()
+
     @patch("apps.qq_ai_bridge.skills.chat.group_strategy_decision")
     @patch("apps.qq_ai_bridge.skills.chat.enqueue_group_text", return_value={"queued": True})
     def test_local_question_bypasses_probabilistic_strategy(self, mock_enqueue, mock_strategy):

@@ -10,6 +10,8 @@ from math import ceil
 
 from apps.qq_ai_bridge.adapters.napcat_client import send_private_msg
 from apps.qq_ai_bridge.config.settings import (
+    BARRAGE_6657_STARTUP_SYNC_PAGES,
+    BARRAGE_6657_SYNC_TIME,
     OWNER_QQ,
     REMINDERS_PATH,
     SCHEDULE_PATH,
@@ -22,19 +24,29 @@ from apps.qq_ai_bridge.config.settings import (
     TOMORROW_SCHEDULE_TIME,
     VOCAT_DAILY_BROADCAST_TO_DEVICE,
 )
-from apps.qq_ai_bridge.logging.bridge_log import log_change, log_debug, log_event, log_warn
+from apps.qq_ai_bridge.logging.bridge_log import log_change, log_debug, log_warn
+from apps.qq_ai_bridge.services.barrage_6657_service import sync_6657_barrages_safely
 from apps.qq_ai_bridge.services.reminder_store import ReminderStore, SchedulerStateStore
 from apps.qq_ai_bridge.services.schedule_service import (
     build_tomorrow_schedule_message,
     ensure_schedule_file,
 )
 from apps.qq_ai_bridge.services.time_utils import get_now_local
-from apps.qq_ai_bridge.services.trace_store import add_trace_step, finish_trace, new_trace_id, start_trace, trace_prefix
+from apps.qq_ai_bridge.services.trace_store import (
+    add_trace_step,
+    finish_trace,
+    new_trace_id,
+    start_trace,
+    trace_prefix,
+)
 from apps.qq_ai_bridge.services.vocat_command_queue import enqueue_vocat_tts
 
 _START_LOCK = threading.Lock()
 _STARTED = False
 _STARTED_AT: datetime | None = None
+_6657_DAILY_SYNC_LOCK = threading.Lock()
+_6657_DAILY_SYNC_IN_FLIGHT = False
+_6657_SYNC_OPERATION_LOCK = threading.Lock()
 
 REMINDER_STORE = ReminderStore(REMINDERS_PATH)
 STATE_STORE = SchedulerStateStore(SCHEDULER_STATE_PATH)
@@ -50,6 +62,12 @@ def start_scheduler() -> None:
         _STARTED = True
         _STARTED_AT = get_now_local()
         ensure_schedule_file(SCHEDULE_PATH)
+        sync_worker = threading.Thread(
+            target=_run_6657_startup_sync,
+            name="6657-startup-sync",
+            daemon=True,
+        )
+        sync_worker.start()
         worker = threading.Thread(target=_scheduler_loop, name="qq-reminder-scheduler", daemon=True)
         worker.start()
         print(
@@ -124,6 +142,53 @@ def _run_daily_jobs(now: datetime) -> None:
         token=_build_daily_token("tomorrow_schedule", now, TOMORROW_SCHEDULE_TEST_DELAY_MINUTES),
         success_log_prefix="[DAILY] tomorrow_schedule",
     )
+    _schedule_6657_daily_sync(now)
+
+
+def _run_6657_startup_sync() -> None:
+    with _6657_SYNC_OPERATION_LOCK:
+        sync_6657_barrages_safely(
+            max_pages=BARRAGE_6657_STARTUP_SYNC_PAGES,
+            log=print,
+        )
+
+
+def _schedule_6657_daily_sync(now: datetime) -> None:
+    global _6657_DAILY_SYNC_IN_FLIGHT
+    scheduled_at = _resolve_daily_job_time(now, BARRAGE_6657_SYNC_TIME, 0)
+    token = _build_daily_token("barrage_6657_sync", now, 0)
+    if now < scheduled_at or STATE_STORE.was_daily_sent("barrage_6657_sync", token):
+        return
+    with _6657_DAILY_SYNC_LOCK:
+        if _6657_DAILY_SYNC_IN_FLIGHT:
+            return
+        _6657_DAILY_SYNC_IN_FLIGHT = True
+    worker = threading.Thread(
+        target=_run_6657_daily_sync_worker,
+        args=(now, token),
+        name="6657-daily-sync",
+        daemon=True,
+    )
+    worker.start()
+
+
+def _run_6657_daily_sync_worker(now: datetime, token: str) -> None:
+    global _6657_DAILY_SYNC_IN_FLIGHT
+    try:
+        _execute_6657_daily_sync(now, token)
+    finally:
+        with _6657_DAILY_SYNC_LOCK:
+            _6657_DAILY_SYNC_IN_FLIGHT = False
+
+
+def _execute_6657_daily_sync(now: datetime, token: str) -> None:
+    with _6657_SYNC_OPERATION_LOCK:
+        result = sync_6657_barrages_safely(log=print)
+    if result.get("ok"):
+        STATE_STORE.mark_daily_sent("barrage_6657_sync", token, now)
+        print(f"[DAILY] barrage_6657_sync fired date={token}")
+    else:
+        print(f"[DAILY] barrage_6657_sync failed date={token} error={result.get('error')}")
 
 
 # _run_daily_job：运行每日任务
@@ -192,6 +257,7 @@ def _compute_sleep_seconds(now: datetime, next_reminder_wait: int | None) -> int
     for task_key, hhmm, delay in (
         ("sleep_reminder", SLEEP_REMINDER_TIME, SLEEP_REMINDER_TEST_DELAY_MINUTES),
         ("tomorrow_schedule", TOMORROW_SCHEDULE_TIME, TOMORROW_SCHEDULE_TEST_DELAY_MINUTES),
+        ("barrage_6657_sync", BARRAGE_6657_SYNC_TIME, 0),
     ):
         scheduled_at = _resolve_daily_job_time(now, hhmm, delay)
         token = _build_daily_token(task_key, now, delay)

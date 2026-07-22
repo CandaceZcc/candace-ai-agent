@@ -13,6 +13,7 @@ from apps.qq_ai_bridge.adapters.napcat_client import (
     send_group_file,
     send_group_image,
     send_group_msg,
+    send_group_msg_verbatim,
     send_private_image,
     send_private_msg,
     split_outbound_messages,
@@ -20,6 +21,21 @@ from apps.qq_ai_bridge.adapters.napcat_client import (
 
 
 class NapcatClientTests(unittest.TestCase):
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_send_group_msg_verbatim_preserves_whitespace_and_blank_lines(self, mock_post):
+        mock_post.return_value = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            text='{"retcode": 0}',
+        )
+        original = "  第一行\r\n\r\n第二行  "
+
+        result = send_group_msg_verbatim(12345, original, quiet=True)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertEqual(mock_post.call_args.args[1]["message"], original)
+
     @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
     def test_send_private_image_uses_onebot_image_segment(self, mock_post):
         mock_post.return_value = SimpleNamespace(
@@ -95,7 +111,11 @@ class NapcatClientTests(unittest.TestCase):
     @patch("apps.qq_ai_bridge.adapters.napcat_client.time.sleep", return_value=None)
     @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
     def test_send_group_msg_sends_each_segment(self, mock_post, _mock_sleep):
-        mock_post.return_value = SimpleNamespace(ok=True, status_code=200, text="ok")
+        mock_post.return_value = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            text='{"retcode": 0}',
+        )
 
         result = send_group_msg(12345, "段落A\n\n段落B", quiet=True)
 
@@ -107,6 +127,45 @@ class NapcatClientTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["parts_sent"], 2)
         self.assertEqual(result["parts_total"], 2)
+
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_send_group_msg_rejects_nonzero_napcat_retcode(self, mock_post):
+        mock_post.return_value = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            text='{"retcode": 120}',
+        )
+
+        result = send_group_msg(12345, "原弹幕", quiet=True)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["retcode"], 120)
+
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_send_group_msg_rejects_missing_napcat_retcode(self, mock_post):
+        mock_post.return_value = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            text='{"status": "ok"}',
+        )
+
+        result = send_group_msg(12345, "原弹幕", quiet=True)
+
+        self.assertFalse(result["ok"])
+        self.assertIsNone(result["retcode"])
+
+    @patch("apps.qq_ai_bridge.adapters.napcat_client.time.sleep", return_value=None)
+    @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
+    def test_send_group_msg_fails_when_any_segment_fails(self, mock_post, _mock_sleep):
+        mock_post.side_effect = [
+            SimpleNamespace(ok=True, status_code=200, text='{"retcode": 120}'),
+            SimpleNamespace(ok=True, status_code=200, text='{"retcode": 0}'),
+        ]
+
+        result = send_group_msg(12345, "第一段\n\n第二段", quiet=True)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["parts_sent"], 2)
 
     @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
     def test_send_group_file_uploads_local_file(self, mock_post):
@@ -159,7 +218,11 @@ class NapcatClientTests(unittest.TestCase):
     @patch("apps.qq_ai_bridge.adapters.napcat_client.time.sleep", return_value=None)
     @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
     def test_send_group_msg_force_parts_sends_multiple_messages(self, mock_post, _mock_sleep):
-        mock_post.return_value = SimpleNamespace(ok=True, status_code=200, text="ok")
+        mock_post.return_value = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            text='{"retcode": 0}',
+        )
 
         result = send_group_msg(12345, "发不了 能发一条不错了", quiet=True, force_parts=2)
 
@@ -170,7 +233,11 @@ class NapcatClientTests(unittest.TestCase):
 
     @patch("apps.qq_ai_bridge.adapters.napcat_client._post_json")
     def test_send_group_msg_can_reply_to_specific_message(self, mock_post):
-        mock_post.return_value = SimpleNamespace(ok=True, status_code=200, text="ok")
+        mock_post.return_value = SimpleNamespace(
+            ok=True,
+            status_code=200,
+            text='{"retcode": 0}',
+        )
 
         result = send_group_msg(12345, "收到", quiet=True, reply_to_message_id=998877)
 
