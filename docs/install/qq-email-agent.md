@@ -127,6 +127,10 @@ PYTHONPATH=qq-ai-bridge .venv/bin/python \
 EMAIL_MONITOR_ENABLED=false
 EMAIL_IMMEDIATE_PUSH_ENABLED=false
 EMAIL_DIGEST_PUSH_ENABLED=false
+EMAIL_SHADOW_MODE=true
 ```
 
-这不会删除画像、反馈或归档。需要清理归档时先运行 `--cleanup --dry-run`。自动化回滚不影响普通 QQ 聊天、提醒和手动邮件摘要命令。
+只修改以上四个开关，不要用旧备份整体覆盖当前环境文件；保留现有的
+`BASE_DATA_DIR`、`CONFIG_DIR` 和 `IMAGE_TMP_DIR`，避免 bridge 切换到工作树内的空数据目录。
+这不会删除画像、反馈或归档。需要清理归档时先运行 `--cleanup --dry-run`。
+自动化回滚不影响普通 QQ 聊天、提醒和手动邮件摘要命令。
