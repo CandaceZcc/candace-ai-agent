@@ -376,8 +376,17 @@ class EmailAutomationServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.find_by_alias(record.alias).delivery_state, "digest_sent")
         self.assertEqual(len(self.sent), 2)
 
-    async def test_empty_digest_sends_nothing(self):
-        await self.service().run_digest(NOW, "12:30")
+    async def test_empty_digest_closes_slot_without_sending(self):
+        service = self.service()
+
+        await service.run_digest(NOW, "12:30")
+
+        self.assertEqual(self.sent, [])
+        self.assertTrue(
+            self.store.was_digest_slot_sent("email_digest:2026-07-21:12:30")
+        )
+
+        await service.run_digest(NOW, "12:30")
 
         self.assertEqual(self.sent, [])
 

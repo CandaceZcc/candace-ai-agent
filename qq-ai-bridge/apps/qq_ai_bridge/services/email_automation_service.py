@@ -111,6 +111,7 @@ class EmailAutomationService:
 
         selected = _select_digest_records(self._store.pending_digest(now, lookback_hours=24))
         if not selected:
+            self._store.mark_digest_sent((), slot_token, now)
             return
         result = await self._send(_format_digest(selected))
         if _send_succeeded(result):
