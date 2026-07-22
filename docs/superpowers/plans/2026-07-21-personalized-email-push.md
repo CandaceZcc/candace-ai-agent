@@ -32,7 +32,7 @@
 - Modify: `qq-ai-bridge/tests/test_email_config.py`
 - Create: `qq-ai-bridge/tests/test_email_automation_models.py`
 
-- [ ] **Step 1: Write failing configuration tests**
+- [x] **Step 1: Write failing configuration tests**
 
 Add tests that assert default-off automation, a 300-second bounded poll interval,
 parsed digest times `("12:30", "20:30")`, shadow mode on by default, owner validation,
@@ -49,7 +49,7 @@ def test_email_automation_defaults_are_safe(self):
     self.assertEqual(settings.EMAIL_DIGEST_TIMES, ("12:30", "20:30"))
 ```
 
-- [ ] **Step 2: Write failing model-contract tests**
+- [x] **Step 2: Write failing model-contract tests**
 
 Define tests for immutable `EmailFetchedMessage`, `EmailRuleDecision`, and
 `EmailClassification` values. Validate score bounds, urgency literals, alias format,
@@ -71,7 +71,7 @@ classification = EmailClassification(
 self.assertEqual(classification.relevance_score, 92)
 ```
 
-- [ ] **Step 3: Run tests and confirm the missing contracts fail**
+- [x] **Step 3: Run tests and confirm the missing contracts fail**
 
 Run:
 
@@ -83,7 +83,7 @@ PYTHONPATH=qq-ai-bridge python -m unittest \
 
 Expected: failures for undefined automation settings and model classes.
 
-- [ ] **Step 4: Implement settings and contracts**
+- [x] **Step 4: Implement settings and contracts**
 
 Replace the unshipped daily/weekly schedule settings with:
 
@@ -110,16 +110,16 @@ EMAIL_AUTOMATION_STATE_PATH = os.path.join(BASE_DATA_DIR, "email", "automation-s
 Add frozen dataclasses and literal types to `email_models.py`. Reject out-of-range
 scores/confidence and invalid urgency values in `__post_init__`.
 
-- [ ] **Step 5: Update the environment template without values**
+- [x] **Step 5: Update the environment template without values**
 
 Document the new default-off flags and remove the unshipped daily/weekly entries.
 Keep username, password, and API key assignments empty.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Expected: all Task 1 tests pass.
 
-- [ ] **Step 7: Commit Task 1**
+- [x] **Step 7: Commit Task 1**
 
 ```bash
 git add qq-ai-bridge/apps/qq_ai_bridge/config/settings.py \
@@ -136,7 +136,7 @@ git commit -m "feat: define personalized email automation contracts"
 - Create: `qq-ai-bridge/apps/qq_ai_bridge/services/email_preference_service.py`
 - Create: `qq-ai-bridge/tests/test_email_preference_service.py`
 
-- [ ] **Step 1: Write failing store tests**
+- [x] **Step 1: Write failing store tests**
 
 Cover default profile creation, mode `0600`, manual-over-learned precedence,
 invalid-file fallback to the last valid profile, bounded feedback weights, reversible
@@ -148,7 +148,7 @@ self.assertIn("robotics", profile.interest_terms)
 self.assertEqual(stat.S_IMODE(profile_path.stat().st_mode), 0o600)
 ```
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -157,7 +157,7 @@ PYTHONPATH=qq-ai-bridge python -m unittest \
 
 Expected: module import failure.
 
-- [ ] **Step 3: Implement the profile and learned-feedback stores**
+- [x] **Step 3: Implement the profile and learned-feedback stores**
 
 Define immutable `EmailPreferenceProfile` with watched/ignored senders and domains,
 positive/negative terms, interest aliases, score adjustments, hard-ignore rules, and
@@ -183,7 +183,7 @@ class EmailPreferenceStore:
 Seed the approved CS, AI, software, data, security, systems, algorithms, robotics,
 embedded, IoT, Year 3, and 2024-cohort terms. Do not seed real addresses or domains.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -199,7 +199,7 @@ git commit -m "feat: add private email preference learning"
 - Create: `qq-ai-bridge/apps/qq_ai_bridge/services/email_rule_classifier.py`
 - Create: `qq-ai-bridge/tests/test_email_rule_classifier.py`
 
-- [ ] **Step 1: Write the rule matrix as failing tests**
+- [x] **Step 1: Write the rule matrix as failing tests**
 
 Cover direct `Re:` replies, direct-recipient evidence, cohort and interest terms,
 course/exam actions, research and competition terms, generic recruiting penalties,
@@ -212,14 +212,14 @@ self.assertIn("direct_reply", decision.positive_signals)
 self.assertGreaterEqual(decision.initial_score, 60)
 ```
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
   qq-ai-bridge/tests/test_email_rule_classifier.py -v
 ```
 
-- [ ] **Step 3: Implement deterministic, bounded scoring**
+- [x] **Step 3: Implement deterministic, bounded scoring**
 
 Normalize case and whitespace, inspect sender display/address, recipients, subject,
 and a bounded body prefix. Return `EmailRuleDecision` with `initial_score`,
@@ -229,7 +229,7 @@ evidence and no positive evidence. Recipient breadth or a bulk marker alone rema
 `semantic_required`; it becomes deterministic low-value only with a strong content
 signal such as generic recruiting or a routine activity notice.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -245,7 +245,7 @@ git commit -m "feat: classify email relevance with local rules"
 - Create: `qq-ai-bridge/apps/qq_ai_bridge/services/email_processing_store.py`
 - Create: `qq-ai-bridge/tests/test_email_processing_store.py`
 
-- [ ] **Step 1: Write failing state tests**
+- [x] **Step 1: Write failing state tests**
 
 Cover atomic mode-`0600` writes, stable `E-NNNN` aliases, mailbox cursor durability,
 `UIDVALIDITY` reset, Message-ID hash deduplication, decision persistence, immediate and
@@ -257,14 +257,14 @@ self.assertRegex(record.alias, r"^E-\d{4,}$")
 self.assertEqual(store.cursor("INBOX").last_uid, 17)
 ```
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
   qq-ai-bridge/tests/test_email_processing_store.py -v
 ```
 
-- [ ] **Step 3: Implement one atomic automation-state document**
+- [x] **Step 3: Implement one atomic automation-state document**
 
 Use a schema containing mailbox cursors, next alias number, message records, digest
 slot tokens, and deduplicated alert/recovery state. Store only hashes and structured
@@ -294,7 +294,7 @@ mark_digest_sent(
 find_by_alias(alias: str) -> EmailProcessingRecord | None
 ```
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -312,7 +312,7 @@ git commit -m "feat: persist email automation decisions"
 - Modify: `qq-ai-bridge/tests/test_agent_runtime.py`
 - Create: `qq-ai-bridge/tests/test_email_semantic_classifier.py`
 
-- [ ] **Step 1: Write failing classifier tests**
+- [x] **Step 1: Write failing classifier tests**
 
 Test bounded batched prompts, untrusted-data escaping, strict alias matching, valid JSON,
 fenced JSON normalization, score and urgency validation, null deadlines, malformed
@@ -326,18 +326,18 @@ self.assertEqual(request.allowed_tool_names, ())
 self.assertNotIn("</email_body>", request.user_text)
 ```
 
-- [ ] **Step 2: Extend the runtime's email safety policy**
+- [x] **Step 2: Extend the runtime's email safety policy**
 
 Treat both `email_summary` and `email_classification` as email-safe routes. Reject any
 requested tools and never use legacy fallback for either route.
 
-- [ ] **Step 3: Implement structured parsing**
+- [x] **Step 3: Implement structured parsing**
 
 Build a bounded prompt from sanitized metadata/body prefixes and parse a top-level
 `{"items": [item_object]}` response into `EmailClassification` values. Require exactly one
 result per requested alias and reject invented aliases.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -356,7 +356,7 @@ git commit -m "feat: classify email with a tool free model"
 - Modify: `qq-ai-bridge/apps/qq_ai_bridge/services/email_imap_service.py`
 - Modify: `qq-ai-bridge/tests/test_email_imap_service.py`
 
-- [ ] **Step 1: Write failing UID tests**
+- [x] **Step 1: Write failing UID tests**
 
 Add fake IMAP `uid()` and `response("UIDVALIDITY")` behavior. Verify search starts after
 the durable cursor, fetch uses UID mode, results are ordered oldest-to-newest, batches
@@ -368,20 +368,20 @@ self.assertEqual(batch.uid_validity, "9001")
 self.assertEqual([item.uid for item in batch.messages], [42, 43])
 ```
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
   qq-ai-bridge/tests/test_email_imap_service.py -v
 ```
 
-- [ ] **Step 3: Implement `fetch_new` without changing range fetch behavior**
+- [x] **Step 3: Implement `fetch_new` without changing range fetch behavior**
 
 Select `readonly=True`, read UIDVALIDITY, execute UID SEARCH and UID FETCH, parse each
 message through the existing parser, and return `EmailUidBatch`. Do not expose server
 responses in errors.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -399,13 +399,13 @@ git commit -m "feat: poll new email with read only uid queries"
 - Modify: `qq-ai-bridge/tests/test_napcat_client.py`
 - Modify: `qq-ai-bridge/tests/test_email_skill.py`
 
-- [ ] **Step 1: Write failing redaction tests**
+- [x] **Step 1: Write failing redaction tests**
 
 Add a `redact_content` send option. Assert that a sensitive message reaches the mocked
 NapCat request but neither stdout nor `napcat_outbound.jsonl` contains subject, body,
 sender, or message text. Audit metadata may include character count and part number.
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -413,7 +413,7 @@ PYTHONPATH=qq-ai-bridge python -m unittest \
   qq-ai-bridge/tests/test_email_skill.py -v
 ```
 
-- [ ] **Step 3: Implement and adopt content redaction**
+- [x] **Step 3: Implement and adopt content redaction**
 
 Extend
 `send_private_msg(user_id, msg, quiet=False, force_parts=None, reply_to_message_id=None,
@@ -421,7 +421,7 @@ redact_content=False)`. When true, suppress console
 previews and store `message_preview="[redacted]"` plus `message_chars`; retain safe HTTP
 status fields. Pass `redact_content=True` from every manual and automatic email send.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -440,34 +440,34 @@ git commit -m "fix: redact email content from outbound logs"
 - Create: `qq-ai-bridge/apps/qq_ai_bridge/services/email_automation_service.py`
 - Create: `qq-ai-bridge/tests/test_email_automation_service.py`
 
-- [ ] **Step 1: Write failing end-to-end service tests**
+- [x] **Step 1: Write failing end-to-end service tests**
 
 Cover disabled monitor, archive-before-cursor ordering, hard ignore without model use,
 batched semantic classification, immediate threshold `>=80` plus high urgency, digest
 threshold `>=60`, possible-related threshold, shadow mode, no raw delivery, failed-send
 retry, and restart deduplication.
 
-- [ ] **Step 2: Write digest tests**
+- [x] **Step 2: Write digest tests**
 
 Verify 24-hour incremental selection, no empty digest, limits of 3 action + 4 relevant
 + 1 possible items, priority sorting, compressed titles, sender display names, no
 already-immediate item, slot idempotency, and mark-after-success behavior.
 
-- [ ] **Step 3: Run and confirm failure**
+- [x] **Step 3: Run and confirm failure**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
   qq-ai-bridge/tests/test_email_automation_service.py -v
 ```
 
-- [ ] **Step 4: Implement orchestration**
+- [x] **Step 4: Implement orchestration**
 
 Inject IMAP, archive, preference, rule, semantic, processing, runtime-send, and clock
 dependencies. `poll(now)` processes new messages and `run_digest(now, slot)` sends an
 incremental digest. Keep deterministic routing in one pure helper and format QQ text
 only from `EmailClassification`, never from `EmailEnvelope.body_text`.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -486,23 +486,23 @@ git commit -m "feat: route personalized email alerts and digests"
 - Modify: `qq-ai-bridge/tests/test_email_query_service.py`
 - Modify: `qq-ai-bridge/tests/test_email_skill.py`
 
-- [ ] **Step 1: Write failing parser and authorization tests**
+- [x] **Step 1: Write failing parser and authorization tests**
 
 Cover `有用`, `忽略`, `忽略此类`, `关注发件人`, `撤销反馈`, and `邮件 偏好`; reject
 malformed aliases, non-owner users, and group contexts.
 
-- [ ] **Step 2: Write failing behavior tests**
+- [x] **Step 2: Write failing behavior tests**
 
 Resolve aliases through `EmailProcessingStore`, apply reversible feedback through
 `EmailPreferenceStore`, show a redacted preference summary, and return a deterministic
 not-found message for expired aliases.
 
-- [ ] **Step 3: Implement parser and skill paths**
+- [x] **Step 3: Implement parser and skill paths**
 
 Add `feedback` and `preferences` command kinds. Handle them synchronously before range
 queries. Keep all responses owner-private and pass no raw email data into response text.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -524,13 +524,13 @@ git commit -m "feat: learn email preferences from qq feedback"
 - Create: `qq-ai-bridge/tests/test_email_automation_runner.py`
 - Modify: `qq-ai-bridge/tests/test_schedule_service.py`
 
-- [ ] **Step 1: Write deterministic runner tests**
+- [x] **Step 1: Write deterministic runner tests**
 
 Patch clock, sleep, and service factory. Verify immediate first poll, configured poll
 interval, due slots at 12:30/20:30, restart catch-up limited to 24 hours, independent
 flags, exception isolation, and no effect on existing reminder jobs.
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -538,13 +538,13 @@ PYTHONPATH=qq-ai-bridge python -m unittest \
   qq-ai-bridge/tests/test_schedule_service.py -v
 ```
 
-- [ ] **Step 3: Implement the runner**
+- [x] **Step 3: Implement the runner**
 
 Start one daemon thread named `email-automation` from `start_scheduler()`. The runner
 builds one service instance, polls at the configured interval, checks digest slots, and
 catches errors without terminating or blocking `qq-reminder-scheduler`.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -567,19 +567,19 @@ git commit -m "feat: schedule personalized email automation"
 - Modify: `README.md`
 - Modify: `docs/superpowers/plans/2026-07-20-phase-a-execution.md`
 
-- [ ] **Step 1: Write failing diagnostic tests**
+- [x] **Step 1: Write failing diagnostic tests**
 
 Cover `--config`, read-only `--imap`, `--shadow-report`, `--cleanup --dry-run`, masked
 identity, password `set`/`missing`, no stdin, and no raw content.
 
-- [ ] **Step 2: Implement diagnostics and operator documentation**
+- [x] **Step 2: Implement diagnostics and operator documentation**
 
 Document external mode-`0600` secrets/profile files, cloud model privacy, approved QQ
 commands, five-minute polling, two digest slots, feedback, shadow mode, retention,
 redacted logs, rollout, and rollback. Mark the old Phase A Tasks 7-9 as superseded by
 this plan.
 
-- [ ] **Step 3: Run the complete focused email suite**
+- [x] **Step 3: Run the complete focused email suite**
 
 ```bash
 PYTHONPATH=qq-ai-bridge python -m unittest \
@@ -604,7 +604,7 @@ PYTHONPATH=qq-ai-bridge python -m unittest \
 
 Expected: all listed tests pass.
 
-- [ ] **Step 4: Run repository verification**
+- [x] **Step 4: Run repository verification**
 
 ```bash
 bash run_ruff.sh
@@ -614,7 +614,7 @@ PYTHONPATH=qq-ai-bridge python -m compileall -q \
 git diff --check
 ```
 
-- [ ] **Step 5: Scan for forbidden content**
+- [x] **Step 5: Scan for forbidden content**
 
 ```bash
 rg -n "smtp|smtplib|input\(" \
@@ -627,7 +627,7 @@ git grep -n -E \
 
 Expected: no SMTP, stdin prompt, real secret, or real email content.
 
-- [ ] **Step 6: Commit Task 11**
+- [x] **Step 6: Commit Task 11**
 
 ```bash
 git add qq-ai-bridge/scripts/email_agent_check.py \
