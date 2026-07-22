@@ -162,6 +162,72 @@ class EmailAgentCheckTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             email_agent_check.main(["--config", "--deliver-to-owner", "--accept-qq-send"])
 
+    def test_cursor_bootstrap_requires_explicit_skip_acceptance(self):
+        from scripts import email_agent_check
+
+        with self.assertRaises(SystemExit):
+            email_agent_check.main(["--bootstrap-cursor"])
+
+    def test_cursor_bootstrap_uses_latest_readonly_snapshot_without_exposing_uid(self):
+        from scripts import email_agent_check
+
+        imap = MagicMock()
+        imap.snapshot_cursor.return_value = SimpleNamespace(uid_validity="44", latest_uid=900)
+        store = MagicMock()
+        store.cursor.return_value = SimpleNamespace(uid_validity="44", last_uid=850)
+        with (
+            patch.object(email_agent_check, "_build_imap_service", return_value=imap),
+            patch.object(email_agent_check, "_build_processing_store", return_value=store),
+        ):
+            payload = email_agent_check._bootstrap_automation_cursor()
+
+        store.set_cursor.assert_called_once_with("INBOX", "44", 900)
+        self.assertEqual(
+            payload,
+            {
+                "check": "cursor_bootstrap",
+                "cursor_initialized": True,
+                "mailbox_had_existing_cursor": True,
+                "ok": True,
+            },
+        )
+        self.assertNotIn("900", json.dumps(payload))
+
+    def test_cursor_bootstrap_never_moves_same_mailbox_cursor_backwards(self):
+        from scripts import email_agent_check
+
+        imap = MagicMock()
+        imap.snapshot_cursor.return_value = SimpleNamespace(uid_validity="44", latest_uid=800)
+        store = MagicMock()
+        store.cursor.return_value = SimpleNamespace(uid_validity="44", last_uid=850)
+        with (
+            patch.object(email_agent_check, "_build_imap_service", return_value=imap),
+            patch.object(email_agent_check, "_build_processing_store", return_value=store),
+        ):
+            email_agent_check._bootstrap_automation_cursor()
+
+        store.set_cursor.assert_called_once_with("INBOX", "44", 850)
+
+    def test_cursor_bootstrap_cli_reports_safe_operation_error(self):
+        from scripts import email_agent_check
+
+        with patch.object(
+            email_agent_check,
+            "_bootstrap_automation_cursor",
+            side_effect=RuntimeError("private state path"),
+        ):
+            exit_code, payload = self.run_main(
+                "--bootstrap-cursor",
+                "--accept-skip-existing",
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(
+            payload,
+            {"check": "cursor_bootstrap", "error": "RuntimeError", "ok": False},
+        )
+        self.assertNotIn("private state path", json.dumps(payload))
+
     def test_simulation_routes_scenarios_without_live_send(self):
         from scripts import email_agent_check
 

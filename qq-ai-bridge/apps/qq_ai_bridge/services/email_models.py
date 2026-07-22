@@ -60,6 +60,18 @@ class EmailUidBatch:
             raise ValueError("uid_validity must not be empty")
 
 
+@dataclass(frozen=True)
+class EmailUidSnapshot:
+    uid_validity: str
+    latest_uid: int
+
+    def __post_init__(self) -> None:
+        if not self.uid_validity.strip():
+            raise ValueError("uid_validity must not be empty")
+        if self.latest_uid < 0:
+            raise ValueError("latest_uid must not be negative")
+
+
 EmailRuleEligibility = Literal[
     "semantic_required",
     "explicit_hard_ignore",
@@ -158,4 +170,5 @@ __all__ = [
     "EmailQuery",
     "EmailRuleDecision",
     "EmailUidBatch",
+    "EmailUidSnapshot",
 ]

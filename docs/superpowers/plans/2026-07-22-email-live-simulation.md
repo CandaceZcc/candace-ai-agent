@@ -107,13 +107,32 @@ git commit -m "feat: add safe email automation simulation"
 - [ ] **Step 4:** Confirm exactly one immediate message and one digest, with repeated runs suppressed inside the rehearsal.
 - [ ] **Step 5:** Inspect only redacted outbound status and ensure no source content appears in logs.
 
+### Task 2.5: Bootstrap The Production Cursor
+
+**Files:**
+- Modify: `qq-ai-bridge/apps/qq_ai_bridge/services/email_models.py`
+- Modify: `qq-ai-bridge/apps/qq_ai_bridge/services/email_imap_service.py`
+- Modify: `qq-ai-bridge/apps/qq_ai_bridge/services/email_processing_store.py`
+- Modify: `qq-ai-bridge/scripts/email_agent_check.py`
+- Test: `qq-ai-bridge/tests/test_email_automation_models.py`
+- Test: `qq-ai-bridge/tests/test_email_imap_service.py`
+- Test: `qq-ai-bridge/tests/test_email_processing_store.py`
+- Test: `qq-ai-bridge/tests/test_email_agent_check.py`
+
+- [x] **Step 1:** Write failing tests for a structured UID snapshot, read-only `UID SEARCH ALL`, durable baseline setting, explicit CLI acceptance, no backward cursor movement, and redacted output.
+- [x] **Step 2:** Verify the tests fail because snapshot and baseline contracts are absent.
+- [x] **Step 3:** Implement `EmailUidSnapshot`, `snapshot_cursor()`, `set_cursor()`, and `--bootstrap-cursor --accept-skip-existing`.
+- [x] **Step 4:** Run the 52-test focused cursor and simulation suite and require zero failures.
+- [x] **Step 5:** Commit the cursor bootstrap implementation.
+
 ### Task 3: Activate And Verify Production Automation
 
 **Files:**
 - Modify outside Git: `/home/cancade/.candace/qq-ai-bridge.env`
 
-- [ ] **Step 1:** Set monitor, immediate push, and digest push true; set shadow false.
-- [ ] **Step 2:** Restart the bridge from the email feature worktree.
-- [ ] **Step 3:** Verify redacted config, read-only IMAP access, worker health, and one-worker restart behavior.
-- [ ] **Step 4:** Run the full repository test suite and tracked-secret scan.
-- [ ] **Step 5:** Record the rollback command and report any residual operational risk.
+- [ ] **Step 1:** Run `--bootstrap-cursor --accept-skip-existing` before changing delivery flags.
+- [ ] **Step 2:** Set monitor, immediate push, and digest push true; set shadow false.
+- [ ] **Step 3:** Restart the bridge from the email feature worktree.
+- [ ] **Step 4:** Verify redacted config, read-only IMAP access, worker health, and one-worker restart behavior.
+- [ ] **Step 5:** Run the full repository test suite and tracked-secret scan.
+- [ ] **Step 6:** Record the rollback command and report any residual operational risk.

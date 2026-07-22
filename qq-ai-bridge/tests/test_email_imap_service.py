@@ -118,6 +118,14 @@ class EmailImapServiceTests(unittest.TestCase):
             result = self.service(**service_overrides).fetch_new(last_uid=last_uid, limit=limit)
         return result, factory
 
+    def snapshot_cursor(self, **service_overrides):
+        with patch(
+            "apps.qq_ai_bridge.services.email_imap_service.imaplib.IMAP4_SSL",
+            return_value=self.connection,
+        ) as factory:
+            result = self.service(**service_overrides).snapshot_cursor()
+        return result, factory
+
     def test_connects_with_ssl_and_timeout(self):
         _, factory = self.fetch()
 
@@ -213,7 +221,10 @@ class EmailImapServiceTests(unittest.TestCase):
             [("uid", "fetch", b"42", "(RFC822)"), ("uid", "fetch", b"43", "(RFC822)")],
         )
         self.assertEqual([item.uid for item in batch.messages], [42, 43])
-        self.assertEqual([item.envelope.message_id for item in batch.messages], ["message-42", "message-43"])
+        self.assertEqual(
+            [item.envelope.message_id for item in batch.messages],
+            ["message-42", "message-43"],
+        )
 
     def test_uid_poll_filters_stale_results_and_sorts_before_limiting(self):
         self.connection.uid_search_result = ("OK", [b"44 41 43 42"])
@@ -247,6 +258,30 @@ class EmailImapServiceTests(unittest.TestCase):
 
     def test_uid_poll_never_calls_mutating_commands(self):
         self.fetch_new()
+
+        called_names = {call[0] for call in self.connection.calls}
+        self.assertTrue({"store", "copy", "move", "expunge"}.isdisjoint(called_names))
+
+    def test_cursor_snapshot_reads_latest_uid_without_fetching_content(self):
+        self.connection.uid_search_result = ("OK", [b"19 44 42 invalid"])
+
+        snapshot, _ = self.snapshot_cursor()
+
+        self.assertEqual(snapshot.uid_validity, "9001")
+        self.assertEqual(snapshot.latest_uid, 44)
+        self.assertIn(("select", "INBOX", True), self.connection.calls)
+        self.assertIn(("uid", "search", None, "ALL"), self.connection.calls)
+        self.assertFalse(any(call[:2] == ("uid", "fetch") for call in self.connection.calls))
+
+    def test_cursor_snapshot_handles_empty_mailbox(self):
+        self.connection.uid_search_result = ("OK", [b""])
+
+        snapshot, _ = self.snapshot_cursor()
+
+        self.assertEqual(snapshot.latest_uid, 0)
+
+    def test_cursor_snapshot_never_calls_mutating_commands(self):
+        self.snapshot_cursor()
 
         called_names = {call[0] for call in self.connection.calls}
         self.assertTrue({"store", "copy", "move", "expunge"}.isdisjoint(called_names))

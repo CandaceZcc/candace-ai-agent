@@ -9,6 +9,7 @@ from apps.qq_ai_bridge.services.email_models import (
     EmailEnvelope,
     EmailFetchedMessage,
     EmailRuleDecision,
+    EmailUidSnapshot,
 )
 
 
@@ -25,6 +26,15 @@ def envelope() -> EmailEnvelope:
 
 
 class EmailAutomationModelTests(unittest.TestCase):
+    def test_uid_snapshot_accepts_empty_mailbox_and_rejects_invalid_values(self):
+        snapshot = EmailUidSnapshot(uid_validity="44", latest_uid=0)
+
+        self.assertEqual(snapshot.latest_uid, 0)
+        with self.assertRaises(ValueError):
+            EmailUidSnapshot(uid_validity="", latest_uid=0)
+        with self.assertRaises(ValueError):
+            EmailUidSnapshot(uid_validity="44", latest_uid=-1)
+
     def test_fetched_message_requires_positive_uid(self):
         message = EmailFetchedMessage(uid=42, envelope=envelope())
 

@@ -89,6 +89,22 @@ class EmailProcessingStoreTests(unittest.TestCase):
         self.assertEqual(self.store.cursor("INBOX").last_uid, 0)
         self.assertIsNotNone(self.store.find_by_alias(observed.alias))
 
+    def test_set_cursor_persists_baseline_without_creating_message_records(self):
+        self.store.set_cursor("INBOX", "99", 812)
+
+        restarted = EmailProcessingStore(self.path, now=lambda: NOW)
+
+        self.assertEqual(restarted.cursor("INBOX").uid_validity, "99")
+        self.assertEqual(restarted.cursor("INBOX").last_uid, 812)
+        self.assertEqual(restarted.pending_analysis(), ())
+        state_text = self.path.read_text(encoding="utf-8")
+        self.assertNotIn("sender_name", state_text)
+
+    def test_set_cursor_rejects_invalid_baseline(self):
+        for validity, uid in (("", 0), ("44", -1)):
+            with self.subTest(validity=validity, uid=uid), self.assertRaises(ValueError):
+                self.store.set_cursor("INBOX", validity, uid)
+
     def test_rule_and_model_decisions_survive_restart(self):
         observed = self.store.observe("INBOX", "44", 17, envelope())
         rule = EmailRuleDecision(75, "semantic_required", ("interest:cst",), ())

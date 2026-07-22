@@ -75,12 +75,21 @@ class EmailProcessingStore:
         )
 
     def reset_cursor(self, mailbox: str, uid_validity: str) -> None:
+        self.set_cursor(mailbox, uid_validity, 0)
+
+    def set_cursor(self, mailbox: str, uid_validity: str, last_uid: int) -> None:
         mailbox_key = str(mailbox or "").strip()
+        validity = str(uid_validity or "").strip()
+        normalized_uid = int(last_uid)
+        if not mailbox_key or not validity:
+            raise ValueError("mailbox and uid_validity must not be empty")
+        if normalized_uid < 0:
+            raise ValueError("last_uid must not be negative")
         with self._lock:
             payload = self._load_unlocked()
             payload.setdefault("mailboxes", {})[mailbox_key] = {
-                "uid_validity": str(uid_validity or ""),
-                "last_uid": 0,
+                "uid_validity": validity,
+                "last_uid": normalized_uid,
             }
             _atomic_write_json(self.path, payload)
 

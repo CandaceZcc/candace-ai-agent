@@ -96,6 +96,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run an isolated synthetic classification and delivery rehearsal",
     )
+    checks.add_argument(
+        "--bootstrap-cursor",
+        action="store_true",
+        help="Set the production cursor to the current read-only mailbox snapshot",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Report cleanup matches only")
     parser.add_argument(
         "--deliver-to-owner",
@@ -107,6 +112,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Explicitly accept the real QQ sends requested by --deliver-to-owner",
     )
+    parser.add_argument(
+        "--accept-skip-existing",
+        action="store_true",
+        help="Explicitly accept treating existing mailbox messages as already seen",
+    )
     args = parser.parse_args(argv)
     if args.dry_run and not args.cleanup:
         parser.error("--dry-run requires --cleanup")
@@ -114,6 +124,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("QQ simulation delivery flags require --simulate-automation")
     if args.deliver_to_owner != args.accept_qq_send:
         parser.error("--deliver-to-owner and --accept-qq-send must be used together")
+    if args.accept_skip_existing and not args.bootstrap_cursor:
+        parser.error("--accept-skip-existing requires --bootstrap-cursor")
+    if args.bootstrap_cursor and not args.accept_skip_existing:
+        parser.error("--bootstrap-cursor requires --accept-skip-existing")
 
     try:
         if args.config:
@@ -151,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
                 _run_automation_simulation(deliver_to_owner=args.deliver_to_owner)
             )
             return _emit(report, exit_code=0 if report.get("ok") is True else 1)
+        if args.bootstrap_cursor:
+            return _emit(_bootstrap_automation_cursor())
         matches = _build_archive_service().cleanup_expired(
             retention_days=EMAIL_ARCHIVE_RETENTION_DAYS,
             dry_run=args.dry_run,
@@ -165,16 +181,39 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
     except EmailImapError as exc:
-        return _emit({"check": "imap", "error": exc.code, "ok": False}, exit_code=1)
+        check = "cursor_bootstrap" if args.bootstrap_cursor else "imap"
+        return _emit({"check": check, "error": exc.code, "ok": False}, exit_code=1)
     except Exception as exc:
+        check = "email_agent"
+        if args.simulate_automation:
+            check = "automation_simulation"
+        elif args.bootstrap_cursor:
+            check = "cursor_bootstrap"
         return _emit(
             {
-                "check": "automation_simulation" if args.simulate_automation else "email_agent",
+                "check": check,
                 "error": type(exc).__name__,
                 "ok": False,
             },
             exit_code=1,
         )
+
+
+def _bootstrap_automation_cursor() -> dict[str, Any]:
+    snapshot = _build_imap_service().snapshot_cursor()
+    store = _build_processing_store()
+    current = store.cursor(EMAIL_IMAP_MAILBOX)
+    had_existing_cursor = bool(current.uid_validity or current.last_uid)
+    latest_uid = snapshot.latest_uid
+    if current.uid_validity == snapshot.uid_validity:
+        latest_uid = max(current.last_uid, latest_uid)
+    store.set_cursor(EMAIL_IMAP_MAILBOX, snapshot.uid_validity, latest_uid)
+    return {
+        "check": "cursor_bootstrap",
+        "cursor_initialized": True,
+        "mailbox_had_existing_cursor": had_existing_cursor,
+        "ok": True,
+    }
 
 
 async def _run_automation_simulation(

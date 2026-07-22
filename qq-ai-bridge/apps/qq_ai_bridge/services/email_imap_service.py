@@ -12,6 +12,7 @@ from apps.qq_ai_bridge.services.email_models import (
     EmailFetchedMessage,
     EmailQuery,
     EmailUidBatch,
+    EmailUidSnapshot,
 )
 from apps.qq_ai_bridge.services.email_parser import parse_email
 
@@ -132,6 +133,37 @@ class EmailImapService:
                 for message_id in message_ids
             )
             return EmailUidBatch(uid_validity=uid_validity, messages=messages)
+        except EmailImapError:
+            raise
+        except OSError as exc:
+            raise self._network_error() from exc
+        except imaplib.IMAP4.error as exc:
+            raise self._protocol_error("uid_command") from exc
+        finally:
+            if connection is not None:
+                with suppress(Exception):
+                    connection.logout()
+
+    def snapshot_cursor(self) -> EmailUidSnapshot:
+        self._validate_config()
+        connection = None
+        try:
+            connection = self._connect()
+            self._login(connection)
+            self._expect_ok(
+                connection.select(self._mailbox, readonly=True),
+                operation="select",
+            )
+            uid_validity = _uid_validity(connection.response("UIDVALIDITY"))
+            if not uid_validity:
+                raise self._protocol_error("uidvalidity")
+            search_result = connection.uid("search", None, "ALL")
+            _, search_data = self._expect_ok(search_result, operation="uid_search")
+            latest_uid = max(
+                (int(value) for value in _search_ids(search_data) if value.isdigit()),
+                default=0,
+            )
+            return EmailUidSnapshot(uid_validity=uid_validity, latest_uid=latest_uid)
         except EmailImapError:
             raise
         except OSError as exc:

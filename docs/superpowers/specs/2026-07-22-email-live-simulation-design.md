@@ -52,10 +52,13 @@ sender addresses, credentials, archive paths, or model prompts.
 
 After a successful real-model and real-QQ rehearsal, set monitor, immediate push,
 and digest push to true and shadow mode to false in the machine-local mode-`0600`
-environment file. Restart the bridge from the email feature worktree, verify the
-redacted configuration, run one read-only IMAP check, and verify that the
-`email-automation` worker survives restart. Rollback restores the three delivery
-switches to false and restarts the bridge.
+environment file. Before changing those switches, take a read-only UID snapshot
+and persist its highest UID as the production baseline. This intentionally treats
+mail already present at activation time as seen and prevents historical mail from
+being delivered as new. Restart the bridge from the email feature worktree,
+verify the redacted configuration, run one read-only IMAP check, and verify that
+the `email-automation` worker survives restart. Rollback restores the three
+delivery switches to false and restarts the bridge.
 
 ## Acceptance Criteria
 
@@ -64,6 +67,6 @@ switches to false and restarts the bridge.
 - The unrelated scenario sends nothing.
 - Repeated polling and digest execution produce no duplicate QQ messages.
 - Simulation does not alter the real automation state or mailbox cursor.
+- Cursor bootstrap fetches no message body and never moves a same-mailbox cursor backwards.
 - Live configuration enables five-minute monitoring and both digest slots.
 - Restart leaves one running email automation worker with no startup error.
-

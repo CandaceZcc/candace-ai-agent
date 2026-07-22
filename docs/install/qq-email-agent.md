@@ -70,6 +70,20 @@ PYTHONPATH=qq-ai-bridge .venv/bin/python \
 
 两种演练都使用临时 IMAP 适配器、临时画像、临时归档和临时处理状态。它们不连接真实 IMAP，不读取或推进真实邮箱 UID 游标，也不会把合成记录写入正式摘要。
 
+## 首次启用前建立游标基线
+
+如果正式状态从未运行过监控，游标通常为 `0`。直接启用会把历史邮件当作新邮件。确认不需要推送当前邮箱中的既有邮件后，运行：
+
+```bash
+PYTHONPATH=qq-ai-bridge .venv/bin/python \
+  qq-ai-bridge/scripts/email_agent_check.py \
+  --bootstrap-cursor --accept-skip-existing
+```
+
+该命令只执行只读 `UID SEARCH ALL`，不下载正文，并把当前最高 UID 记录为正式基线。输出不包含 UID 数值、地址或邮件内容。对于同一 `UIDVALIDITY`，命令不会把已有游标向后移动。
+
+此操作会有意跳过启用前已经存在的邮件。真实模型与 QQ 演练通过后、修改自动化开关前，只执行一次即可。
+
 ## QQ 命令
 
 按需摘要：
@@ -98,11 +112,11 @@ PYTHONPATH=qq-ai-bridge .venv/bin/python \
 
 ## 分阶段启用
 
-1. 保持三项 automation 开关为 `false`，先运行配置和 IMAP 诊断。
-2. 设置 `EMAIL_MONITOR_ENABLED=true`，继续保持 `EMAIL_SHADOW_MODE=true`，观察至少 24 小时的本地计数。
-3. 根据误判通过 QQ 反馈或本机画像文件调整规则。
-4. 经人工确认后，单独启用 `EMAIL_IMMEDIATE_PUSH_ENABLED=true`。
-5. 再确认摘要内容与增量去重后，启用 `EMAIL_DIGEST_PUSH_ENABLED=true`。
+1. 保持三项 automation 开关为 `false`，先运行配置、IMAP 和合成演练。
+2. 确认跳过现有历史邮件后，建立一次游标基线。
+3. 设置 `EMAIL_MONITOR_ENABLED=true`，继续保持 `EMAIL_SHADOW_MODE=true`，观察本地计数；无新邮件时可用合成演练替代等待。
+4. 根据误判通过 QQ 反馈或本机画像文件调整规则。
+5. 经人工确认后，启用即时推送和摘要开关。
 6. 最后关闭 shadow mode 才会实际发送。NapCat 失败不会写入送达终态，下一轮会重试。
 
 ## 回滚
