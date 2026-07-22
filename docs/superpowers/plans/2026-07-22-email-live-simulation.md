@@ -16,7 +16,7 @@
 - Modify: `qq-ai-bridge/tests/test_email_agent_check.py`
 - Modify: `qq-ai-bridge/scripts/email_agent_check.py`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Add tests proving `--simulate-automation` uses isolated synthetic messages,
 classifies all scenarios, sends nothing by default, requires both live-delivery
@@ -45,7 +45,7 @@ def test_simulation_routes_three_scenarios_without_live_send(self):
     self.assertTrue(report["idempotency"]["poll"])
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -55,7 +55,7 @@ PYTHONPATH=qq-ai-bridge python -m unittest qq-ai-bridge/tests/test_email_agent_c
 
 Expected: parser rejects `--simulate-automation`.
 
-- [ ] **Step 3: Implement the simulation**
+- [x] **Step 3: Implement the simulation**
 
 Build the production automation service with an in-memory UID batch, temporary
 archive/state/profile paths, production rule and semantic classifiers, and either
@@ -81,11 +81,11 @@ The CLI branch must require both `--deliver-to-owner` and `--accept-qq-send`,
 call `asyncio.run(_run_automation_simulation(...))`, and return exit code 1 when
 the report's `ok` field is false.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run the focused diagnostic and automation tests and require zero failures.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add qq-ai-bridge/scripts/email_agent_check.py \

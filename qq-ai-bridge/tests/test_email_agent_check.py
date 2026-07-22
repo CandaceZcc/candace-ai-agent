@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import sys
@@ -5,11 +6,50 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, "qq-ai-bridge")
 
 from apps.qq_ai_bridge.services.time_utils import LOCAL_TIMEZONE
+
+
+class FakeSimulationClassifier:
+    async def classify(self, candidates):
+        from apps.qq_ai_bridge.services.email_models import EmailClassification
+
+        results = []
+        for alias, envelope, _decision in candidates:
+            if "CST3001" in envelope.subject:
+                results.append(
+                    EmailClassification(
+                        alias=alias,
+                        relevance_score=97,
+                        urgency="critical",
+                        category="exam_change",
+                        concise_title="CST3001 考试时间调整",
+                        summary="考试时间已经调整。",
+                        action="请在今天确认新安排。",
+                        deadline=None,
+                        reason="与你的大三课程和考试直接相关",
+                        confidence=0.99,
+                    )
+                )
+            else:
+                results.append(
+                    EmailClassification(
+                        alias=alias,
+                        relevance_score=86,
+                        urgency="medium",
+                        category="robotics_competition",
+                        concise_title="机器人与嵌入式竞赛通知",
+                        summary="学院发布了机器人竞赛信息。",
+                        action="",
+                        deadline=None,
+                        reason="与你关注的机器人和嵌入式方向相关",
+                        confidence=0.96,
+                    )
+                )
+        return tuple(results)
 
 
 class EmailAgentCheckTests(unittest.TestCase):
@@ -109,6 +149,100 @@ class EmailAgentCheckTests(unittest.TestCase):
             },
         )
         self.assertNotIn("private", json.dumps(payload).lower())
+
+    def test_simulation_requires_explicit_qq_acceptance(self):
+        from scripts import email_agent_check
+
+        with self.assertRaises(SystemExit):
+            email_agent_check.main(["--simulate-automation", "--deliver-to-owner"])
+
+    def test_simulation_delivery_flags_require_simulation_mode(self):
+        from scripts import email_agent_check
+
+        with self.assertRaises(SystemExit):
+            email_agent_check.main(["--config", "--deliver-to-owner", "--accept-qq-send"])
+
+    def test_simulation_routes_scenarios_without_live_send(self):
+        from scripts import email_agent_check
+
+        live_sender = MagicMock(return_value={"ok": True})
+
+        with patch.object(email_agent_check, "EMAIL_MAX_MESSAGES_PER_RUN", 1):
+            payload = asyncio.run(
+                email_agent_check._run_automation_simulation(
+                    deliver_to_owner=False,
+                    semantic_classifier=FakeSimulationClassifier(),
+                    send_private=live_sender,
+                )
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["delivered_to_owner"])
+        self.assertEqual(
+            [item["route"] for item in payload["scenarios"]],
+            ["immediate", "digest", "ignore"],
+        )
+        self.assertEqual(
+            payload["send_counts"],
+            {"digest": 1, "immediate": 1, "total": 2},
+        )
+        self.assertEqual(payload["idempotency"], {"digest": True, "poll": True})
+        live_sender.assert_not_called()
+        serialized = json.dumps(payload, ensure_ascii=False)
+        for forbidden in (
+            "owner@example.invalid",
+            "course-instructor@example.invalid",
+            "CST3001 Final Examination",
+            "campus recruitment",
+        ):
+            self.assertNotIn(forbidden, serialized)
+
+    def test_live_simulation_labels_and_redacts_exactly_two_qq_sends(self):
+        from scripts import email_agent_check
+
+        sends = []
+
+        def sender(user_id, text, **kwargs):
+            sends.append((user_id, text, kwargs))
+            return {"ok": True}
+
+        payload = asyncio.run(
+            email_agent_check._run_automation_simulation(
+                deliver_to_owner=True,
+                semantic_classifier=FakeSimulationClassifier(),
+                send_private=sender,
+            )
+        )
+
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["delivered_to_owner"])
+        self.assertEqual(len(sends), 2)
+        for _, text, kwargs in sends:
+            self.assertTrue(text.startswith("【邮件自动推送模拟】"))
+            self.assertTrue(kwargs["redact_content"])
+            self.assertTrue(kwargs["quiet"])
+
+    def test_simulation_cli_returns_safe_json(self):
+        from scripts import email_agent_check
+
+        report = {
+            "check": "automation_simulation",
+            "delivered_to_owner": False,
+            "idempotency": {"digest": True, "poll": True},
+            "ok": True,
+            "scenarios": [],
+            "send_counts": {"digest": 0, "immediate": 0, "total": 0},
+        }
+        with patch.object(
+            email_agent_check,
+            "_run_automation_simulation",
+            new=AsyncMock(return_value=report),
+        ) as simulate:
+            exit_code, payload = self.run_main("--simulate-automation")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload, report)
+        simulate.assert_awaited_once_with(deliver_to_owner=False)
 
     def test_script_never_reads_stdin(self):
         source = Path("qq-ai-bridge/scripts/email_agent_check.py").read_text(encoding="utf-8")

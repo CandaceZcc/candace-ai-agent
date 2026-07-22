@@ -47,6 +47,29 @@ PYTHONPATH=qq-ai-bridge .venv/bin/python qq-ai-bridge/scripts/email_agent_check.
 
 诊断只输出单行 JSON，不读取 stdin，不打印邮箱地址、主题、正文、归档路径或凭据。`--cleanup` 不带 `--dry-run` 会实际删除超过保留期的本机归档，执行前应先检查 dry-run 数量。
 
+## 无新邮件时的端到端演练
+
+先运行不发送 QQ 的演练。它使用真实规则和真实邮件分类模型，但把发送结果记录在内存中：
+
+```bash
+PYTHONPATH=qq-ai-bridge .venv/bin/python \
+  qq-ai-bridge/scripts/email_agent_check.py --simulate-automation
+```
+
+演练会注入课程考试调整、机器人竞赛和无关招聘三封合成邮件，并重复执行 poll 和摘要槽位。返回 JSON 中三类 route 应依次为 `immediate`、`digest`、`ignore`，`idempotency.poll` 和 `idempotency.digest` 均应为 `true`。
+
+确认 dry-run 通过后，才运行真实 QQ 演练：
+
+```bash
+PYTHONPATH=qq-ai-bridge .venv/bin/python \
+  qq-ai-bridge/scripts/email_agent_check.py \
+  --simulate-automation --deliver-to-owner --accept-qq-send
+```
+
+真实演练只发送模型精简后的即时提醒和摘要，共两次服务级发送。消息带有“邮件自动推送模拟”标记，并通过 `redact_content=True` 写入脱敏审计。两个发送确认参数缺一不可。
+
+两种演练都使用临时 IMAP 适配器、临时画像、临时归档和临时处理状态。它们不连接真实 IMAP，不读取或推进真实邮箱 UID 游标，也不会把合成记录写入正式摘要。
+
 ## QQ 命令
 
 按需摘要：
