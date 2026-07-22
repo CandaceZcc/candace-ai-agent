@@ -101,11 +101,11 @@ git commit -m "feat: add safe email automation simulation"
 - No tracked files
 - Machine-local runtime state under `/tmp` only
 
-- [ ] **Step 1:** Run redacted configuration and read-only IMAP diagnostics.
-- [ ] **Step 2:** Run the dry synthetic simulation with the real model.
-- [ ] **Step 3:** Run the live synthetic simulation with explicit QQ consent flags.
-- [ ] **Step 4:** Confirm exactly one immediate message and one digest, with repeated runs suppressed inside the rehearsal.
-- [ ] **Step 5:** Inspect only redacted outbound status and ensure no source content appears in logs.
+- [x] **Step 1:** Run redacted configuration and read-only IMAP diagnostics.
+- [x] **Step 2:** Run the dry synthetic simulation with the real model.
+- [x] **Step 3:** Run the live synthetic simulation with explicit QQ consent flags.
+- [x] **Step 4:** Confirm exactly one immediate message and one digest, with repeated runs suppressed inside the rehearsal.
+- [x] **Step 5:** Inspect only redacted outbound status and ensure no source content appears in logs.
 
 ### Task 2.5: Bootstrap The Production Cursor
 
@@ -130,9 +130,9 @@ git commit -m "feat: add safe email automation simulation"
 **Files:**
 - Modify outside Git: `/home/cancade/.candace/qq-ai-bridge.env`
 
-- [ ] **Step 1:** Run `--bootstrap-cursor --accept-skip-existing` before changing delivery flags.
-- [ ] **Step 2:** Set monitor, immediate push, and digest push true; set shadow false.
-- [ ] **Step 3:** Restart the bridge from the email feature worktree.
-- [ ] **Step 4:** Verify redacted config, read-only IMAP access, worker health, and one-worker restart behavior.
-- [ ] **Step 5:** Run the full repository test suite and tracked-secret scan.
-- [ ] **Step 6:** Record the rollback command and report any residual operational risk.
+- [x] **Step 1:** Run `--bootstrap-cursor --accept-skip-existing` before changing delivery flags.
+- [x] **Step 2:** Set monitor, immediate push, and digest push true; set shadow false.
+- [x] **Step 3:** Restart the bridge from the email feature worktree.
+- [x] **Step 4:** Verify redacted config, read-only IMAP access, worker health, and one-worker restart behavior.
+- [x] **Step 5:** Run the full repository test suite and tracked-secret scan.
+- [x] **Step 6:** Record the rollback command and report any residual operational risk.
